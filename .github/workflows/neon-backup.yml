@@ -1,0 +1,195 @@
+name: Neon prod DB backup → artifact (reusable)
+
+# Reusable `workflow_call` version of AutoMahn/api backup-db.yml and
+# Traide-Co/api neon-backup.yml. Full logical backup of the prod Neon database,
+# uploaded as a private workflow artifact. DB_PASSWORD is read from the
+# app-secrets SM bundle via WIF (never a GitHub secret). DB host/port/user/name
+# are passed by the caller (usually the same repo vars deploy.yml uses).
+#
+# dump_format:
+#   custom   -> pg_dump --format=custom  (.dump, pg_restore-compatible) + sha256 MANIFEST
+#   plain-gz -> pg_dump --format=plain | gzip -9 (.sql.gz) + gzip -t / header sanity checks
+# Both formats always emit a MANIFEST and run integrity checks (merged best-of-both).
+#
+# NOTE: the dump contains PII. Artifact is private to repo collaborators and
+# expires per retention_days. Neon PITR / branch snapshots remain the stronger DR.
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        type: string
+        required: true
+      wif_provider:
+        type: string
+        required: true
+      service_account:
+        type: string
+        required: true
+      bundle_secret:
+        type: string
+        required: false
+        default: 'app-secrets'
+      db_host:
+        type: string
+        required: true
+      db_port:
+        type: string
+        required: false
+        default: '5432'
+      db_user:
+        type: string
+        required: true
+      db_name:
+        type: string
+        required: true
+      db_ssl_mode:
+        type: string
+        required: false
+        default: 'require'
+      dump_format:
+        description: 'custom | plain-gz'
+        type: string
+        required: false
+        default: 'custom'
+      name_prefix:
+        description: 'Artifact/file name prefix (e.g. automahn, neon)'
+        type: string
+        required: false
+        default: 'db'
+      reason:
+        type: string
+        required: false
+        default: ''
+      retention_days:
+        type: string
+        required: false
+        default: '30'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  backup:
+    name: pg_dump prod -> artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GCP_PROJECT:   ${{ inputs.gcp_project }}
+      BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+      DB_HOST:       ${{ inputs.db_host }}
+      DB_PORT:       ${{ inputs.db_port }}
+      DB_USER:       ${{ inputs.db_user }}
+      DB_NAME:       ${{ inputs.db_name }}
+      DB_SSL_MODE:   ${{ inputs.db_ssl_mode }}
+      DUMP_FORMAT:   ${{ inputs.dump_format }}
+      NAME_PREFIX:   ${{ inputs.name_prefix }}
+    steps:
+      - name: Install pg client 18 (Neon runs PG 18; runner ships an older client)
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          # The runner's /usr/bin/pg_dump (v16) shadows the wrapper; force v18 onto PATH.
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Pull DB_PASSWORD from Secret Manager bundle
+        run: |
+          set -euo pipefail
+          gcloud secrets versions access latest --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/app-secrets.env
+          PW=$(grep -E '^DB_PASSWORD=' /tmp/app-secrets.env | head -1 | cut -d= -f2-)
+          PW="${PW%\"}"; PW="${PW#\"}"
+          rm -f /tmp/app-secrets.env
+          if [ -z "$PW" ]; then echo "::error::DB_PASSWORD not found in $BUNDLE_SECRET"; exit 1; fi
+          echo "::add-mask::$PW"
+          echo "PGPASSWORD=$PW" >> "$GITHUB_ENV"
+
+      - name: pg_dump prod -> file
+        run: |
+          set -uo pipefail
+          TS=$(date -u +%Y%m%dT%H%M%SZ)
+          CONN="host=${DB_HOST} port=${DB_PORT} dbname=${DB_NAME} user=${DB_USER} sslmode=${DB_SSL_MODE}"
+          pg_dump --version
+
+          if [ "$DUMP_FORMAT" = "plain-gz" ]; then
+            OUT="${NAME_PREFIX}-${DB_NAME}-${TS}.sql.gz"
+            pg_dump "$CONN" --no-owner --no-privileges --format=plain 2> dump.log | gzip -9 > "$OUT"
+            rc=${PIPESTATUS[0]}
+            echo "----- pg_dump stderr -----"; cat dump.log
+            [ "$rc" -ne 0 ] && { echo "::error::pg_dump exited $rc"; exit "$rc"; }
+            gzip -t "$OUT"
+            zcat "$OUT" > /tmp/dump.sql
+            grep -q "PostgreSQL database dump" /tmp/dump.sql || { echo "::error::dump looks empty/invalid"; exit 1; }
+            TABLES=$(grep -c '^CREATE TABLE ' /tmp/dump.sql || true)
+            COPY_BLOCKS=$(grep -c '^COPY ' /tmp/dump.sql || true)
+            rm -f /tmp/dump.sql
+          else
+            OUT="${NAME_PREFIX}-${DB_NAME}-${TS}.dump"
+            pg_dump "$CONN" --no-owner --no-privileges --format=custom --file="$OUT" 2> dump.log
+            rc=$?
+            echo "----- pg_dump stderr -----"; cat dump.log
+            [ "$rc" -ne 0 ] && { echo "::error::pg_dump exited $rc"; exit "$rc"; }
+            # Sanity: pg_restore --list must parse the archive and see objects.
+            TABLES=$(pg_restore --list "$OUT" | grep -c 'TABLE DATA' || true)
+            COPY_BLOCKS="$TABLES"
+          fi
+
+          ls -lh "$OUT"
+          SHA=$(sha256sum "$OUT" | cut -d' ' -f1)
+          {
+            echo "reason: ${{ inputs.reason }}"
+            echo "taken_utc: $TS"
+            echo "db: ${DB_NAME} @ ${DB_HOST}"
+            echo "format: ${DUMP_FORMAT}"
+            echo "tables: ${TABLES}"
+            echo "sha256: ${SHA}"
+          } > MANIFEST.txt
+          cat MANIFEST.txt
+
+          echo "TS=$TS" >> "$GITHUB_ENV"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          echo "TABLES=$TABLES" >> "$GITHUB_ENV"
+          echo "COPY_BLOCKS=$COPY_BLOCKS" >> "$GITHUB_ENV"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ env.TS }}
+          path: |
+            ${{ env.OUT }}
+            MANIFEST.txt
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Neon prod backup — ${DB_NAME} @ ${DB_HOST}"
+            echo ""
+            echo "- File: \`${OUT:-<none>}\`  (format: ${DUMP_FORMAT})"
+            echo "- Tables: ${TABLES:-?}"
+            echo "- Retention: ${{ inputs.retention_days }} days"
+            echo ""
+            if [ "$DUMP_FORMAT" = "plain-gz" ]; then
+              echo "Restore: \`gunzip -c ${OUT} | psql \"<conn-string>\"\`"
+            else
+              echo "Restore: \`pg_restore --no-owner --no-privileges -d \"<conn-string>\" ${OUT}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

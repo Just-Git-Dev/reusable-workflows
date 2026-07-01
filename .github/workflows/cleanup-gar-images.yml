@@ -1,0 +1,297 @@
+name: Cleanup GAR images (reusable)
+
+# Reusable `workflow_call` version standardized on AutoMahn's cleanup (the safe
+# one). Sweeps EVERY image in the GAR repo. The live-digest keep-set is built
+# from ALL Cloud Run Services AND Jobs in-region, so a digest any running
+# service or deployable job points at is never deleted (cron/migrate live on
+# Jobs). Per image, keeps: live digests, the most-recent N semver tags, and
+# 'latest' / safe-prefix (hotfix-/rc-/debug-) tags. Age-deletes the rest.
+#
+# NOTE: the caller owns the schedule + the dry_run decision (pass them in). This
+# reusable workflow performs exactly what dry_run says.
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        type: string
+        required: true
+      gcp_region:
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        type: string
+        required: true
+      service_account:
+        type: string
+        required: true
+      gar_repo:
+        description: 'Artifact Registry repo name (e.g. backend)'
+        type: string
+        required: true
+      keep_semver_count:
+        type: string
+        required: false
+        default: '5'
+      untagged_max_age_days:
+        type: string
+        required: false
+        default: '15'
+      tagged_max_age_days:
+        type: string
+        required: false
+        default: '30'
+      dry_run:
+        description: 'true = print plan only, do not delete'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GCP_PROJECT: ${{ inputs.gcp_project }}
+      GCP_REGION:  ${{ inputs.gcp_region }}
+      GAR_REPO:    ${{ inputs.gar_repo }}
+      REPO_PATH:   ${{ inputs.gcp_region }}-docker.pkg.dev/${{ inputs.gcp_project }}/${{ inputs.gar_repo }}
+      KEEP_SEMVER_COUNT:     ${{ inputs.keep_semver_count }}
+      UNTAGGED_MAX_AGE_DAYS: ${{ inputs.untagged_max_age_days }}
+      TAGGED_MAX_AGE_DAYS:   ${{ inputs.tagged_max_age_days }}
+
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Resolve dry-run flag
+        id: mode
+        run: echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect live image digests (all Services + Jobs)
+        run: |
+          set -euo pipefail
+          : > /tmp/live-digests.txt
+
+          resolve() {
+            local ref="$1"
+            if [[ "$ref" == *@sha256:* ]]; then
+              echo "${ref#*@}"
+            else
+              gcloud artifacts docker images describe "$ref" \
+                --format='value(image_summary.digest)' 2>/dev/null || echo ""
+            fi
+          }
+
+          record() {
+            local kind="$1" name="$2" img="$3"
+            [ -z "$img" ] && return 0
+            case "$img" in
+              "$REPO_PATH"/*) ;;
+              *) echo "skip (other repo): $kind/$name -> $img"; return 0 ;;
+            esac
+            local dig
+            dig=$(resolve "$img")
+            if [ -z "$dig" ]; then
+              echo "::error::Could not resolve live image for $kind/$name ($img). Aborting for safety."
+              exit 1
+            fi
+            echo "$dig" >> /tmp/live-digests.txt
+            echo "live: $kind/$name -> $img ($dig)"
+          }
+
+          for svc in $(gcloud run services list --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                         --format='value(metadata.name)'); do
+            IMG=$(gcloud run services describe "$svc" --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format='value(spec.template.spec.containers[0].image)' 2>/dev/null || echo "")
+            record service "$svc" "$IMG"
+          done
+
+          for job in $(gcloud run jobs list --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                         --format='value(metadata.name)'); do
+            IMG=$(gcloud run jobs describe "$job" --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format='value(spec.template.spec.template.spec.containers[0].image)' 2>/dev/null || echo "")
+            record job "$job" "$IMG"
+          done
+
+          sort -u -o /tmp/live-digests.txt /tmp/live-digests.txt
+          COUNT=$(wc -l < /tmp/live-digests.txt | tr -d ' ')
+          echo "Collected $COUNT live digest(s)."
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No live digests resolved for $REPO_PATH. Aborting for safety."
+            exit 1
+          fi
+
+      - name: Compute delete-set (all images in repo)
+        run: |
+          python3 <<'PY' | tee /tmp/delete-plan.json
+          import json, os, subprocess, re
+          from datetime import datetime, timezone
+
+          REPO_PATH = os.environ["REPO_PATH"]
+          KEEP_SEMVER_COUNT = int(os.environ["KEEP_SEMVER_COUNT"])
+          UNTAGGED_MAX_AGE_DAYS = int(os.environ["UNTAGGED_MAX_AGE_DAYS"])
+          TAGGED_MAX_AGE_DAYS = int(os.environ["TAGGED_MAX_AGE_DAYS"])
+
+          with open("/tmp/live-digests.txt") as fh:
+              live_digests = {ln.strip() for ln in fh if ln.strip()}
+
+          raw = subprocess.check_output([
+              "gcloud", "artifacts", "docker", "images", "list",
+              REPO_PATH, "--include-tags", "--format=json",
+          ])
+          images = json.loads(raw)
+
+          now = datetime.now(timezone.utc)
+          semver_re = re.compile(r"^v\d+\.\d+\.\d+$")
+          safe_prefix = ("hotfix-", "rc-", "debug-")
+
+          by_pkg = {}
+          for img in images:
+              by_pkg.setdefault(img.get("package"), []).append(img)
+
+          keep = set(live_digests)
+          for pkg, imgs in by_pkg.items():
+              for img in imgs:
+                  tags = img.get("tags", []) or []
+                  if "latest" in tags or any(t.startswith(safe_prefix) for t in tags):
+                      keep.add(img.get("version"))
+              semver_imgs = []
+              for img in imgs:
+                  for t in (img.get("tags", []) or []):
+                      if semver_re.match(t):
+                          semver_imgs.append((img.get("updateTime"), img.get("version")))
+                          break
+              semver_imgs.sort(reverse=True)
+              for _, digest in semver_imgs[:KEEP_SEMVER_COUNT]:
+                  keep.add(digest)
+
+          to_delete = []
+          per_pkg = {}
+          for img in images:
+              pkg = img.get("package")
+              digest = img.get("version")
+              tags = img.get("tags", []) or []
+              update_time = img.get("updateTime")
+              per_pkg.setdefault(pkg, {"total": 0, "delete": 0})
+              per_pkg[pkg]["total"] += 1
+              if not update_time or digest in keep:
+                  continue
+              try:
+                  ts = datetime.fromisoformat(update_time.replace("Z", "+00:00"))
+              except Exception:
+                  continue
+              age_days = (now - ts).days
+              if not tags and age_days >= UNTAGGED_MAX_AGE_DAYS:
+                  reason = f"untagged>={UNTAGGED_MAX_AGE_DAYS}d"
+              elif tags and age_days >= TAGGED_MAX_AGE_DAYS:
+                  reason = f"tagged>={TAGGED_MAX_AGE_DAYS}d"
+              else:
+                  continue
+              per_pkg[pkg]["delete"] += 1
+              to_delete.append({
+                  "image": f"{pkg}@{digest}",
+                  "package": pkg,
+                  "digest": digest,
+                  "tags": tags,
+                  "age_days": age_days,
+                  "reason": reason,
+              })
+
+          print(json.dumps({
+              "total_images": len(images),
+              "live_digests": len(live_digests),
+              "kept": len(keep),
+              "to_delete": to_delete,
+              "per_package": per_pkg,
+          }, indent=2))
+          PY
+
+      - name: Print summary of delete-set
+        run: |
+          TOTAL=$(jq '.total_images' /tmp/delete-plan.json)
+          KEPT=$(jq '.kept' /tmp/delete-plan.json)
+          LIVE=$(jq '.live_digests' /tmp/delete-plan.json)
+          DEL=$(jq '.to_delete | length' /tmp/delete-plan.json)
+          {
+            echo "## GAR cleanup plan — ${REPO_PATH}"
+            echo ""
+            echo "- Total image versions: $TOTAL"
+            echo "- Live digests protected: $LIVE"
+            echo "- Kept (live + semver + latest/safe): $KEPT"
+            echo "- Delete candidates: $DEL"
+            echo "- Dry run: ${{ steps.mode.outputs.dry_run }}"
+            echo ""
+            echo "> Untagged child manifests of a KEPT parent index can't be deleted"
+            echo "> while the parent exists — those are skipped at execution."
+            echo ""
+            echo "### Per image (candidates)"
+            echo ""
+            jq -r '.per_package | to_entries[] | "- `\(.key)` — \(.value.delete)/\(.value.total) candidates"' /tmp/delete-plan.json
+            echo ""
+            echo "### Candidates"
+            echo ""
+            jq -r '.to_delete[] | "- `\(.image)` (\(.reason), age \(.age_days)d, tags: \(.tags | join(",") // "none"))"' /tmp/delete-plan.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute deletions
+        if: steps.mode.outputs.dry_run == 'false'
+        run: |
+          set -uo pipefail
+
+          del_one() {
+            local img="$1" err rc
+            err=$(gcloud artifacts docker images delete "$img" \
+                    --delete-tags --quiet --project="$GCP_PROJECT" 2>&1); rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "OK deleted $img"
+            elif printf '%s' "$err" | grep -q "referenced by parent manifests"; then
+              echo "OK skipped(kept-parent) $img"
+            elif printf '%s' "$err" | grep -qiE "not found|does not exist|NOT_FOUND"; then
+              echo "OK skipped(gone) $img"
+            else
+              echo "FAIL $img :: $(printf '%s' "$err" | tr '\n' ' ')"
+            fi
+            return 0
+          }
+          export -f del_one
+          export GCP_PROJECT
+
+          : > /tmp/exec.log
+
+          # Phase 1: tagged indexes first (cascades free orphaned children).
+          jq -r '.to_delete[] | select((.tags|length) > 0) | .image' /tmp/delete-plan.json \
+            | xargs -r -P 8 -I {} bash -c 'del_one "$@"' _ {} | tee -a /tmp/exec.log
+
+          # Phase 2: untagged manifests.
+          jq -r '.to_delete[] | select((.tags|length) == 0) | .image' /tmp/delete-plan.json \
+            | xargs -r -P 8 -I {} bash -c 'del_one "$@"' _ {} | tee -a /tmp/exec.log
+
+          DELETED=$(grep -c '^OK deleted ' /tmp/exec.log || true)
+          SKIPPED=$(grep -c '^OK skipped' /tmp/exec.log || true)
+          FAILED=$(grep -c '^FAIL ' /tmp/exec.log || true)
+          echo "deleted=$DELETED skipped=$SKIPPED failed=$FAILED"
+          {
+            echo "## Execution result"
+            echo ""
+            echo "- Deleted: $DELETED"
+            echo "- Skipped (kept-parent child / already gone): $SKIPPED"
+            echo "- Failed: $FAILED"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED deletion(s) failed for unexpected reasons:"
+            grep '^FAIL ' /tmp/exec.log || true
+            exit 1
+          fi

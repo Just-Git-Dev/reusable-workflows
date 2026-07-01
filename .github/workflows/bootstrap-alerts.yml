@@ -1,0 +1,132 @@
+name: Bootstrap Cloud Monitoring alerts (reusable)
+
+# Reusable `workflow_call` version of the per-org bootstrap-alerts workflow.
+# Applies a notification channel + alert policies from the CALLER repo's
+# infra/alerts/*.yaml (the reusable workflow checks out the caller, so each org
+# keeps its own policy files). Idempotent: existing channels/policies matched by
+# displayName are skipped unless force_update=true.
+#
+# WIF provider + service account are passed in by the caller (as inputs, not
+# secrets — they are resource identifiers, not credentials), which removes the
+# per-org SA var-name drift (GCP_ROTATOR_SA vs GCP_INFRA_SA).
+#
+# Required IAM on the service_account:
+#   roles/monitoring.alertPolicyEditor
+#   roles/monitoring.notificationChannelEditor
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id (e.g. auto-mahn, traide-in)'
+        type: string
+        required: true
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name'
+        type: string
+        required: true
+      service_account:
+        description: 'Deploy/infra service account email to impersonate via WIF'
+        type: string
+        required: true
+      alerts_dir:
+        description: 'Directory in the caller repo holding email-channel.yaml + policy-*.yaml'
+        type: string
+        required: false
+        default: 'infra/alerts'
+      force_update:
+        description: 'Replace existing policies instead of skipping (destructive)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT: ${{ inputs.gcp_project }}
+      ALERTS_DIR:  ${{ inputs.alerts_dir }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - name: Set up gcloud (with alpha)
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: 'alpha'
+
+      - name: Ensure notification channel
+        id: channel
+        run: |
+          CHANNEL_FILE="${ALERTS_DIR}/email-channel.yaml"
+          DISPLAY=$(grep '^displayName:' "$CHANNEL_FILE" | head -1 | sed "s/^displayName: *//")
+          NAME=$(gcloud alpha monitoring channels list \
+            --project="$GCP_PROJECT" \
+            --filter="displayName=\"$DISPLAY\"" \
+            --format='value(name)' 2>/dev/null | head -1)
+          if [ -z "$NAME" ]; then
+            NAME=$(gcloud alpha monitoring channels create \
+              --project="$GCP_PROJECT" \
+              --channel-content-from-file="$CHANNEL_FILE" \
+              --format='value(name)')
+            echo "::notice::Created notification channel: $NAME"
+          else
+            echo "::notice::Notification channel exists: $NAME"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Apply alert policies
+        env:
+          CHANNEL_NAME: ${{ steps.channel.outputs.name }}
+          FORCE_UPDATE: ${{ inputs.force_update }}
+        run: |
+          for f in "${ALERTS_DIR}"/policy-*.yaml; do
+            DISPLAY=$(grep '^displayName:' "$f" | head -1 | sed "s/^displayName: *//")
+            EXISTING=$(gcloud alpha monitoring policies list \
+              --project="$GCP_PROJECT" \
+              --filter="displayName=\"$DISPLAY\"" \
+              --format='value(name)' 2>/dev/null | head -1)
+
+            TMP=$(mktemp)
+            sed "s|NOTIFICATION_CHANNEL_PLACEHOLDER|${CHANNEL_NAME}|g" "$f" > "$TMP"
+
+            if [ -n "$EXISTING" ]; then
+              if [ "$FORCE_UPDATE" = "true" ]; then
+                gcloud alpha monitoring policies update "$EXISTING" \
+                  --project="$GCP_PROJECT" \
+                  --policy-from-file="$TMP" --quiet
+                echo "  updated: $DISPLAY"
+              else
+                echo "  skipped (exists): $DISPLAY"
+              fi
+            else
+              gcloud alpha monitoring policies create \
+                --project="$GCP_PROJECT" \
+                --policy-from-file="$TMP" --quiet
+              echo "  created: $DISPLAY"
+            fi
+            rm -f "$TMP"
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Monitoring alert policies — ${GCP_PROJECT}"
+            echo ''
+            echo "- Notification channel: ${{ steps.channel.outputs.name }}"
+            echo "- Policies from: ${ALERTS_DIR}/policy-*.yaml"
+            echo ""
+            echo "Edit the YAML files and re-run to add new policies. Use force_update=true to overwrite existing ones."
+          } >> "$GITHUB_STEP_SUMMARY"

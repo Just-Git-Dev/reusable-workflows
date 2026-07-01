@@ -1,0 +1,86 @@
+name: Rotate Cloudflare API token — nag (reusable)
+
+# Reusable `workflow_call` version. CF API tokens must be minted in the CF
+# dashboard by a human (letting CI hold "User → API Tokens → Edit" would be
+# privilege escalation). This workflow only VERIFIES the current token is still
+# active and prints an org-specific rotation runbook to the step summary.
+#
+# The verify logic is identical across orgs; only the runbook strings (zone,
+# token scopes, target repos) differ — those are inputs.
+
+on:
+  workflow_call:
+    inputs:
+      zone_name:
+        description: 'DNS zone the token scopes to (e.g. automahn.in, traide.co.in)'
+        type: string
+        required: true
+      scopes_md:
+        description: 'Markdown bullet lines describing the custom-token scopes to create'
+        type: string
+        required: true
+      secret_targets:
+        description: 'Space-separated "org/repo" list to update CLOUDFLARE_API_TOKEN in'
+        type: string
+        required: true
+    secrets:
+      cloudflare_api_token:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify current CF API token is still valid
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+        run: |
+          STATUS=$(curl -fsS -o /tmp/verify.json -w '%{http_code}' \
+            "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" || echo "000")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::CF token verify returned HTTP $STATUS. Token may be expired or revoked."
+            cat /tmp/verify.json || true
+            exit 1
+          fi
+          TOKEN_STATUS=$(jq -r '.result.status' /tmp/verify.json)
+          if [ "$TOKEN_STATUS" != "active" ]; then
+            echo "::error::CF token status is $TOKEN_STATUS (expected 'active')."
+            exit 1
+          fi
+          echo "CF token is active."
+
+      - name: Print rotation runbook
+        env:
+          ZONE_NAME:      ${{ inputs.zone_name }}
+          SCOPES_MD:      ${{ inputs.scopes_md }}
+          SECRET_TARGETS: ${{ inputs.secret_targets }}
+        run: |
+          {
+            echo "## Cloudflare API Token — rotation reminder (${ZONE_NAME})"
+            echo ""
+            echo "The master \`CLOUDFLARE_API_TOKEN\` is valid today, but should be rotated periodically."
+            echo ""
+            echo "### Steps"
+            echo ""
+            echo "1. Open [Cloudflare Dashboard → My Profile → API Tokens](https://dash.cloudflare.com/profile/api-tokens)."
+            echo "2. Click **Create Token** → **Create Custom Token** with:"
+            printf '%s\n' "$SCOPES_MD"
+            echo "   - TTL: 12 months"
+            echo "3. Copy the token value (shown once)."
+            echo "4. Update the secret in all target repos:"
+            echo "   \`\`\`bash"
+            echo "   TOKEN=\"<paste>\""
+            echo "   for repo in ${SECRET_TARGETS}; do"
+            echo "     gh secret set CLOUDFLARE_API_TOKEN --repo \"\$repo\" --body \"\$TOKEN\""
+            echo "   done"
+            echo "   unset TOKEN"
+            echo "   \`\`\`"
+            echo "5. Back in the CF dashboard → delete the old token."
+            echo ""
+            echo "_This workflow only notifies; it does not rotate._"
+          } >> "$GITHUB_STEP_SUMMARY"
