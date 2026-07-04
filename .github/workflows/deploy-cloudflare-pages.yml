@@ -1,0 +1,89 @@
+name: Deploy to Cloudflare Pages (reusable)
+
+# Reusable `workflow_call` version. Builds a static site and deploys it to a
+# Cloudflare Pages project via `cloudflare/wrangler-action`. Kept generic across
+# orgs/projects: project name, build command, output dir, and node version are
+# inputs; the CF account id is an input (pass `vars.CLOUDFLARE_ACCOUNT_ID`) and
+# the API token is a secret.
+#
+# The `cloudflare_api_token` must be a "Cloudflare Pages: Edit" token minted in
+# the CF dashboard by a human (see rotate-cloudflare-token.yml). Callers own the
+# trigger (typically a `v*.*.*` tag push + workflow_dispatch).
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: 'Cloudflare Pages project to deploy to (e.g. realmid-website)'
+        type: string
+        required: true
+      account_id:
+        description: 'Cloudflare account id — pass ${{ vars.CLOUDFLARE_ACCOUNT_ID }}'
+        type: string
+        required: true
+      working_directory:
+        description: 'Directory to build and deploy from'
+        type: string
+        required: false
+        default: '.'
+      build_command:
+        description: 'Command that produces the static output (run in working_directory)'
+        type: string
+        required: false
+        default: 'npm ci && npm run build'
+      output_dir:
+        description: 'Built static-assets dir to deploy (relative to working_directory)'
+        type: string
+        required: false
+        default: 'dist'
+      node_version:
+        description: 'Node.js version used for the build'
+        type: string
+        required: false
+        default: '20'
+      branch:
+        description: 'Pages deployment branch (production is "main")'
+        type: string
+        required: false
+        default: 'main'
+    secrets:
+      cloudflare_api_token:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Skip bot-authored pushes (dependabot/renovate) — they can't hold deploy creds.
+    if: |
+      github.actor != 'dependabot[bot]' &&
+      !startsWith(github.actor, 'renovate')
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Build
+        run: ${{ inputs.build_command }}
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.cloudflare_api_token }}
+          accountId: ${{ inputs.account_id }}
+          workingDirectory: ${{ inputs.working_directory }}
+          command: >-
+            pages deploy ${{ inputs.output_dir }}
+            --project-name=${{ inputs.project_name }}
+            --branch=${{ inputs.branch }}
+            --commit-hash=${{ github.sha }}
