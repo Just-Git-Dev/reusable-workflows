@@ -43,6 +43,16 @@ New inputs added purely to remove hard-coded assumptions: `channel_file` and
   glob runs under `nullglob` and fails on zero matches, rather than looping once
   over a literal `policy-*.yaml` filename.
 
+- **`deploy-cloudflare-pages` never worked as a reusable workflow.** An input
+  `description:` embedded a live `${{ vars.CLOUDFLARE_ACCOUNT_ID }}` expression.
+  `vars` is not a valid context there, so the called workflow fails to parse and
+  every caller startup-fails at 0s. `actionlint` rejects it outright ("context
+  `vars` is not allowed here"), and at least one consumer had already given up
+  and vendored a private copy of the workflow rather than call it. Removing the
+  expression is what makes this workflow adoptable at all — which, together with
+  the fact that it was never included in a release tag, explains why it had zero
+  callers.
+
 - **`pipefail` and `head -1`.** GitHub's implicit `run:` shell on Linux is
   `bash -e {0}` — errexit **on**, pipefail **off**. So "missing `set -e`" was
   never the defect; masked pipe failures were. Every job now sets
@@ -66,9 +76,8 @@ New inputs added purely to remove hard-coded assumptions: `channel_file` and
 - **`outputs:` on all six.** None declared any, so callers could not chain — the
   new bundle version, artifact name, and deployment URL were all computed and
   discarded.
-- **Every input has a `description:`** (22 were missing), and genuinely numeric
-  inputs are `type: number` rather than `string`. `node_version` stays a string
-  on purpose: `20.x` and `lts/*` are valid setup-node specs.
+- **Every input has a `description:`** (22 were missing). Numeric-looking inputs
+  deliberately stay `type: string` — see the trade-off below.
 - **Caller-controlled strings move out of `run:` bodies into `env:`**
   (`build_command`, `reason`, `title`). A `${{ }}` value interpolated into a
   script body is a script-injection seam; via `env:` it is inert data.
@@ -91,6 +100,19 @@ New inputs added purely to remove hard-coded assumptions: `channel_file` and
   work but couples the workflow to a tag that does not exist until release time.
   Since Dependabot updates all four SHA pins in one PR, the duplication costs
   little. Revisit if the pair grows beyond two steps.
+
+- **Numeric-looking inputs stay `type: string`.** Retyping `keep_semver_count`,
+  `untagged_max_age_days`, `tagged_max_age_days`, `db_port`, `retention_days`
+  to `type: number` was drafted and then reverted. In GitHub Actions, both
+  `${{ vars.X }}` and `${{ needs.job.outputs.Y }}` are **always strings**, so a
+  `number` input cannot be fed from a repo variable or an upstream job output —
+  the two most natural ways to configure a reusable workflow. Existing callers
+  do exactly that (`keep_semver_count: '5'`, `db_port: ${{ vars.DB_PORT }}`,
+  `tagged_max_age_days: ${{ needs.resolve.outputs.tagged }}`), so the change
+  would have broken them for a cosmetic gain. `number` is a reasonable type for
+  a `workflow_dispatch` input, where a human fills the box; it is a trap on
+  `workflow_call`. The shell and Python already coerce, and the values are
+  range-checked where it matters.
 
 - **`v1` stays a floating alias, and that is now documented as a choice.** The
   previous README told callers to pin `@v1` while `v1` was a single movable

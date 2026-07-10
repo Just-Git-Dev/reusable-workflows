@@ -26,9 +26,9 @@ on:
         required: true
       expiry_warn_days:
         description: 'Emit a warning when the token expires within this many days.'
-        type: number
+        type: string
         required: false
-        default: 30
+        default: '30'
     secrets:
       cloudflare_api_token:
         description: 'The Cloudflare API token to verify.'

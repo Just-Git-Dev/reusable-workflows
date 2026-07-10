@@ -50,9 +50,9 @@ on:
         required: true
       db_port:
         description: 'Database port.'
-        type: number
+        type: string
         required: false
-        default: 5432
+        default: '5432'
       db_user:
         description: 'Database user to connect as.'
         type: string
@@ -68,9 +68,9 @@ on:
         default: 'require'
       pg_major:
         description: 'Postgres client major version to install. Must be >= the server major.'
-        type: number
+        type: string
         required: false
-        default: 18
+        default: '18'
       dump_format:
         description: 'custom | plain-gz'
         type: string
@@ -88,9 +88,9 @@ on:
         default: ''
       retention_days:
         description: 'Days to retain the uploaded artifact.'
-        type: number
+        type: string
         required: false
-        default: 30
+        default: '30'
     outputs:
       artifact_name:
         description: 'Name of the uploaded artifact.'
