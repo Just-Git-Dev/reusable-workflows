@@ -114,20 +114,29 @@ New inputs added purely to remove hard-coded assumptions: `channel_file` and
   `workflow_call`. The shell and Python already coerce, and the values are
   range-checked where it matters.
 
-- **`v1` stays a floating alias, and that is now documented as a choice.** The
-  previous README told callers to pin `@v1` while `v1` was a single movable
-  lightweight tag — and `deploy-cloudflare-pages.yml` did not exist at `v1` at
-  all, so every caller following the README got a 404. Releases are now
-  immutable `vX.Y.Z` tags; `v1` moves. Docs pin `@v1.1.0`.
+- **`v1` is frozen, not moved. Releases are immutable.** The old README told
+  callers to pin `@v1` while `v1` was a single movable lightweight tag — and
+  `deploy-cloudflare-pages.yml` did not exist at `v1` at all, so every caller
+  following the README got a 404.
+
+  The tempting fix was to move `v1` onto the new release, handing all eight
+  existing callers the fixes for free. Rejected: `sync-bundle-key` now **fails** a
+  rotation whose Cloud Run rollout previously only warned, so moving `v1` would
+  turn a green scheduled workflow red in repos whose owners never approved a
+  change. Correct behaviour, but it should arrive as a reviewed commit in each
+  caller, not as a surprise. So `v1` stays pinned at the first release as a legacy
+  alias, releases are immutable `vX.Y.Z` tags, and callers migrate to `@v1.1.0`
+  deliberately.
 
 - **Region default `asia-southeast1` is retained.** It encodes one deployment's
   choice, but changing a default silently changes behaviour for any caller that
   omits the input. It is a candidate for `required: true` in a v2.
 
-**Not done here.** Branch protection on `main` (`"protected": false` today,
-despite CODEOWNERS) has to be set in repo settings, not in a commit. Since `v1`
-is cut from `main` and moves, an unreviewed push plus a `git tag -f` would change
-ops behaviour for every consumer at once. Enable it before announcing the repo.
+**Settings, not commits.** `main` was unprotected (`"protected": false`) despite
+CODEOWNERS. It is now protected: pull request required, one approving review,
+both CI checks required, force-push and deletion blocked. Releases are cut from
+`main`, so an unreviewed push was the one path that could change ops behaviour
+for every consumer at once.
 
 ## 2026-07-10 — `sync-bundle-key`: never disable a version a live service still reads
 

@@ -33,16 +33,21 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/neon-backup.yml@v1.1.0
 ```
 
-Releases are immutable `vX.Y.Z` tags. `v1` is a **floating alias** that moves to
-the newest backwards-compatible release — convenient, but it means a change here
-can alter your ops without a commit in your repo. Pin the exact version for
-anything that mutates production; use `v1` only if you want the updates.
+**Pin an exact `vX.Y.Z` tag.** Releases are immutable: once cut, a tag is never
+moved. Upgrading is therefore a commit in your own repo, reviewed like any other
+change — a fix here can never alter your production ops behind your back.
+
+`v1` is a **frozen legacy alias**, left pointing at the first release so the
+original callers keep working. It does not track new releases, and
+`deploy-cloudflare-pages.yml` does not exist at `v1`. Don't pin new callers to it.
 
 Never use `@main`.
 
-We follow semver for the *input contract*: a new required input, a removed
-input, a changed default, or a behaviour change on a destructive path is a major
-bump.
+We follow semver on the *input contract*: a new required input, a removed input,
+a changed default, or a behaviour change on a destructive path is a major bump.
+Read the [DECISIONS.md](DECISIONS.md) entry for a release before upgrading — in
+`v1.1.0`, `sync-bundle-key` now **fails** a rotation whose Cloud Run rollout was
+previously only warned about.
 
 ## Why this repo is public
 
