@@ -1,57 +1,77 @@
 name: Deploy to Cloudflare Pages (reusable)
 
-# Reusable `workflow_call` version. Builds a static site and deploys it to a
-# Cloudflare Pages project via `cloudflare/wrangler-action`. Kept generic across
-# orgs/projects: project name, build command, output dir, and node version are
-# inputs; the CF account id is an input (pass `vars.CLOUDFLARE_ACCOUNT_ID`) and
-# the API token is a secret.
+# Builds a static site and deploys it to a Cloudflare Pages project via
+# cloudflare/wrangler-action. Everything project-specific — Pages project name,
+# account id, build command, output dir, node version — is an input.
 #
-# The `cloudflare_api_token` must be a "Cloudflare Pages: Edit" token minted in
-# the CF dashboard by a human (see rotate-cloudflare-token.yml). Callers own the
-# trigger (typically a `v*.*.*` tag push + workflow_dispatch).
+# `cloudflare_api_token` must be a token with the "Cloudflare Pages: Edit"
+# permission, minted in the Cloudflare dashboard by a human (CI holding
+# "User -> API Tokens -> Edit" would be privilege escalation). See
+# rotate-cloudflare-token.yml for the rotation runbook.
+#
+# Callers own the trigger — typically a `v*.*.*` tag push plus workflow_dispatch.
 
 on:
   workflow_call:
     inputs:
       project_name:
-        description: 'Cloudflare Pages project to deploy to (e.g. realmid-website)'
+        description: 'Cloudflare Pages project to deploy to.'
         type: string
         required: true
       account_id:
-        description: 'Cloudflare account id — pass ${{ vars.CLOUDFLARE_ACCOUNT_ID }}'
+        description: 'Cloudflare account id. Not a credential; pass it from a repo/org variable.'
         type: string
         required: true
       working_directory:
-        description: 'Directory to build and deploy from'
+        description: 'Directory to build and deploy from.'
         type: string
         required: false
         default: '.'
       build_command:
-        description: 'Command that produces the static output (run in working_directory)'
+        description: 'Shell command that produces the static output, run in working_directory.'
         type: string
         required: false
         default: 'npm ci && npm run build'
       output_dir:
-        description: 'Built static-assets dir to deploy (relative to working_directory)'
+        description: 'Built static-assets directory to deploy, relative to working_directory.'
         type: string
         required: false
         default: 'dist'
       node_version:
-        description: 'Node.js version used for the build'
+        description: 'Node.js version for the build. Accepts any setup-node spec (20, 20.x, lts/*).'
         type: string
         required: false
         default: '20'
+      node_cache:
+        description: 'setup-node cache backend (npm | yarn | pnpm). Empty string disables caching.'
+        type: string
+        required: false
+        default: 'npm'
+      cache_dependency_path:
+        description: 'Lockfile setup-node keys its cache on. Defaults to package-lock.json in working_directory.'
+        type: string
+        required: false
+        default: ''
       branch:
-        description: 'Pages deployment branch (production is "main")'
+        description: 'Pages deployment branch. The project production branch is usually "main".'
         type: string
         required: false
         default: 'main'
     secrets:
       cloudflare_api_token:
+        description: 'Cloudflare API token with "Cloudflare Pages: Edit".'
         required: true
+    outputs:
+      deployment_url:
+        description: 'URL of the deployment produced by this run.'
+        value: ${{ jobs.deploy.outputs.deployment_url }}
 
 permissions:
   contents: read
+
+concurrency:
+  group: pages-deploy-${{ inputs.project_name }}-${{ inputs.branch }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -63,21 +83,29 @@ jobs:
       !startsWith(github.actor, 'renovate')
     defaults:
       run:
+        shell: bash
         working-directory: ${{ inputs.working_directory }}
+    outputs:
+      deployment_url: ${{ steps.deploy.outputs.deployment-url }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ inputs.node_version }}
-          cache: npm
-          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+          cache: ${{ inputs.node_cache }}
+          cache-dependency-path: ${{ inputs.cache_dependency_path || format('{0}/package-lock.json', inputs.working_directory) }}
 
       - name: Build
-        run: ${{ inputs.build_command }}
+        env:
+          # Passed through the environment, never spliced into the script body:
+          # a caller-supplied string interpolated into `run:` is a script-injection seam.
+          BUILD_COMMAND: ${{ inputs.build_command }}
+        run: eval "$BUILD_COMMAND"
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v4
+        id: deploy
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
           apiToken: ${{ secrets.cloudflare_api_token }}
           accountId: ${{ inputs.account_id }}
@@ -87,3 +115,18 @@ jobs:
             --project-name=${{ inputs.project_name }}
             --branch=${{ inputs.branch }}
             --commit-hash=${{ github.sha }}
+
+      - name: Summary
+        if: always()
+        env:
+          PROJECT_NAME:   ${{ inputs.project_name }}
+          BRANCH:         ${{ inputs.branch }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          {
+            echo "## Cloudflare Pages — ${PROJECT_NAME}"
+            echo ""
+            echo "- Branch: \`${BRANCH}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Deployment URL: ${DEPLOYMENT_URL:-<not produced>}"
+          } >> "$GITHUB_STEP_SUMMARY"

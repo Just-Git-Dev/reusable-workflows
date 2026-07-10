@@ -1,16 +1,14 @@
 name: Bootstrap Cloud Monitoring alerts (reusable)
 
-# Reusable `workflow_call` version of the per-org bootstrap-alerts workflow.
-# Applies a notification channel + alert policies from the CALLER repo's
-# infra/alerts/*.yaml (the reusable workflow checks out the caller, so each org
-# keeps its own policy files). Idempotent: existing channels/policies matched by
-# displayName are skipped unless force_update=true.
+# Applies a Cloud Monitoring notification channel + alert policies from the
+# CALLER repo's alerts directory (this workflow checks out the caller, so each
+# project keeps its own policy files). Idempotent: existing channels/policies
+# matched by displayName are skipped unless force_update=true.
 #
-# WIF provider + service account are passed in by the caller (as inputs, not
-# secrets — they are resource identifiers, not credentials), which removes the
-# per-org SA var-name drift (GCP_ROTATOR_SA vs GCP_INFRA_SA).
+# Policy files may contain the literal token NOTIFICATION_CHANNEL_PLACEHOLDER,
+# which is substituted with the resolved channel resource name before apply.
 #
-# Required IAM on the service_account:
+# Required IAM on service_account:
 #   roles/monitoring.alertPolicyEditor
 #   roles/monitoring.notificationChannelEditor
 
@@ -18,85 +16,164 @@ on:
   workflow_call:
     inputs:
       gcp_project:
-        description: 'GCP project id (e.g. auto-mahn, traide-in)'
+        description: 'GCP project id the alert policies belong to.'
         type: string
         required: true
       wif_provider:
-        description: 'Workload Identity Federation provider resource name'
+        description: >-
+          Workload Identity Federation provider resource name, e.g.
+          projects/123456789/locations/global/workloadIdentityPools/POOL/providers/PROVIDER
         type: string
         required: true
       service_account:
-        description: 'Deploy/infra service account email to impersonate via WIF'
+        description: 'Service account email to impersonate via WIF.'
         type: string
         required: true
       alerts_dir:
-        description: 'Directory in the caller repo holding email-channel.yaml + policy-*.yaml'
+        description: 'Directory in the caller repo holding the channel file and the policy files.'
         type: string
         required: false
         default: 'infra/alerts'
+      channel_file:
+        description: 'Notification-channel definition file, relative to alerts_dir.'
+        type: string
+        required: false
+        default: 'email-channel.yaml'
+      policy_glob:
+        description: 'Glob matching the alert-policy files, relative to alerts_dir.'
+        type: string
+        required: false
+        default: 'policy-*.yaml'
       force_update:
-        description: 'Replace existing policies instead of skipping (destructive)'
+        description: 'Replace existing policies instead of skipping them (destructive).'
         type: boolean
         required: false
         default: false
+    outputs:
+      channel_name:
+        description: 'Resolved notification-channel resource name.'
+        value: ${{ jobs.apply.outputs.channel_name }}
+      policies_created:
+        description: 'Number of alert policies created.'
+        value: ${{ jobs.apply.outputs.created }}
+      policies_updated:
+        description: 'Number of alert policies updated (force_update only).'
+        value: ${{ jobs.apply.outputs.updated }}
+      policies_skipped:
+        description: 'Number of alert policies left untouched because they already existed.'
+        value: ${{ jobs.apply.outputs.skipped }}
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: bootstrap-alerts-${{ inputs.gcp_project }}
+  cancel-in-progress: false
+
 jobs:
   apply:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        # An explicit `shell: bash` runs scripts with `-eo pipefail`. The
+        # implicit default is only `-e`, which lets a failing head-of-pipe pass.
+        shell: bash
     env:
-      GCP_PROJECT: ${{ inputs.gcp_project }}
-      ALERTS_DIR:  ${{ inputs.alerts_dir }}
+      GCP_PROJECT:  ${{ inputs.gcp_project }}
+      ALERTS_DIR:   ${{ inputs.alerts_dir }}
+      CHANNEL_FILE: ${{ inputs.channel_file }}
+      POLICY_GLOB:  ${{ inputs.policy_glob }}
+    outputs:
+      channel_name: ${{ steps.channel.outputs.name }}
+      created: ${{ steps.policies.outputs.created }}
+      updated: ${{ steps.policies.outputs.updated }}
+      skipped: ${{ steps.policies.outputs.skipped }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Authenticate to GCP via WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account:            ${{ inputs.service_account }}
 
       - name: Set up gcloud (with alpha)
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           install_components: 'alpha'
 
       - name: Ensure notification channel
         id: channel
         run: |
-          CHANNEL_FILE="${ALERTS_DIR}/email-channel.yaml"
-          DISPLAY=$(grep '^displayName:' "$CHANNEL_FILE" | head -1 | sed "s/^displayName: *//")
+          CHANNEL_PATH="${ALERTS_DIR}/${CHANNEL_FILE}"
+          if [ ! -f "$CHANNEL_PATH" ]; then
+            echo "::error::Channel file not found: $CHANNEL_PATH"
+            exit 1
+          fi
+
+          # Single-process extraction: `grep ... | head -1` can SIGPIPE grep,
+          # which under `pipefail` would fail the step.
+          DISPLAY=$(awk '/^displayName:/ { sub(/^displayName:[[:space:]]*/, ""); print; exit }' "$CHANNEL_PATH")
+          if [ -z "$DISPLAY" ]; then
+            echo "::error::No displayName found in $CHANNEL_PATH"
+            exit 1
+          fi
+
           NAME=$(gcloud alpha monitoring channels list \
             --project="$GCP_PROJECT" \
             --filter="displayName=\"$DISPLAY\"" \
-            --format='value(name)' 2>/dev/null | head -1)
+            --limit=1 --format='value(name)')
+
           if [ -z "$NAME" ]; then
             NAME=$(gcloud alpha monitoring channels create \
               --project="$GCP_PROJECT" \
-              --channel-content-from-file="$CHANNEL_FILE" \
+              --channel-content-from-file="$CHANNEL_PATH" \
               --format='value(name)')
             echo "::notice::Created notification channel: $NAME"
           else
             echo "::notice::Notification channel exists: $NAME"
           fi
+
+          # A create that exits 0 but prints nothing would otherwise be
+          # substituted into every policy as an empty notification channel.
+          if [ -z "$NAME" ]; then
+            echo "::error::Resolved an empty channel name for '$DISPLAY'. Refusing to apply policies."
+            exit 1
+          fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Apply alert policies
+        id: policies
         env:
           CHANNEL_NAME: ${{ steps.channel.outputs.name }}
           FORCE_UPDATE: ${{ inputs.force_update }}
         run: |
-          for f in "${ALERTS_DIR}"/policy-*.yaml; do
-            DISPLAY=$(grep '^displayName:' "$f" | head -1 | sed "s/^displayName: *//")
+          # Without nullglob an unmatched glob is passed through literally and
+          # the loop body runs once against a filename that does not exist.
+          shopt -s nullglob
+          # SC2206: POLICY_GLOB is deliberately unquoted — it *is* the glob.
+          # shellcheck disable=SC2206
+          FILES=("${ALERTS_DIR}"/${POLICY_GLOB})
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::No policy files matched ${ALERTS_DIR}/${POLICY_GLOB}"
+            exit 1
+          fi
+
+          CREATED=0; UPDATED=0; SKIPPED=0
+          for f in "${FILES[@]}"; do
+            DISPLAY=$(awk '/^displayName:/ { sub(/^displayName:[[:space:]]*/, ""); print; exit }' "$f")
+            if [ -z "$DISPLAY" ]; then
+              echo "::error::No displayName found in $f"
+              exit 1
+            fi
+
             EXISTING=$(gcloud alpha monitoring policies list \
               --project="$GCP_PROJECT" \
               --filter="displayName=\"$DISPLAY\"" \
-              --format='value(name)' 2>/dev/null | head -1)
+              --limit=1 --format='value(name)')
 
             TMP=$(mktemp)
             sed "s|NOTIFICATION_CHANNEL_PLACEHOLDER|${CHANNEL_NAME}|g" "$f" > "$TMP"
@@ -107,26 +184,41 @@ jobs:
                   --project="$GCP_PROJECT" \
                   --policy-from-file="$TMP" --quiet
                 echo "  updated: $DISPLAY"
+                UPDATED=$((UPDATED + 1))
               else
                 echo "  skipped (exists): $DISPLAY"
+                SKIPPED=$((SKIPPED + 1))
               fi
             else
               gcloud alpha monitoring policies create \
                 --project="$GCP_PROJECT" \
                 --policy-from-file="$TMP" --quiet
               echo "  created: $DISPLAY"
+              CREATED=$((CREATED + 1))
             fi
             rm -f "$TMP"
           done
 
+          {
+            echo "created=$CREATED"
+            echo "updated=$UPDATED"
+            echo "skipped=$SKIPPED"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Summary
         if: always()
+        env:
+          CHANNEL_NAME: ${{ steps.channel.outputs.name }}
+          CREATED:      ${{ steps.policies.outputs.created }}
+          UPDATED:      ${{ steps.policies.outputs.updated }}
+          SKIPPED:      ${{ steps.policies.outputs.skipped }}
         run: |
           {
             echo "## Monitoring alert policies — ${GCP_PROJECT}"
             echo ''
-            echo "- Notification channel: ${{ steps.channel.outputs.name }}"
-            echo "- Policies from: ${ALERTS_DIR}/policy-*.yaml"
+            echo "- Notification channel: ${CHANNEL_NAME:-<unresolved>}"
+            echo "- Policies from: ${ALERTS_DIR}/${POLICY_GLOB}"
+            echo "- Created: ${CREATED:-0} · Updated: ${UPDATED:-0} · Skipped: ${SKIPPED:-0}"
             echo ""
-            echo "Edit the YAML files and re-run to add new policies. Use force_update=true to overwrite existing ones."
+            echo "Edit the YAML files and re-run to add new policies. Use \`force_update: true\` to overwrite existing ones."
           } >> "$GITHUB_STEP_SUMMARY"

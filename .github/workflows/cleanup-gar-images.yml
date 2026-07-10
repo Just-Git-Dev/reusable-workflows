@@ -1,61 +1,103 @@
 name: Cleanup GAR images (reusable)
 
-# Reusable `workflow_call` version standardized on AutoMahn's cleanup (the safe
-# one). Sweeps EVERY image in the GAR repo. The live-digest keep-set is built
-# from ALL Cloud Run Services AND Jobs in-region, so a digest any running
-# service or deployable job points at is never deleted (cron/migrate live on
-# Jobs). Per image, keeps: live digests, the most-recent N semver tags, and
-# 'latest' / safe-prefix (hotfix-/rc-/debug-) tags. Age-deletes the rest.
+# Age-sweeps every image in a Google Artifact Registry Docker repo.
 #
-# NOTE: the caller owns the schedule + the dry_run decision (pass them in). This
-# reusable workflow performs exactly what dry_run says.
+# The keep-set is built from:
+#   - live digests referenced by ALL Cloud Run Services AND Jobs in-region
+#     (cron/migration containers commonly live on Jobs, not Services)
+#   - the most-recent N semver (vX.Y.Z) tags per image
+#   - any tag in keep_tags, or matching a prefix in keep_tag_prefixes
+# Everything else is deleted once older than the untagged/tagged age limits.
+#
+# The caller owns the schedule and the dry_run decision. This workflow performs
+# exactly what dry_run says. Run with dry_run: true first and read the plan.
+#
+# Required IAM on service_account:
+#   roles/artifactregistry.repoAdmin  (on the target repo)
+#   roles/run.viewer                  (to enumerate live Services + Jobs)
 
 on:
   workflow_call:
     inputs:
       gcp_project:
+        description: 'GCP project id owning the Artifact Registry repo.'
         type: string
         required: true
       gcp_region:
+        description: 'Region of both the Artifact Registry repo and the Cloud Run Services/Jobs.'
         type: string
         required: false
         default: 'asia-southeast1'
       wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
         type: string
         required: true
       service_account:
+        description: 'Service account email to impersonate via WIF.'
         type: string
         required: true
       gar_repo:
-        description: 'Artifact Registry repo name (e.g. backend)'
+        description: 'Artifact Registry repository name (e.g. backend).'
         type: string
         required: true
       keep_semver_count:
-        type: string
+        description: 'Per image, keep this many of the most recent vX.Y.Z-tagged digests.'
+        type: number
         required: false
-        default: '5'
+        default: 5
       untagged_max_age_days:
-        type: string
+        description: 'Delete untagged manifests at least this many days old.'
+        type: number
         required: false
-        default: '15'
+        default: 15
       tagged_max_age_days:
+        description: 'Delete tagged images at least this many days old, unless in the keep-set.'
+        type: number
+        required: false
+        default: 30
+      keep_tags:
+        description: 'Comma-separated exact tags that are never deleted.'
         type: string
         required: false
-        default: '30'
+        default: 'latest,buildcache'
+      keep_tag_prefixes:
+        description: 'Comma-separated tag prefixes that are never deleted.'
+        type: string
+        required: false
+        default: 'hotfix-,rc-,debug-'
       dry_run:
-        description: 'true = print plan only, do not delete'
+        description: 'true = print the plan only, delete nothing.'
         type: boolean
         required: false
         default: true
+    outputs:
+      candidates:
+        description: 'Number of image versions selected for deletion by the plan.'
+        value: ${{ jobs.cleanup.outputs.candidates }}
+      deleted:
+        description: 'Number of image versions actually deleted (0 on a dry run).'
+        value: ${{ jobs.cleanup.outputs.deleted }}
+      skipped:
+        description: 'Deletions skipped because the manifest was already gone or held by a kept parent.'
+        value: ${{ jobs.cleanup.outputs.skipped }}
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  # Deletions run with `xargs -P 8`; never let two sweeps of the same repo
+  # race on a delete-set computed before the other sweep started.
+  group: cleanup-gar-${{ inputs.gcp_project }}-${{ inputs.gar_repo }}
+  cancel-in-progress: false
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
     env:
       GCP_PROJECT: ${{ inputs.gcp_project }}
       GCP_REGION:  ${{ inputs.gcp_region }}
@@ -64,20 +106,23 @@ jobs:
       KEEP_SEMVER_COUNT:     ${{ inputs.keep_semver_count }}
       UNTAGGED_MAX_AGE_DAYS: ${{ inputs.untagged_max_age_days }}
       TAGGED_MAX_AGE_DAYS:   ${{ inputs.tagged_max_age_days }}
+      KEEP_TAGS:             ${{ inputs.keep_tags }}
+      KEEP_TAG_PREFIXES:     ${{ inputs.keep_tag_prefixes }}
+      DRY_RUN:               ${{ inputs.dry_run }}
+    outputs:
+      candidates: ${{ steps.plan.outputs.candidates }}
+      deleted: ${{ steps.exec.outputs.deleted }}
+      skipped: ${{ steps.exec.outputs.skipped }}
 
     steps:
       - name: Authenticate to GCP via WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account:            ${{ inputs.service_account }}
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
-
-      - name: Resolve dry-run flag
-        id: mode
-        run: echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: Collect live image digests (all Services + Jobs)
         run: |
@@ -134,6 +179,7 @@ jobs:
           fi
 
       - name: Compute delete-set (all images in repo)
+        id: plan
         run: |
           python3 <<'PY' | tee /tmp/delete-plan.json
           import json, os, subprocess, re
@@ -143,6 +189,12 @@ jobs:
           KEEP_SEMVER_COUNT = int(os.environ["KEEP_SEMVER_COUNT"])
           UNTAGGED_MAX_AGE_DAYS = int(os.environ["UNTAGGED_MAX_AGE_DAYS"])
           TAGGED_MAX_AGE_DAYS = int(os.environ["TAGGED_MAX_AGE_DAYS"])
+
+          def csv(name):
+              return tuple(p for p in (s.strip() for s in os.environ.get(name, "").split(",")) if p)
+
+          keep_tags = frozenset(csv("KEEP_TAGS"))
+          keep_prefixes = csv("KEEP_TAG_PREFIXES")
 
           with open("/tmp/live-digests.txt") as fh:
               live_digests = {ln.strip() for ln in fh if ln.strip()}
@@ -155,7 +207,9 @@ jobs:
 
           now = datetime.now(timezone.utc)
           semver_re = re.compile(r"^v\d+\.\d+\.\d+$")
-          safe_prefix = ("hotfix-", "rc-", "debug-")
+
+          def protected(tag):
+              return tag in keep_tags or (bool(keep_prefixes) and tag.startswith(keep_prefixes))
 
           by_pkg = {}
           for img in images:
@@ -165,7 +219,7 @@ jobs:
           for pkg, imgs in by_pkg.items():
               for img in imgs:
                   tags = img.get("tags", []) or []
-                  if "latest" in tags or any(t.startswith(safe_prefix) for t in tags):
+                  if any(protected(t) for t in tags):
                       keep.add(img.get("version"))
               semver_imgs = []
               for img in imgs:
@@ -218,6 +272,8 @@ jobs:
           }, indent=2))
           PY
 
+          echo "candidates=$(jq '.to_delete | length' /tmp/delete-plan.json)" >> "$GITHUB_OUTPUT"
+
       - name: Print summary of delete-set
         run: |
           TOTAL=$(jq '.total_images' /tmp/delete-plan.json)
@@ -229,9 +285,9 @@ jobs:
             echo ""
             echo "- Total image versions: $TOTAL"
             echo "- Live digests protected: $LIVE"
-            echo "- Kept (live + semver + latest/safe): $KEPT"
+            echo "- Kept (live + semver + keep_tags/prefixes): $KEPT"
             echo "- Delete candidates: $DEL"
-            echo "- Dry run: ${{ steps.mode.outputs.dry_run }}"
+            echo "- Dry run: ${DRY_RUN}"
             echo ""
             echo "> Untagged child manifests of a KEPT parent index can't be deleted"
             echo "> while the parent exists — those are skipped at execution."
@@ -246,7 +302,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Execute deletions
-        if: steps.mode.outputs.dry_run == 'false'
+        id: exec
+        if: inputs.dry_run == false
         run: |
           set -uo pipefail
 
@@ -282,6 +339,11 @@ jobs:
           SKIPPED=$(grep -c '^OK skipped' /tmp/exec.log || true)
           FAILED=$(grep -c '^FAIL ' /tmp/exec.log || true)
           echo "deleted=$DELETED skipped=$SKIPPED failed=$FAILED"
+          {
+            echo "deleted=$DELETED"
+            echo "skipped=$SKIPPED"
+            echo "failed=$FAILED"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "## Execution result"
             echo ""
