@@ -1,5 +1,64 @@
 # Decisions — reusable-workflows
 
+## 2026-07-10 — `sync-bundle-key`: never disable a version a live service still reads
+
+Bug fix. RCA below.
+
+**Symptom.** A rotation run finishes green, with a `::warning::Failed to update
+<service>` buried in the log. The service keeps serving from the *previous*
+bundle version — which the same run then disabled. Nothing breaks until that
+container next restarts or scales out, at which point Cloud Run cannot mount the
+secret and the revision fails to come up. The failure surfaces far from the run
+that caused it.
+
+**Root cause.** The workflow performed a two-phase change (roll every service
+onto `:latest`, then retire the old version) without making phase 2 conditional
+on phase 1. Concretely, the roll swallowed its own failure:
+
+```
+gcloud run services update "$svc" ... || echo "::warning::Failed to update $svc"
+```
+
+and the retire step ran regardless, guarded only on "an old version existed":
+
+```
+if: steps.cur.outputs.current_version != ''
+run: gcloud secrets versions disable ... || true
+```
+
+The originating mistake is treating a partial rollout as an acceptable outcome.
+`|| echo` converts a hard failure into a log line, and `|| true` then suppresses
+the one signal that would have caught the inconsistency.
+
+**Why it wasn't caught.** No test exercises the failure path — a failed
+`services update` needs a service that exists but rejects the update (wrong
+region, missing IAM, bad mount path), which the happy-path runs never produce.
+The step summary reported the old version as "(disabled)" unconditionally, so
+the artifact a human reviews after a run *asserted* the very thing that had gone
+wrong. And a green check on a rotation workflow is exactly the kind of thing
+nobody re-reads.
+
+**Fix.** The roll step now collects failures and exits non-zero. Because a later
+step's `if:` implies `success()`, the disable step is simply never reached on a
+partial rollout, and the old version stays **enabled** — the safe state, since
+services on it keep working and a re-run retires it once every service rolls.
+The disable step also drops its `|| true`: if retiring the old version fails,
+that is a real error worth seeing. The ordering guarantee is stated in the
+workflow header and in `docs/sync-bundle-key.md`, so it is a contract rather
+than an implementation detail. A `dry_run` input was added — this was the only
+destructive workflow without one.
+
+**Prevention.**
+- The invariant is now written down where a future editor will see it before
+  reordering the steps.
+- `actionlint` + `shellcheck` run in CI, which flags newly-introduced
+  unconditional `|| true` on a command whose result is load-bearing.
+- Wider lesson applied across the repo: an explicit `|| echo` / `|| true` on a
+  mutating command is the thing to audit. GitHub's default `run:` shell is
+  already `bash -e`, so bare commands *do* fail the step — it is only the
+  explicit swallows (and masked pipe failures, `pipefail` being off by default)
+  that let a broken run go green.
+
 ## 2026-07-01 — Create shared cross-org reusable-workflows host
 
 **Problem.** AutoMahn, Realm-ID and Traide-Co each run the same infra stack and

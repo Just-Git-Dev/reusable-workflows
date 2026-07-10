@@ -1,59 +1,86 @@
 name: Sync keys into Secret Manager bundle (reusable)
 
-# Reusable `workflow_call` version of the rotate-db-redis-passwords /
-# rotate-r2-token family. Upserts one or more keys into the app-secrets SM
-# bundle, adds a new version, forces the given Cloud Run service(s) onto it, and
-# disables the previous version.
+# Upserts one or more keys into a Secret Manager "bundle" secret — a dotenv
+# blob of KEY=value lines mounted into Cloud Run — adds a new secret version,
+# rolls the named Cloud Run service(s) onto it, and disables the old version.
 #
-# The key->value payload is passed as a single JSON secret (`payload_json`),
-# where the JSON KEYS are the DESTINATION bundle keys. This absorbs both the
-# count difference (2 keys for db/redis or r2) and the naming drift between apps
-# (e.g. FILE_STORE_ACCESS_KEY vs FILE_STORAGE_ACCESS_KEY) without any per-org
-# branches in this workflow. Build it in the caller with toJSON() so values stay
-# masked, e.g.:
+# The key->value payload is a single JSON secret (`payload_json`) whose KEYS are
+# the DESTINATION bundle keys. That absorbs both the number of keys and any
+# naming drift between projects without branching in this workflow. Build it in
+# the caller with toJSON() so values stay masked:
+#
 #   payload_json: |
 #     {"DB_PASSWORD": ${{ toJSON(secrets.DB_PASSWORD) }},
 #      "REDIS_PASSWORD": ${{ toJSON(secrets.REDIS_PASSWORD) }}}
+#
+# ORDERING CONTRACT: the previous secret version is disabled only after EVERY
+# service has rolled successfully. If any roll fails the job fails with the old
+# version still enabled, so no running service is left pointing at a disabled
+# secret version.
+#
+# Required IAM on service_account:
+#   roles/secretmanager.secretVersionManager  (on bundle_secret)
+#   roles/secretmanager.secretAccessor        (on bundle_secret)
+#   roles/run.developer                       (on the target services)
 
 on:
   workflow_call:
     inputs:
       gcp_project:
+        description: 'GCP project id holding the bundle secret and the Cloud Run services.'
         type: string
         required: true
       gcp_region:
+        description: 'Region of the Cloud Run services.'
         type: string
         required: false
         default: 'asia-southeast1'
       wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
         type: string
         required: true
       service_account:
+        description: 'Service account email to impersonate via WIF.'
         type: string
         required: true
       bundle_secret:
-        description: 'Secret Manager bundle secret name'
+        description: 'Secret Manager bundle secret name.'
         type: string
         required: false
         default: 'app-secrets'
       mount_path:
-        description: 'Container path the bundle is mounted at (e.g. /app/configs/.prod.env)'
+        description: 'Container path the bundle is mounted at (e.g. /app/configs/.prod.env).'
         type: string
         required: false
         default: '/app/configs/.prod.env'
       services_csv:
-        description: 'Comma-separated Cloud Run service names to roll onto the new version'
+        description: 'Comma-separated Cloud Run service names to roll onto the new version.'
         type: string
         required: true
       title:
-        description: 'Human label for the summary (e.g. "DB + Redis passwords")'
+        description: 'Human label for the run summary (e.g. "DB + Redis passwords").'
         type: string
         required: false
         default: 'secrets'
+      dry_run:
+        description: 'true = validate the payload and print the plan; write nothing, roll nothing.'
+        type: boolean
+        required: false
+        default: false
     secrets:
       payload_json:
-        description: 'JSON object {DEST_BUNDLE_KEY: value, ...} — keys are destination bundle keys'
+        description: 'JSON object {DEST_BUNDLE_KEY: value, ...} — keys are destination bundle keys.'
         required: true
+    outputs:
+      old_version:
+        description: 'Bundle version that was enabled before this run (empty if none).'
+        value: ${{ jobs.sync.outputs.old_version }}
+      new_version:
+        description: 'Bundle version created by this run (empty on a dry run).'
+        value: ${{ jobs.sync.outputs.new_version }}
+      services_rolled:
+        description: 'Number of Cloud Run services rolled onto the new version.'
+        value: ${{ jobs.sync.outputs.services_rolled }}
 
 permissions:
   contents: read
@@ -67,22 +94,30 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
     env:
       GCP_PROJECT:   ${{ inputs.gcp_project }}
       GCP_REGION:    ${{ inputs.gcp_region }}
       BUNDLE_SECRET: ${{ inputs.bundle_secret }}
       MOUNT_PATH:    ${{ inputs.mount_path }}
       SERVICES_CSV:  ${{ inputs.services_csv }}
+      DRY_RUN:       ${{ inputs.dry_run }}
+    outputs:
+      old_version: ${{ steps.cur.outputs.current_version }}
+      new_version: ${{ steps.new_version.outputs.new_version }}
+      services_rolled: ${{ steps.roll.outputs.rolled }}
 
     steps:
       - name: Authenticate to GCP via WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account:            ${{ inputs.service_account }}
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: Validate payload
         env:
@@ -92,25 +127,38 @@ jobs:
             echo "::error::payload_json must be a non-empty JSON object of {DEST_KEY: value}."
             exit 1
           fi
+          if ! printf '%s' "$PAYLOAD_JSON" | jq -e 'all(.[]; type == "string")' >/dev/null 2>&1; then
+            echo "::error::every payload_json value must be a string."
+            exit 1
+          fi
           # Mask every value so nothing leaks in later logs.
           while IFS= read -r v; do
             [ -n "$v" ] && echo "::add-mask::$v"
           done < <(printf '%s' "$PAYLOAD_JSON" | jq -r '.[]')
           COUNT=$(printf '%s' "$PAYLOAD_JSON" | jq 'length')
           echo "Payload carries $COUNT key(s)."
+          printf '%s' "$PAYLOAD_JSON" | jq -r 'keys[] | "  will upsert: \(.)"'
 
       - name: Read current bundle (or start empty)
         id: cur
         run: |
           if ! gcloud secrets describe "$BUNDLE_SECRET" --project="$GCP_PROJECT" >/dev/null 2>&1; then
-            echo "::error::Secret $BUNDLE_SECRET does not exist in $GCP_PROJECT. Run the org bootstrap first." && exit 1
+            echo "::error::Secret $BUNDLE_SECRET does not exist in $GCP_PROJECT. Create it first."
+            exit 1
           fi
-          if gcloud secrets versions list "$BUNDLE_SECRET" --project="$GCP_PROJECT" --filter='state=ENABLED' --format='value(name)' | head -1 | grep -q .; then
-            gcloud secrets versions access latest --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/bundle.env
-            CURRENT_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" --project="$GCP_PROJECT" --filter='state=ENABLED' --format='value(name)' | head -1)
+          # `--limit=1` rather than `| head -1`: head closing the pipe can
+          # SIGPIPE gcloud, which under pipefail would fail the step.
+          CURRENT_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --filter='state=ENABLED' \
+            --sort-by=~createTime --limit=1 --format='value(name)')
+          if [ -n "$CURRENT_VERSION" ]; then
+            gcloud secrets versions access "$CURRENT_VERSION" \
+              --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/bundle.env
             echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+            echo "Current enabled version: $CURRENT_VERSION"
           else
             : > /tmp/bundle.env
+            echo "No enabled version yet — starting from an empty bundle."
           fi
 
       - name: Upsert payload keys into bundle
@@ -135,42 +183,91 @@ jobs:
 
       - name: Add new bundle version
         id: new_version
+        if: inputs.dry_run == false
         run: |
           gcloud secrets versions add "$BUNDLE_SECRET" \
             --project="$GCP_PROJECT" \
             --data-file=/tmp/bundle.env
-          NEW_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" --project="$GCP_PROJECT" --filter='state=ENABLED' --format='value(name)' --sort-by=~createTime | head -1)
+          NEW_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --filter='state=ENABLED' \
+            --sort-by=~createTime --limit=1 --format='value(name)')
+          if [ -z "$NEW_VERSION" ]; then
+            echo "::error::Could not resolve the newly added version of $BUNDLE_SECRET."
+            exit 1
+          fi
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          rm -f /tmp/bundle.env /tmp/bundle.env.new
 
       - name: Force new Cloud Run revision(s)
+        id: roll
+        if: inputs.dry_run == false
         run: |
           IFS=',' read -ra SERVICES <<< "$SERVICES_CSV"
+          ROLLED=0
+          FAILED=()
           for svc in "${SERVICES[@]}"; do
-            svc="$(echo "$svc" | xargs)"   # trim whitespace
+            svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
+            svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
             [ -z "$svc" ] && continue
-            gcloud run services update "$svc" \
-              --region="$GCP_REGION" \
-              --project="$GCP_PROJECT" \
-              --update-secrets="${MOUNT_PATH}=${BUNDLE_SECRET}:latest" || \
-              echo "::warning::Failed to update $svc"
+            if gcloud run services update "$svc" \
+                 --region="$GCP_REGION" \
+                 --project="$GCP_PROJECT" \
+                 --update-secrets="${MOUNT_PATH}=${BUNDLE_SECRET}:latest"; then
+              echo "rolled: $svc"
+              ROLLED=$((ROLLED + 1))
+            else
+              echo "::error::Failed to roll $svc onto ${BUNDLE_SECRET}:latest"
+              FAILED+=("$svc")
+            fi
           done
+          echo "rolled=$ROLLED" >> "$GITHUB_OUTPUT"
+
+          # Fail loud and leave the old version ENABLED. Disabling it now would
+          # strand any service still reading it.
+          if [ "${#FAILED[@]}" -gt 0 ]; then
+            echo "::error::${#FAILED[@]} service(s) failed to roll: ${FAILED[*]}"
+            echo "::error::The previous bundle version is still enabled. Fix and re-run."
+            exit 1
+          fi
+          if [ "$ROLLED" -eq 0 ]; then
+            echo "::error::services_csv resolved to zero service names."
+            exit 1
+          fi
 
       - name: Disable old Secret Manager version
-        if: steps.cur.outputs.current_version != ''
+        # Reached only when every service rolled: a failed roll fails the step
+        # above, and `if: success()` is the implicit default for later steps.
+        if: inputs.dry_run == false && steps.cur.outputs.current_version != ''
+        env:
+          OLD_VERSION: ${{ steps.cur.outputs.current_version }}
         run: |
-          gcloud secrets versions disable "${{ steps.cur.outputs.current_version }}" \
+          gcloud secrets versions disable "$OLD_VERSION" \
             --secret="$BUNDLE_SECRET" \
-            --project="$GCP_PROJECT" || true
+            --project="$GCP_PROJECT"
+
+      - name: Shred local bundle copy
+        if: always()
+        run: rm -f /tmp/bundle.env /tmp/bundle.env.new
 
       - name: Summary
         if: always()
+        env:
+          TITLE:       ${{ inputs.title }}
+          OLD_VERSION: ${{ steps.cur.outputs.current_version }}
+          NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+          ROLLED:      ${{ steps.roll.outputs.rolled }}
         run: |
           {
-            echo "## Synced ${{ inputs.title }} into $BUNDLE_SECRET (${GCP_PROJECT})"
-            echo ""
-            echo "- Old bundle version: ${{ steps.cur.outputs.current_version }} (disabled)"
-            echo "- New bundle version: ${{ steps.new_version.outputs.new_version }}"
-            echo "- Cloud Run services rolled: ${SERVICES_CSV}"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "## [dry run] Would sync ${TITLE} into ${BUNDLE_SECRET} (${GCP_PROJECT})"
+              echo ""
+              echo "- Current bundle version: ${OLD_VERSION:-<none>} (would be disabled)"
+              echo "- Services that would roll: \`${SERVICES_CSV}\`"
+            else
+              echo "## Synced ${TITLE} into ${BUNDLE_SECRET} (${GCP_PROJECT})"
+              echo ""
+              echo "- Old bundle version: ${OLD_VERSION:-<none>}"
+              echo "- New bundle version: ${NEW_VERSION:-<not created>}"
+              echo "- Cloud Run services rolled: ${ROLLED:-0} of \`${SERVICES_CSV}\`"
+            fi
             echo "- Mount path: ${MOUNT_PATH}"
           } >> "$GITHUB_STEP_SUMMARY"
