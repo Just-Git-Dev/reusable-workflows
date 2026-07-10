@@ -1,45 +1,71 @@
 name: Rotate Cloudflare API token — nag (reusable)
 
-# Reusable `workflow_call` version. CF API tokens must be minted in the CF
-# dashboard by a human (letting CI hold "User → API Tokens → Edit" would be
-# privilege escalation). This workflow only VERIFIES the current token is still
-# active and prints an org-specific rotation runbook to the step summary.
+# Cloudflare API tokens must be minted in the CF dashboard by a human (letting
+# CI hold "User -> API Tokens -> Edit" would be privilege escalation). So this
+# workflow does not rotate anything: it VERIFIES the current token is still
+# active, warns when it is close to expiry, and prints a rotation runbook to the
+# step summary.
 #
-# The verify logic is identical across orgs; only the runbook strings (zone,
+# The verify logic is identical everywhere; only the runbook strings (zone,
 # token scopes, target repos) differ — those are inputs.
 
 on:
   workflow_call:
     inputs:
       zone_name:
-        description: 'DNS zone the token scopes to (e.g. automahn.in, traide.co.in)'
+        description: 'DNS zone the token is scoped to, used in the runbook text.'
         type: string
         required: true
       scopes_md:
-        description: 'Markdown bullet lines describing the custom-token scopes to create'
+        description: 'Markdown bullet lines describing the custom-token scopes to create.'
         type: string
         required: true
       secret_targets:
-        description: 'Space-separated "org/repo" list to update CLOUDFLARE_API_TOKEN in'
+        description: 'Space-separated "org/repo" list whose CLOUDFLARE_API_TOKEN secret must be updated.'
         type: string
         required: true
+      expiry_warn_days:
+        description: 'Emit a warning when the token expires within this many days.'
+        type: number
+        required: false
+        default: 30
     secrets:
       cloudflare_api_token:
+        description: 'The Cloudflare API token to verify.'
         required: true
+    outputs:
+      token_status:
+        description: 'Cloudflare-reported token status (expected "active").'
+        value: ${{ jobs.check.outputs.token_status }}
+      expires_on:
+        description: 'Token expiry timestamp, empty when the token never expires.'
+        value: ${{ jobs.check.outputs.expires_on }}
 
 permissions:
   contents: read
+
+concurrency:
+  group: rotate-cf-token-${{ inputs.zone_name }}
+  cancel-in-progress: true
 
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      token_status: ${{ steps.verify.outputs.token_status }}
+      expires_on: ${{ steps.verify.outputs.expires_on }}
     steps:
       - name: Verify current CF API token is still valid
+        id: verify
         env:
-          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          CF_API_TOKEN:     ${{ secrets.cloudflare_api_token }}
+          EXPIRY_WARN_DAYS: ${{ inputs.expiry_warn_days }}
         run: |
-          STATUS=$(curl -fsS -o /tmp/verify.json -w '%{http_code}' \
+          STATUS=$(curl -sS -o /tmp/verify.json -w '%{http_code}' \
             "https://api.cloudflare.com/client/v4/user/tokens/verify" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" || echo "000")
           if [ "$STATUS" != "200" ]; then
@@ -47,23 +73,48 @@ jobs:
             cat /tmp/verify.json || true
             exit 1
           fi
-          TOKEN_STATUS=$(jq -r '.result.status' /tmp/verify.json)
+
+          TOKEN_STATUS=$(jq -r '.result.status // ""' /tmp/verify.json)
           if [ "$TOKEN_STATUS" != "active" ]; then
-            echo "::error::CF token status is $TOKEN_STATUS (expected 'active')."
+            echo "::error::CF token status is '${TOKEN_STATUS}' (expected 'active')."
             exit 1
           fi
           echo "CF token is active."
 
+          EXPIRES_ON=$(jq -r '.result.expires_on // ""' /tmp/verify.json)
+          if [ -n "$EXPIRES_ON" ]; then
+            NOW_S=$(date -u +%s)
+            EXP_S=$(date -u -d "$EXPIRES_ON" +%s)
+            DAYS_LEFT=$(( (EXP_S - NOW_S) / 86400 ))
+            echo "Token expires on ${EXPIRES_ON} (${DAYS_LEFT} day(s) left)."
+            if [ "$DAYS_LEFT" -le "$EXPIRY_WARN_DAYS" ]; then
+              echo "::warning::CF token expires in ${DAYS_LEFT} day(s) — rotate it now."
+            fi
+          else
+            echo "Token has no expiry set."
+          fi
+
+          {
+            echo "token_status=$TOKEN_STATUS"
+            echo "expires_on=$EXPIRES_ON"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Print rotation runbook
+        if: always()
         env:
           ZONE_NAME:      ${{ inputs.zone_name }}
           SCOPES_MD:      ${{ inputs.scopes_md }}
           SECRET_TARGETS: ${{ inputs.secret_targets }}
+          EXPIRES_ON:     ${{ steps.verify.outputs.expires_on }}
         run: |
           {
             echo "## Cloudflare API Token — rotation reminder (${ZONE_NAME})"
             echo ""
-            echo "The master \`CLOUDFLARE_API_TOKEN\` is valid today, but should be rotated periodically."
+            if [ -n "$EXPIRES_ON" ]; then
+              echo "Current token expires on \`${EXPIRES_ON}\`."
+            else
+              echo "The current token has no expiry and should still be rotated periodically."
+            fi
             echo ""
             echo "### Steps"
             echo ""
