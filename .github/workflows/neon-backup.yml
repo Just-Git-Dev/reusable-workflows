@@ -1,83 +1,130 @@
-name: Neon prod DB backup → artifact (reusable)
+name: Postgres logical backup → artifact (reusable)
 
-# Reusable `workflow_call` version of AutoMahn/api backup-db.yml and
-# Traide-Co/api neon-backup.yml. Full logical backup of the prod Neon database,
-# uploaded as a private workflow artifact. DB_PASSWORD is read from the
-# app-secrets SM bundle via WIF (never a GitHub secret). DB host/port/user/name
-# are passed by the caller (usually the same repo vars deploy.yml uses).
+# Full logical backup of a Postgres database (built for Neon, works for any
+# reachable Postgres), uploaded as a private workflow artifact.
+#
+# The DB password is read at run time from a key inside a Secret Manager
+# "bundle" secret — a dotenv-formatted blob of KEY=value lines — so it never has
+# to exist as a GitHub secret. Host/port/user/name are plain inputs.
 #
 # dump_format:
-#   custom   -> pg_dump --format=custom  (.dump, pg_restore-compatible) + sha256 MANIFEST
-#   plain-gz -> pg_dump --format=plain | gzip -9 (.sql.gz) + gzip -t / header sanity checks
-# Both formats always emit a MANIFEST and run integrity checks (merged best-of-both).
+#   custom   -> pg_dump --format=custom  (.dump, pg_restore-compatible)
+#   plain-gz -> pg_dump --format=plain | gzip -9 (.sql.gz)
+# Both formats emit a sha256 MANIFEST and run post-dump integrity checks.
 #
-# NOTE: the dump contains PII. Artifact is private to repo collaborators and
-# expires per retention_days. Neon PITR / branch snapshots remain the stronger DR.
+# NOTE: the dump contains whatever your database contains, very likely PII. The
+# artifact is private to repo collaborators and expires per retention_days.
+# Provider-side PITR / branch snapshots remain the stronger DR story.
+#
+# Required IAM on service_account:
+#   roles/secretmanager.secretAccessor  (on bundle_secret)
 
 on:
   workflow_call:
     inputs:
       gcp_project:
+        description: 'GCP project id holding the Secret Manager bundle.'
         type: string
         required: true
       wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
         type: string
         required: true
       service_account:
+        description: 'Service account email to impersonate via WIF.'
         type: string
         required: true
       bundle_secret:
+        description: 'Secret Manager secret holding dotenv KEY=value lines.'
         type: string
         required: false
         default: 'app-secrets'
+      password_key:
+        description: 'Key inside the bundle whose value is the database password.'
+        type: string
+        required: false
+        default: 'DB_PASSWORD'
       db_host:
+        description: 'Database hostname.'
         type: string
         required: true
       db_port:
+        description: 'Database port.'
         type: string
         required: false
         default: '5432'
       db_user:
+        description: 'Database user to connect as.'
         type: string
         required: true
       db_name:
+        description: 'Database name to dump.'
         type: string
         required: true
       db_ssl_mode:
+        description: 'libpq sslmode (disable | require | verify-ca | verify-full).'
         type: string
         required: false
         default: 'require'
+      pg_major:
+        description: 'Postgres client major version to install. Must be >= the server major.'
+        type: string
+        required: false
+        default: '18'
       dump_format:
         description: 'custom | plain-gz'
         type: string
         required: false
         default: 'custom'
       name_prefix:
-        description: 'Artifact/file name prefix (e.g. automahn, neon)'
+        description: 'Artifact and file name prefix.'
         type: string
         required: false
         default: 'db'
       reason:
+        description: 'Free-text note recorded in MANIFEST.txt (e.g. "pre-migration").'
         type: string
         required: false
         default: ''
       retention_days:
+        description: 'Days to retain the uploaded artifact.'
         type: string
         required: false
         default: '30'
+    outputs:
+      artifact_name:
+        description: 'Name of the uploaded artifact.'
+        value: ${{ jobs.backup.outputs.artifact_name }}
+      dump_file:
+        description: 'Filename of the dump inside the artifact.'
+        value: ${{ jobs.backup.outputs.dump_file }}
+      sha256:
+        description: 'SHA-256 of the dump file.'
+        value: ${{ jobs.backup.outputs.sha256 }}
+      tables:
+        description: 'Number of tables observed in the dump (sanity signal).'
+        value: ${{ jobs.backup.outputs.tables }}
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: pg-backup-${{ inputs.gcp_project }}-${{ inputs.db_name }}
+  cancel-in-progress: false
+
 jobs:
   backup:
-    name: pg_dump prod -> artifact
+    name: pg_dump -> artifact
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     env:
       GCP_PROJECT:   ${{ inputs.gcp_project }}
       BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+      PASSWORD_KEY:  ${{ inputs.password_key }}
       DB_HOST:       ${{ inputs.db_host }}
       DB_PORT:       ${{ inputs.db_port }}
       DB_USER:       ${{ inputs.db_user }}
@@ -85,8 +132,22 @@ jobs:
       DB_SSL_MODE:   ${{ inputs.db_ssl_mode }}
       DUMP_FORMAT:   ${{ inputs.dump_format }}
       NAME_PREFIX:   ${{ inputs.name_prefix }}
+      PG_MAJOR:      ${{ inputs.pg_major }}
+    outputs:
+      artifact_name: ${{ steps.dump.outputs.artifact_name }}
+      dump_file: ${{ steps.dump.outputs.dump_file }}
+      sha256: ${{ steps.dump.outputs.sha256 }}
+      tables: ${{ steps.dump.outputs.tables }}
+
     steps:
-      - name: Install pg client 18 (Neon runs PG 18; runner ships an older client)
+      - name: Validate inputs
+        run: |
+          case "$DUMP_FORMAT" in
+            custom|plain-gz) ;;
+            *) echo "::error::dump_format must be 'custom' or 'plain-gz' (got '$DUMP_FORMAT')"; exit 1 ;;
+          esac
+
+      - name: Install Postgres client
         run: |
           set -euo pipefail
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -96,64 +157,87 @@ jobs:
             https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-18
-          # The runner's /usr/bin/pg_dump (v16) shadows the wrapper; force v18 onto PATH.
-          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
-          /usr/lib/postgresql/18/bin/pg_dump --version
+          sudo apt-get install -y -qq "postgresql-client-${PG_MAJOR}"
+          # The runner ships an older /usr/bin/pg_dump that shadows the wrapper;
+          # force the requested major onto PATH.
+          echo "/usr/lib/postgresql/${PG_MAJOR}/bin" >> "$GITHUB_PATH"
+          "/usr/lib/postgresql/${PG_MAJOR}/bin/pg_dump" --version
 
       - name: Authenticate to GCP via WIF
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account:            ${{ inputs.service_account }}
 
-      - uses: google-github-actions/setup-gcloud@v3
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Pull DB_PASSWORD from Secret Manager bundle
+      - name: Read DB password from Secret Manager bundle
         run: |
           set -euo pipefail
-          gcloud secrets versions access latest --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/app-secrets.env
-          PW=$(grep -E '^DB_PASSWORD=' /tmp/app-secrets.env | head -1 | cut -d= -f2-)
+          gcloud secrets versions access latest \
+            --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/bundle.env
+          # awk, not `grep | head | cut`: single process (no SIGPIPE under
+          # pipefail) and it keeps '=' characters inside the value.
+          PW=$(awk -v k="${PASSWORD_KEY}=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit }' /tmp/bundle.env)
+          rm -f /tmp/bundle.env
           PW="${PW%\"}"; PW="${PW#\"}"
-          rm -f /tmp/app-secrets.env
-          if [ -z "$PW" ]; then echo "::error::DB_PASSWORD not found in $BUNDLE_SECRET"; exit 1; fi
+          if [ -z "$PW" ]; then
+            echo "::error::${PASSWORD_KEY} not found in $BUNDLE_SECRET"
+            exit 1
+          fi
           echo "::add-mask::$PW"
           echo "PGPASSWORD=$PW" >> "$GITHUB_ENV"
 
-      - name: pg_dump prod -> file
+      - name: pg_dump -> file
+        id: dump
+        env:
+          REASON: ${{ inputs.reason }}
         run: |
-          set -uo pipefail
           TS=$(date -u +%Y%m%dT%H%M%SZ)
           CONN="host=${DB_HOST} port=${DB_PORT} dbname=${DB_NAME} user=${DB_USER} sslmode=${DB_SSL_MODE}"
           pg_dump --version
 
           if [ "$DUMP_FORMAT" = "plain-gz" ]; then
             OUT="${NAME_PREFIX}-${DB_NAME}-${TS}.sql.gz"
+            # Disable errexit around the pipeline so dump.log is always printed,
+            # then check BOTH stages: a gzip failure used to be silently ignored.
+            set +e
             pg_dump "$CONN" --no-owner --no-privileges --format=plain 2> dump.log | gzip -9 > "$OUT"
-            rc=${PIPESTATUS[0]}
+            ST=("${PIPESTATUS[@]}")
+            set -e
             echo "----- pg_dump stderr -----"; cat dump.log
-            [ "$rc" -ne 0 ] && { echo "::error::pg_dump exited $rc"; exit "$rc"; }
+            if [ "${ST[0]}" -ne 0 ]; then echo "::error::pg_dump exited ${ST[0]}"; exit "${ST[0]}"; fi
+            if [ "${ST[1]}" -ne 0 ]; then echo "::error::gzip exited ${ST[1]}"; exit "${ST[1]}"; fi
+
             gzip -t "$OUT"
             zcat "$OUT" > /tmp/dump.sql
             grep -q "PostgreSQL database dump" /tmp/dump.sql || { echo "::error::dump looks empty/invalid"; exit 1; }
             TABLES=$(grep -c '^CREATE TABLE ' /tmp/dump.sql || true)
-            COPY_BLOCKS=$(grep -c '^COPY ' /tmp/dump.sql || true)
             rm -f /tmp/dump.sql
           else
             OUT="${NAME_PREFIX}-${DB_NAME}-${TS}.dump"
+            set +e
             pg_dump "$CONN" --no-owner --no-privileges --format=custom --file="$OUT" 2> dump.log
             rc=$?
+            set -e
             echo "----- pg_dump stderr -----"; cat dump.log
-            [ "$rc" -ne 0 ] && { echo "::error::pg_dump exited $rc"; exit "$rc"; }
+            if [ "$rc" -ne 0 ]; then echo "::error::pg_dump exited $rc"; exit "$rc"; fi
             # Sanity: pg_restore --list must parse the archive and see objects.
             TABLES=$(pg_restore --list "$OUT" | grep -c 'TABLE DATA' || true)
-            COPY_BLOCKS="$TABLES"
+          fi
+
+          # Not an error: `TABLE DATA` only counts tables that have rows, so a
+          # legitimately empty database reports zero.
+          if [ "$TABLES" -eq 0 ]; then
+            echo "::warning::dump reports zero tables with data — verify this is expected"
           fi
 
           ls -lh "$OUT"
           SHA=$(sha256sum "$OUT" | cut -d' ' -f1)
+          ARTIFACT="${NAME_PREFIX}-backup-${TS}"
           {
-            echo "reason: ${{ inputs.reason }}"
+            echo "reason: ${REASON}"
             echo "taken_utc: $TS"
             echo "db: ${DB_NAME} @ ${DB_HOST}"
             echo "format: ${DUMP_FORMAT}"
@@ -162,29 +246,36 @@ jobs:
           } > MANIFEST.txt
           cat MANIFEST.txt
 
-          echo "TS=$TS" >> "$GITHUB_ENV"
-          echo "OUT=$OUT" >> "$GITHUB_ENV"
-          echo "TABLES=$TABLES" >> "$GITHUB_ENV"
-          echo "COPY_BLOCKS=$COPY_BLOCKS" >> "$GITHUB_ENV"
+          {
+            echo "artifact_name=$ARTIFACT"
+            echo "dump_file=$OUT"
+            echo "sha256=$SHA"
+            echo "tables=$TABLES"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload backup artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: db-backup-${{ env.TS }}
+          name: ${{ steps.dump.outputs.artifact_name }}
           path: |
-            ${{ env.OUT }}
+            ${{ steps.dump.outputs.dump_file }}
             MANIFEST.txt
           retention-days: ${{ inputs.retention_days }}
           if-no-files-found: error
 
       - name: Summary
         if: always()
+        env:
+          OUT:    ${{ steps.dump.outputs.dump_file }}
+          TABLES: ${{ steps.dump.outputs.tables }}
+          SHA:    ${{ steps.dump.outputs.sha256 }}
         run: |
           {
-            echo "## Neon prod backup — ${DB_NAME} @ ${DB_HOST}"
+            echo "## Postgres backup — ${DB_NAME} @ ${DB_HOST}"
             echo ""
-            echo "- File: \`${OUT:-<none>}\`  (format: ${DUMP_FORMAT})"
+            echo "- File: \`${OUT:-<none>}\` (format: ${DUMP_FORMAT})"
             echo "- Tables: ${TABLES:-?}"
+            echo "- SHA-256: \`${SHA:-<none>}\`"
             echo "- Retention: ${{ inputs.retention_days }} days"
             echo ""
             if [ "$DUMP_FORMAT" = "plain-gz" ]; then

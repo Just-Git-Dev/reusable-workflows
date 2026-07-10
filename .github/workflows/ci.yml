@@ -1,0 +1,51 @@
+name: CI
+
+# Every workflow here is called by other repositories, so a syntax error or a
+# bad expression ships straight into a consumer's production ops run. Lint on
+# the way in. actionlint also runs shellcheck over every `run:` body.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: actionlint + shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          fail-on-error: true
+
+  pinned-actions:
+    name: third-party actions are SHA-pinned
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Reject mutable action refs
+        run: |
+          # Matches `uses: owner/repo@ref` where ref is not a 40-char hex SHA.
+          # Local (`./...`) and reusable-workflow refs are excluded by `[^./]`.
+          if grep -rnP '^\s*(-\s*)?uses:\s*[^./][^@]+@(?![0-9a-f]{40}\s*($|#))' \
+               --include='*.yml' --include='*.yaml' .github/workflows; then
+            echo "::error::Third-party actions must be pinned to a full commit SHA."
+            exit 1
+          fi
+          echo "All third-party action references are SHA-pinned."
