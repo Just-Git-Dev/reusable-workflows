@@ -1,5 +1,102 @@
 # Decisions — reusable-workflows
 
+## 2026-07-13 — Add `rotate-signing-keypair` (v1.2.0, with `rotate-worker-signing-secret`)
+
+**Problem.** Reviewing AutoMahn's workflows for reuse candidates surfaced
+`rotate-jwt-keys.yml`: a scheduled, bespoke ~125-line workflow that generates an
+RS256 keypair + `kid`, writes `JWT_*` into the SM bundle, rolls Cloud Run, and
+disables the old version. Same rotation family as `rotate-worker-signing-secret`,
+and just as copy-pasted-per-app.
+
+**Decision.** Extract it as `rotate-signing-keypair`, generalised past AutoMahn:
+the `JWT_*` destination key names, `rsa_bits`, `services_csv`, and project are all
+inputs. Named "signing-keypair" (not "jwt") because it's a generic asymmetric-key
+rotation; the JWT-shaped defaults are just defaults.
+
+**Options weighed.**
+
+- *Thin caller of `sync-bundle-key` vs. standalone.* Tempting, since the SM-write +
+  Cloud-Run-roll is exactly `sync-bundle-key`'s job and there's no CF/grace/dual-slot
+  to interleave (this is why JWT rotation is *simpler* than the HMAC one). Rejected
+  anyway, for a security reason specific to key material: the keypair is **generated
+  in-workflow**, and a reusable workflow's `outputs` are **not** treated as secrets,
+  so generating in a caller job and handing the private key to `sync-bundle-key`
+  would print it in logs. Generation and consumption must share one workflow →
+  standalone. Cost: ~40 lines of SM/roll logic overlapping `sync-bundle-key`.
+- *Grace window?* No. Unlike the HMAC secret, asymmetric JWTs carry a `kid` and
+  short-lived tokens churn onto the new key naturally, so the old version is disabled
+  as soon as the roll succeeds — matching AutoMahn's original. Documented the
+  contraindication: a verifier that caches one key with no `kid` selection, or
+  long-lived tokens, must NOT use this (needs the two-slot pattern instead).
+
+**Improvements over AutoMahn's inline version** (beyond the standard conventions —
+SHA-pinned actions, `shell: bash`, `dry_run`, `--limit=1` over `| head -1` to
+survive pipefail): added the **roll-forward rollback** the HMAC workflow uses
+(AutoMahn's JWT one had none, so a failed roll left SM ahead of the running
+revisions), and a real `bootstrap` input replacing the derived-from-state flag.
+Separately noted for the AutoMahn repo: its inline summary claims *"disabled after
+30 min grace"* but there is no grace step — stale text the extraction retires.
+
+**Release.** Additive, and ships together with `rotate-worker-signing-secret` in a
+single **v1.2.0** — both are new workflows landing in one PR, and this repo already
+bundles additive changes per minor (v1.1.0 shipped `deploy-cloudflare-pages` plus
+the de-brand and fixes). Two identical tags one commit apart would be noise. AutoMahn
+migration to a thin caller deferred to a follow-up in that repo, alongside the
+`rotate-signing-secret` and `rotate-cloudflare-token` migrations (the reusable
+CF-token workflow already exists at v1.1.0 and is a superset of AutoMahn's inline
+copy, which still carries the `curl -f` error-body-swallow bug the reusable one fixed).
+
+## 2026-07-13 — Add `rotate-worker-signing-secret` (v1.2.0)
+
+**Problem.** Rotating an HMAC signing secret shared between a Cloudflare Worker
+(which *verifies* signed URLs) and a Cloud Run backend (which *signs* them from an
+SM bundle) is a real ops task — AutoMahn does it quarterly for its `files-cdn`
+Worker fronting R2 — but it lived as a bespoke ~200-line inline workflow in the app
+repo. Every other app with a Worker-signed-URL scheme would have to re-derive the
+same zero-downtime dance and the same two hard-won failure modes.
+
+**Decision.** Extract it into a reusable `workflow_call` workflow, generalised past
+R2: the mechanism (generate → SM bundle write + Cloud Run roll → Worker two-slot
+push → grace → cleanup) is object-storage-agnostic, so it is named
+`rotate-worker-signing-secret`, not `rotate-r2-*`. Verified the contract against
+the consumer before extracting — `automahn-files-cdn`'s Worker verifies PRIMARY
+then falls back to PREVIOUS, and the signed-URL TTL is 10 min (`files.go`), which
+the 900s grace default clears.
+
+**Options weighed.**
+
+- *Compose on `sync-bundle-key` vs. standalone.* The SM-write + Cloud-Run-roll
+  overlaps `sync-bundle-key` almost exactly, so nesting was tempting. Rejected:
+  the Worker `PREVIOUS` push, the grace sleep, the **delayed** disable (after grace,
+  not right after the roll), and the roll-forward rollback all interleave *around*
+  that write. Delegating it would force the CF push before the sub-call and the
+  grace/disable after, contorting the ordering `sync-bundle-key`'s own contract
+  guarantees. Chose standalone; the cost is ~40 duplicated lines of SM/roll logic.
+- *Keep AutoMahn's bootstrap tolerance vs. require the bundle to pre-exist
+  (`sync-bundle-key`'s stance).* Kept it, as a `bootstrap` input (default `false`):
+  when true, a missing bundle / missing services degrade to warnings and grace +
+  disable are skipped, so first-run setup doesn't block. Scheduled rotations run
+  with `bootstrap: false`.
+
+**Preserved verbatim from AutoMahn's inline version (both learned in production):**
+
+- **CF calls capture status + body, never `curl -f`** — `-f` swallowed
+  Cloudflare's JSON error body, so a 403 surfaced with no error code (AutoMahn run
+  28499686263).
+- **Rollback is roll-forward, not disable-`latest`** — `latest` tracks the highest
+  version number, so disabling it strands `access latest` and Cloud Run's `:latest`
+  mount (AutoMahn run 28500860707). Revert by adding a fresh version with the prior
+  content, then disabling the bad one. And it fires *only* when the Cloud Run roll
+  didn't succeed — reverting after the signer has moved would break signing.
+
+**Conventions applied on the way in** (differ from the app-repo original): the two
+`google-github-actions` actions are SHA-pinned (CI rejects tag refs), `shell: bash`
+via `defaults.run`, and a `dry_run` input like every destructive workflow here.
+
+**Release.** Additive (new workflow, no change to existing contracts) → minor bump,
+**v1.2.0**. Migrating AutoMahn's inline workflow to a thin caller is deliberately
+deferred to a follow-up in that repo.
+
 ## 2026-07-10 — Make the library genuinely public: de-brand, harden, release properly
 
 **Problem.** The repo was public because GitHub forces it (cross-org
