@@ -1,0 +1,313 @@
+name: Rotate an asymmetric signing keypair (reusable)
+
+# Rotates an RS256 signing keypair (JWT-shaped by default) held in a Secret
+# Manager bundle mounted into Cloud Run. Generates a fresh keypair + key id,
+# upserts the three values into the bundle, adds a new SM version, rolls the
+# Cloud Run service(s) onto it, and disables the old version.
+#
+# NO dual-slot / grace window (unlike rotate-worker-signing-secret): asymmetric
+# JWTs already carry a `kid`, and verifiers churn short-lived tokens naturally,
+# so the old key is disabled as soon as the signer is on the new one. If your
+# verifier caches a single public key with no `kid` selection, do NOT use this —
+# you need an overlap window it does not provide.
+#
+# Overlaps sync-bundle-key on the SM-write + roll, but stays standalone because
+# the keypair is GENERATED here: a reusable workflow's outputs are not treated as
+# secrets, so generating in one workflow and handing the private key to
+# sync-bundle-key in another would leak it in logs. Generation and consumption
+# must live in the same workflow. See DECISIONS 2026-07-13.
+#
+# Required IAM on service_account:
+#   roles/secretmanager.secretVersionManager  (on bundle_secret)
+#   roles/secretmanager.secretAccessor         (on bundle_secret)
+#   roles/run.developer                        (on the target services)
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id holding the bundle secret and the Cloud Run services.'
+        type: string
+        required: true
+      gcp_region:
+        description: 'Region of the Cloud Run services.'
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Service account email to impersonate via WIF.'
+        type: string
+        required: true
+      bundle_secret:
+        description: 'Secret Manager bundle secret name (dotenv blob mounted into Cloud Run).'
+        type: string
+        required: false
+        default: 'app-secrets'
+      mount_path:
+        description: 'Container path the bundle is mounted at.'
+        type: string
+        required: false
+        default: '/app/configs/.prod.env'
+      services_csv:
+        description: 'Comma-separated Cloud Run service names to roll onto the new version.'
+        type: string
+        required: true
+      rsa_bits:
+        description: 'RSA key size in bits.'
+        type: number
+        required: false
+        default: 2048
+      private_key_name:
+        description: 'Bundle key for the base64-encoded private key PEM.'
+        type: string
+        required: false
+        default: 'JWT_PRIVATE_KEY_BASE64'
+      public_key_name:
+        description: 'Bundle key for the base64-encoded public key PEM.'
+        type: string
+        required: false
+        default: 'JWT_PUBLIC_KEY_BASE64'
+      key_id_name:
+        description: 'Bundle key for the key id (kid = first 16 hex of SHA-256 over the public PEM).'
+        type: string
+        required: false
+        default: 'JWT_KEY_ID'
+      title:
+        description: 'Human label for the run summary.'
+        type: string
+        required: false
+        default: 'JWT signing keys'
+      bootstrap:
+        description: 'true = tolerate missing bundle / missing services (first-run setup); no disable of an old version.'
+        type: boolean
+        required: false
+        default: false
+      dry_run:
+        description: 'true = print the plan; generate nothing, write nothing, roll nothing.'
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      old_version:
+        description: 'Bundle version enabled before this run (empty if none / bootstrap).'
+        value: ${{ jobs.rotate.outputs.old_version }}
+      new_version:
+        description: 'Bundle version created by this run (empty on dry run).'
+        value: ${{ jobs.rotate.outputs.new_version }}
+      key_id:
+        description: 'The kid of the newly generated key.'
+        value: ${{ jobs.rotate.outputs.key_id }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: keypair-rotation-${{ inputs.gcp_project }}-${{ inputs.bundle_secret }}
+  cancel-in-progress: false
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      GCP_PROJECT:   ${{ inputs.gcp_project }}
+      GCP_REGION:    ${{ inputs.gcp_region }}
+      BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+      MOUNT_PATH:    ${{ inputs.mount_path }}
+      SERVICES_CSV:  ${{ inputs.services_csv }}
+      RSA_BITS:      ${{ inputs.rsa_bits }}
+      PRIV_KEY:      ${{ inputs.private_key_name }}
+      PUB_KEY:       ${{ inputs.public_key_name }}
+      KID_KEY:       ${{ inputs.key_id_name }}
+      BOOTSTRAP:     ${{ inputs.bootstrap }}
+      DRY_RUN:       ${{ inputs.dry_run }}
+    outputs:
+      old_version: ${{ steps.cur.outputs.current_version }}
+      new_version: ${{ steps.new_version.outputs.new_version }}
+      key_id:      ${{ steps.gen.outputs.kid }}
+
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Generate RSA keypair + key id
+        id: gen
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt "rsa_keygen_bits:${RSA_BITS}" -out /tmp/priv.pem
+          openssl rsa -pubout -in /tmp/priv.pem -out /tmp/pub.pem 2>/dev/null
+          PRIV_B64=$(base64 -w0 /tmp/priv.pem)
+          PUB_B64=$(base64 -w0 /tmp/pub.pem)
+          # kid = first 16 hex chars of SHA-256 over the public PEM (stable per key).
+          KID=$(openssl dgst -sha256 -binary /tmp/pub.pem | xxd -p -c 256 | cut -c1-16)
+          echo "::add-mask::$PRIV_B64"
+          {
+            echo "priv=$PRIV_B64"
+            echo "pub=$PUB_B64"
+            echo "kid=$KID"
+          } >> "$GITHUB_OUTPUT"
+          rm -f /tmp/priv.pem /tmp/pub.pem
+          echo "Generated new key with kid=$KID."
+
+      - name: Read current bundle (or start empty)
+        id: cur
+        run: |
+          if ! gcloud secrets describe "$BUNDLE_SECRET" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+            if [ "$BOOTSTRAP" = "true" ]; then
+              echo "::warning::Bundle $BUNDLE_SECRET absent — bootstrap run, starting empty."
+              : > /tmp/bundle.env
+              echo "empty=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::Secret $BUNDLE_SECRET does not exist in $GCP_PROJECT. Create it first, or set bootstrap: true."
+            exit 1
+          fi
+          # --limit=1 (not | head -1): closing the pipe can SIGPIPE gcloud, which
+          # under pipefail would fail the step.
+          CURRENT_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --filter='state=ENABLED' \
+            --sort-by=~createTime --limit=1 --format='value(name)')
+          if [ -z "$CURRENT_VERSION" ]; then
+            : > /tmp/bundle.env
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "No enabled version yet — starting from an empty bundle."
+            exit 0
+          fi
+          gcloud secrets versions access "$CURRENT_VERSION" \
+            --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/bundle.env
+          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "empty=false" >> "$GITHUB_OUTPUT"
+          echo "Current enabled version: $CURRENT_VERSION"
+
+      - name: Upsert keypair into the bundle
+        run: |
+          upsert() {
+            local key="$1" val="$2"
+            if grep -q "^${key}=" /tmp/bundle.env; then
+              # awk not sed: base64 values contain +/= that trip sed's replacement.
+              awk -v k="$key" -v v="$val" 'BEGIN{FS=OFS="="} $1==k{print k"="v; next} {print}' /tmp/bundle.env > /tmp/bundle.env.new
+              mv /tmp/bundle.env.new /tmp/bundle.env
+            else
+              echo "${key}=${val}" >> /tmp/bundle.env
+            fi
+          }
+          upsert "$PRIV_KEY" "${{ steps.gen.outputs.priv }}"
+          upsert "$PUB_KEY"  "${{ steps.gen.outputs.pub }}"
+          upsert "$KID_KEY"  "${{ steps.gen.outputs.kid }}"
+
+      - name: Add new bundle version
+        id: new_version
+        if: inputs.dry_run == false
+        run: |
+          gcloud secrets versions add "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --data-file=/tmp/bundle.env
+          NEW_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --filter='state=ENABLED' \
+            --sort-by=~createTime --limit=1 --format='value(name)')
+          if [ -z "$NEW_VERSION" ]; then
+            echo "::error::Could not resolve the newly added version of $BUNDLE_SECRET."
+            exit 1
+          fi
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Force new Cloud Run revision(s)
+        id: deploy_run
+        if: inputs.dry_run == false
+        run: |
+          IFS=',' read -ra SERVICES <<< "$SERVICES_CSV"
+          FAILED=()
+          for svc in "${SERVICES[@]}"; do
+            svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
+            svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
+            [ -z "$svc" ] && continue
+            if gcloud run services update "$svc" \
+                --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                --update-secrets="${MOUNT_PATH}=${BUNDLE_SECRET}:latest"; then
+              echo "rolled: $svc"
+            elif [ "$BOOTSTRAP" = "true" ]; then
+              echo "::warning::Failed to update $svc during bootstrap (may not exist yet) — continuing."
+            else
+              echo "::error::Failed to roll $svc — the signer did not adopt the new key."
+              FAILED+=("$svc")
+            fi
+          done
+          if [ "${#FAILED[@]}" -gt 0 ]; then
+            echo "::error::${#FAILED[@]} service(s) failed to roll: ${FAILED[*]}"
+            exit 1
+          fi
+
+      - name: Roll back the new SM version on failure
+        # Fires ONLY when an earlier step failed AND the Cloud Run roll did NOT
+        # succeed — the window in which nothing consumes the new version yet, so
+        # reverting `latest` to the prior content is safe. Roll-forward (add a fresh
+        # version with the old content), never disable `latest` (that would strand
+        # the `:latest` mount). Not blanket-failure(): once the signer is on the new
+        # key, reverting here would break signing.
+        if: >-
+          failure()
+          && inputs.dry_run == false
+          && steps.new_version.outputs.new_version != ''
+          && steps.cur.outputs.current_version != ''
+          && steps.deploy_run.outcome != 'success'
+        run: |
+          echo "::warning::Rotation failed before the signer moved over — restoring ${BUNDLE_SECRET} latest to version ${{ steps.cur.outputs.current_version }}."
+          gcloud secrets versions access "${{ steps.cur.outputs.current_version }}" \
+            --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/rollback.env
+          if [ ! -s /tmp/rollback.env ]; then
+            echo "::error::Could not read previous version ${{ steps.cur.outputs.current_version }} — manual intervention needed."
+            exit 1
+          fi
+          gcloud secrets versions add "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --data-file=/tmp/rollback.env
+          rm -f /tmp/rollback.env
+          gcloud secrets versions disable "${{ steps.new_version.outputs.new_version }}" \
+            --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" \
+            || echo "::warning::Could not disable failed version ${{ steps.new_version.outputs.new_version }} (non-fatal — latest already restored)."
+
+      - name: Disable the old SM version
+        # No grace: asymmetric JWTs carry a kid and short-lived tokens churn onto the
+        # new key naturally once the signer rolls, so the old key can go immediately.
+        if: inputs.dry_run == false && steps.cur.outputs.empty == 'false' && steps.cur.outputs.current_version != ''
+        run: |
+          gcloud secrets versions disable "${{ steps.cur.outputs.current_version }}" \
+            --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" || true
+
+      - name: Shred local bundle copies
+        if: always()
+        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/rollback.env /tmp/priv.pem /tmp/pub.pem
+
+      - name: Summary
+        if: always()
+        env:
+          TITLE: ${{ inputs.title }}
+        run: |
+          {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "## [dry run] Would rotate ${TITLE} in ${BUNDLE_SECRET} (${GCP_PROJECT})"
+              echo ""
+              echo "- New kid: ${{ steps.gen.outputs.kid }}"
+              echo "- Current bundle version: ${{ steps.cur.outputs.current_version }} (would be disabled)"
+              echo "- Would roll: \`${SERVICES_CSV}\`"
+            else
+              echo "## Rotated ${TITLE} in ${BUNDLE_SECRET} (${GCP_PROJECT})"
+              echo ""
+              echo "- Empty/bootstrap: ${{ steps.cur.outputs.empty }}"
+              echo "- New kid: ${{ steps.gen.outputs.kid }}"
+              echo "- Old version: ${{ steps.cur.outputs.current_version }} (disabled)"
+              echo "- New version: ${{ steps.new_version.outputs.new_version }}"
+              echo "- Cloud Run rolled: \`${SERVICES_CSV}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

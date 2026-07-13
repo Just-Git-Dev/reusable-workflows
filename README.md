@@ -24,6 +24,8 @@ GCP project id, region, service names, secret names, Cloudflare account and zone
 | `cleanup-gar-images.yml` | Age-sweep Artifact Registry images, protecting digests live on Cloud Run Services **and** Jobs | [docs](docs/cleanup-gar-images.md) |
 | `deploy-cloudflare-pages.yml` | Build a static site and deploy it to Cloudflare Pages | [docs](docs/deploy-cloudflare-pages.md) |
 | `rotate-cloudflare-token.yml` | Verify the Cloudflare API token is active + print a rotation runbook | [docs](docs/rotate-cloudflare-token.md) |
+| `rotate-worker-signing-secret.yml` | Rotate an HMAC signing secret shared by a Cloudflare Worker (verifier) and a Cloud Run signer, zero-downtime via a two-slot grace window | [docs](docs/rotate-worker-signing-secret.md) |
+| `rotate-signing-keypair.yml` | Rotate an RS256 (JWT) signing keypair in a Secret Manager bundle → roll Cloud Run → disable the old version | [docs](docs/rotate-signing-keypair.md) |
 
 ## Versioning — pin to a release tag
 
