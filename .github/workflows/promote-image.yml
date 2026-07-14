@@ -6,7 +6,12 @@
 # exact image  :<sha> -> :<release>  in Artifact Registry (server-side, via
 # `gcloud container images add-tag` — no pull/push of layers) and rolls prod.
 # Because nothing is rebuilt, prod is guaranteed to run the identical bytes that
-# stage tested. Keyless WIF; the provider and SA are inputs.
+# stage tested.
+#
+# Auth: keyless WIF (set wif_provider + service_account) is preferred. When
+# wif_provider is empty, falls back to KEY-BASED auth — the retag uses the
+# registry_credentials SA-key JSON and the roll uses the cluster_credentials
+# SA-key JSON (the interim path for callers not yet federated).
 #
 # Roll targets:
 #   none       — retag only (a later job/deploy consumes `outputs.image`).
@@ -18,9 +23,20 @@ on:
   workflow_call:
     inputs:
       gcp_region:
-        description: 'Region of the Artifact Registry host (…-docker.pkg.dev).'
+        description: >-
+          Region of the Artifact Registry host (…-docker.pkg.dev). Used to derive
+          the host when image_registry is empty, and as the Cloud Run region
+          default.
         type: string
         required: true
+      image_registry:
+        description: >-
+          Full Artifact Registry host (e.g. us-central1-docker.pkg.dev). Empty ⇒
+          derived as `<gcp_region>-docker.pkg.dev`. Set this to point at the exact
+          same host the stage build pushed to, decoupled from gcp_region.
+        type: string
+        required: false
+        default: ''
       gar_project:
         description: 'GCP project owning the Artifact Registry repo.'
         type: string
@@ -53,13 +69,18 @@ on:
         required: false
         default: false
       wif_provider:
-        description: 'Workload Identity Federation provider resource name.'
+        description: >-
+          Workload Identity Federation provider resource name. Empty ⇒ KEY-BASED
+          auth: the retag uses the `registry_credentials` SA-key JSON secret and
+          the roll uses the `cluster_credentials` SA-key JSON secret.
         type: string
-        required: true
+        required: false
+        default: ''
       service_account:
-        description: 'Service account email to impersonate via WIF.'
+        description: 'Service account email to impersonate via WIF (WIF path only).'
         type: string
-        required: true
+        required: false
+        default: ''
       deploy_target:
         description: 'none | gke | cloud-run — what to roll after retagging.'
         type: string
@@ -152,6 +173,19 @@ on:
         type: boolean
         required: false
         default: false
+    secrets:
+      registry_credentials:
+        description: >-
+          GCP SA-key JSON used to authenticate the server-side retag
+          (`gcloud container images add-tag`). Required when `wif_provider` is
+          empty (key-based auth); ignored on the WIF path.
+        required: false
+      cluster_credentials:
+        description: >-
+          GCP SA-key JSON used to authenticate the roll (GKE/Cloud Run). Required
+          when `wif_provider` is empty and `deploy_target` != none; ignored on the
+          WIF path. May be the same key as `registry_credentials`.
+        required: false
     outputs:
       image:
         description: 'Fully-qualified promoted image reference (…:<target_tag>).'
@@ -180,6 +214,7 @@ jobs:
         id: ref
         env:
           REGION: ${{ inputs.gcp_region }}
+          IN_REGISTRY: ${{ inputs.image_registry }}
           GAR_PROJECT: ${{ inputs.gar_project }}
           GAR_REPO: ${{ inputs.gar_repo }}
           IMAGE_NAME: ${{ inputs.image_name }}
@@ -187,7 +222,8 @@ jobs:
           IN_TARGET: ${{ inputs.target_tag }}
           REQUIRE_SEMVER: ${{ inputs.require_semver }}
         run: |
-          BASE="${REGION}-docker.pkg.dev/${GAR_PROJECT}/${GAR_REPO}/${IMAGE_NAME}"
+          HOST="${IN_REGISTRY:-${REGION}-docker.pkg.dev}"
+          BASE="${HOST}/${GAR_PROJECT}/${GAR_REPO}/${IMAGE_NAME}"
           TARGET="${IN_TARGET:-$GITHUB_REF_NAME}"
 
           if [ -z "$SOURCE_TAG" ]; then
@@ -210,11 +246,40 @@ jobs:
             echo "target_tag=$TARGET"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Validate key-based credentials
+        if: ${{ inputs.wif_provider == '' }}
+        env:
+          REG_CREDS: ${{ secrets.registry_credentials }}
+          CLUSTER_CREDS: ${{ secrets.cluster_credentials }}
+          DEPLOY_TARGET: ${{ inputs.deploy_target }}
+        run: |
+          if [ -z "$REG_CREDS" ]; then
+            echo "::error::wif_provider is empty (key-based auth) but the registry_credentials secret is empty." >&2
+            exit 1
+          fi
+          if [ "$DEPLOY_TARGET" != "none" ] && [ -z "$CLUSTER_CREDS" ]; then
+            echo "::error::wif_provider is empty and deploy_target=$DEPLOY_TARGET but the cluster_credentials secret is empty." >&2
+            exit 1
+          fi
+
+      # WIF path: one auth sets ADC for both the retag and the roll.
       - name: Authenticate to GCP via WIF
+        if: ${{ inputs.wif_provider != '' }}
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account: ${{ inputs.service_account }}
+
+      # Key path: activate the registry SA on the CLI so `add-tag` can read/write
+      # the Artifact Registry repo. The roll re-auths with the cluster SA below.
+      - name: Authenticate to GAR (key-based)
+        if: ${{ inputs.wif_provider == '' }}
+        env:
+          REG_CREDS: ${{ secrets.registry_credentials }}
+        run: |
+          KEY="$(mktemp)"; printf '%s' "$REG_CREDS" > "$KEY"
+          gcloud auth activate-service-account --key-file="$KEY"
+          rm -f "$KEY"
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
@@ -244,6 +309,14 @@ jobs:
           echo "::notice::Promoted $SOURCE -> ${DESTS[*]}"
 
       # ---------- GKE roll ----------
+      # Key path: re-auth with the cluster SA (may differ from the registry SA)
+      # so get-gke-credentials builds ADC from the right key.
+      - name: Authenticate to GKE cluster (key-based)
+        if: ${{ inputs.deploy_target == 'gke' && inputs.wif_provider == '' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.cluster_credentials }}
+
       - name: Get GKE credentials
         if: ${{ inputs.deploy_target == 'gke' }}
         uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
@@ -301,6 +374,16 @@ jobs:
           "$@" $EXTRA
 
       # ---------- Cloud Run roll ----------
+      # Key path: activate the cluster SA on the CLI so `run services update` uses it.
+      - name: Authenticate to Cloud Run (key-based)
+        if: ${{ inputs.deploy_target == 'cloud-run' && inputs.wif_provider == '' }}
+        env:
+          CLUSTER_CREDS: ${{ secrets.cluster_credentials }}
+        run: |
+          KEY="$(mktemp)"; printf '%s' "$CLUSTER_CREDS" > "$KEY"
+          gcloud auth activate-service-account --key-file="$KEY"
+          rm -f "$KEY"
+
       - name: Roll Cloud Run
         if: ${{ inputs.deploy_target == 'cloud-run' }}
         env:

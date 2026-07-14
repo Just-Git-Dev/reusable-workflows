@@ -1,7 +1,8 @@
 # promote-image
 
 Retag an **already-built** image from one tag to another **without rebuilding**,
-then roll the target service onto it. Keyless WIF.
+then roll the target service onto it. Keyless WIF, with a key-based fallback for
+callers not yet federated.
 
 This is the Just-Git-Dev equivalent of `zopsmart/workflows` **prod-deploy**: a
 stage pipeline builds and pushes `image:<sha>`; this workflow retags that exact
@@ -22,13 +23,14 @@ For the build-and-deploy step itself, use `deploy-cloud-run` / `deploy-gke-servi
 
 | Name | Default | Notes |
 |---|---|---|
-| `gcp_region` | (req) | Artifact Registry host region |
+| `gcp_region` | (req) | GAR host region (used to derive the host when `image_registry` is empty) + Cloud Run region default |
+| `image_registry` | `''` | full GAR host (e.g. `us-central1-docker.pkg.dev`); empty ⇒ `<gcp_region>-docker.pkg.dev`. Set to match the exact host stage pushed to |
 | `gar_project` / `gar_repo` / `image_name` | (req) | image path; `image_name` may contain slashes |
 | `source_tag` | (req) | existing tag to promote FROM (usually the stage commit SHA) |
 | `target_tag` | `''` | tag to promote TO; empty ⇒ the triggering ref name (e.g. the pushed git tag) |
 | `require_semver` | `true` | reject a `target_tag` that is not `vX.Y.Z` |
 | `also_tag_latest` | `false` | also move `:latest` onto the promoted image |
-| `wif_provider` / `service_account` | (req) | keyless WIF |
+| `wif_provider` / `service_account` | `''` | keyless WIF; empty `wif_provider` ⇒ **key-based** auth via the credential secrets below |
 | `deploy_target` | `none` | `none` \| `gke` \| `cloud-run` — what to roll after retagging |
 | `cluster_project` / `cluster_name` / `cluster_location` | — | GKE target (`deploy_target=gke`) |
 | `namespace` / `svc_name` | — | GKE workload + container name |
@@ -38,7 +40,21 @@ For the build-and-deploy step itself, use `deploy-cloud-run` / `deploy-gke-servi
 | `run_project` / `run_region` / `run_service` | `gar_project` / `gcp_region` / — | Cloud Run target (`deploy_target=cloud-run`) |
 | `dry_run` | `false` | print the retag + roll commands without executing |
 
-No secrets — WIF is keyless. `id-token: write` is set by the reusable.
+## Auth — WIF (preferred) or key-based
+
+Set `wif_provider` + `service_account` for keyless WIF (no secrets needed;
+`id-token: write` is set by the reusable). **Leave `wif_provider` empty** to use
+a stored GCP SA-key JSON instead — the interim path for a caller not yet
+federated (this is what quizzing-pro prod uses):
+
+| Secret | Format | When required |
+|---|---|---|
+| `registry_credentials` | GCP SA-key JSON | key-based: authenticates the server-side `add-tag` retag |
+| `cluster_credentials` | GCP SA-key JSON | key-based **and** `deploy_target != none`: authenticates the GKE/Cloud Run roll (may equal `registry_credentials`) |
+
+The retag authenticates with `registry_credentials`; the roll re-auths with
+`cluster_credentials`, so the two may point at different projects. On the WIF
+path both secrets are ignored.
 
 ## Example — promote stage `:sha` to a release tag and roll GKE prod
 
@@ -86,6 +102,50 @@ jobs:
       service_account: ${{ vars.GCP_RELEASER_SA }}
       deploy_target: cloud-run
       run_service: api
+```
+
+## Example — key-based GKE promote (not yet federated)
+
+Prod retags `image:<sha>` → `image:<tag>` and rolls GKE using a stored deploy
+key. Mirrors `zopsmart/workflows` prod-deploy 1:1 for a caller without WIF:
+
+```yaml
+name: Promote to prod
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    strategy:
+      matrix:
+        include:
+          - { svc: api,             type: deployment }
+          - { svc: payment-enquiry, type: cron }
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/promote-image.yml@v1.7.0
+    with:
+      gcp_region: ${{ vars.CLUSTER_REGION }}
+      image_registry: ${{ vars.IMAGE_REGISTRY }}   # exact host stage pushed to
+      gar_project: ${{ vars.REGISTRY_PROJECT }}
+      gar_repo: ${{ vars.REGISTRY_REPO }}
+      image_name: ${{ matrix.svc }}
+      source_tag: ${{ github.sha }}       # the stage build tagged with this SHA
+      # target_tag omitted ⇒ the pushed tag (vX.Y.Z)
+      # wif_provider omitted ⇒ key-based auth
+      deploy_target: gke
+      cluster_project: ${{ vars.CLUSTER_PROJECT }}
+      cluster_name: ${{ vars.CLUSTER_NAME }}
+      cluster_location: ${{ vars.CLUSTER_REGION }}
+      namespace: ${{ vars.PROD_NAMESPACE }}
+      svc_name: ${{ matrix.svc }}
+      workload_type: ${{ matrix.type }}
+      app_version: ${{ github.ref_name }}
+    secrets:
+      registry_credentials: ${{ secrets.PROD_DEPLOY_KEY }}
+      cluster_credentials: ${{ secrets.PROD_DEPLOY_KEY }}
 ```
 
 ## Dry run

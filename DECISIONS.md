@@ -1,5 +1,64 @@
 # Decisions — reusable-workflows
 
+## 2026-07-14 — key-based auth for `promote-image` (quizzing-pro prod parity)
+
+**Problem.** quizzing-pro/api stage migrated onto JGD reusables (v1.6.0), but
+**prod stayed on `zopsmart/workflows` prod-deploy@main**. Prod is a *no-rebuild
+promote* — retag the exact `image:<sha>` stage tested to `:<vX.Y.Z>` and roll —
+and the JGD equivalent, `promote-image`, was **WIF-only** (`wif_provider` +
+`service_account` required). quizzing-pro has no WIF, only a stored
+`PROD_DEPLOY_KEY`, so prod could not migrate. This was the last zopsmart
+dependency in that repo.
+
+**Read the zopsmart prod-deploy to confirm what parity needs.** On `refs/tags/v*`
+it: validate-tag (semver) → server-side retag `github.sha` → `github.ref_name`
+(`add-tag`, no rebuild) → conditionally apply the configmap if `.prod.env` diffed
+→ `kubectl set image` + `set env APP_VERSION=<tag>`, all key-based. `promote-image`
+already covered the semver gate (`require_semver`), the identical `add-tag` retag,
+and the kubectl/cron roll + `app_version`. **Only the auth mode differed.**
+
+**Decision — add a key-based fallback to `promote-image`, mirroring the dual-auth
+pattern already shipped on `manage-config-secrets` + `deploy-cluster-keyed`.**
+`wif_provider`/`service_account` became optional; when `wif_provider == ''`:
+- the retag activates `registry_credentials` (SA-key JSON) on the gcloud CLI
+  before `add-tag`;
+- the GKE roll re-auths via `google-github-actions/auth` with
+  `credentials_json: cluster_credentials` before `get-gke-credentials` (so ADC is
+  built from the cluster key, which may differ from the registry key);
+- the Cloud Run roll activates `cluster_credentials` on the CLI before
+  `run services update`.
+A guard fails fast if key-based auth is selected but the required credential
+secret is empty. WIF path unchanged; both secrets ignored there. `id-token: write`
+stays (harmless when unused; still needed by the WIF path). actionlint + SHA-pin
+gate green. **Cut v1.7.0.**
+
+**Also added `image_registry` (optional) to `promote-image`.** It derived the GAR
+host from `gcp_region` (`<region>-docker.pkg.dev`) — brittle, and it must match the
+exact host the stage build pushed to. The keyed deploy path uses `vars.IMAGE_REGISTRY`
+directly; without an override, prod could construct a different host than stage
+and the source `:<sha>` lookup would miss. `image_registry` (empty ⇒ old
+region-derivation, backward-compatible) lets the caller pass the identical host.
+
+**Why not the configmap diff-gate.** zopsmart applies the prod configmap only when
+it changed between tags. In the JGD split, config VALUES are owned by
+`manage-config-secrets` (a separate job), and its `kubectl create … --dry-run |
+apply` is idempotent — applying every release is a no-op when unchanged. So prod
+gets a `prod-config` job (manage-config-secrets over `.prod.env`) instead of
+porting the diff machinery. Simpler, and keeps the value-manager the single owner
+of config.
+
+**Caller (quizzing-pro/api).** Replaced the `prod_deployment` zopsmart job with
+`prod-config` (manage-config-secrets, 5 `.prod.env`, PROD_DEPLOY_KEY) +
+`prod-promote` (promote-image matrix, `source_tag: github.sha`, `target_tag:
+github.ref_name`, `deploy_target: gke`, key-based, PROD_DEPLOY_KEY, cron for
+payment-enquiry), pinned @v1.7.0. Tag trigger narrowed `['*']` → `['v*']` to match
+zopsmart's `refs/tags/v` gate with `require_semver: true`. Precondition unchanged
+from zopsmart: the `:<sha>` image must exist (stage builds it on the merged commit)
+before the release tag is cut; prod retags in-place in the same GAR repo.
+
+**Follow-up (unchanged).** WIF onboarding via infra-provisioning then drop the
+keys (`promote-image` WIF path + `deploy-gke-service`), retiring `PROD_DEPLOY_KEY`.
+
 ## 2026-07-14 — quizzing-pro convergence: parity audit + `manage-config-secrets`
 
 **Problem.** Before migrating quizzing-pro (the smart-quiz candidate-assessment
