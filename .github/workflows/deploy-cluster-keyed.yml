@@ -149,6 +149,13 @@ on:
         type: string
         required: false
         default: ''
+      cache_scope:
+        description: 'BuildKit gha cache scope. Empty ⇒ image_name. Give each service
+          its own scope so parallel matrix legs do not evict one another''s cache
+          (mode=max writes are per-scope).'
+        type: string
+        required: false
+        default: ''
       timeout_minutes:
         description: 'Job timeout.'
         type: number
@@ -173,6 +180,13 @@ on:
           aws_access_key_id/aws_secret_access_key(/aws_region). aks: JSON with
           clientId/clientSecret/tenantId. kubeconfig: base64-encoded kubeconfig.
         required: true
+      build_secrets:
+        description: >-
+          Docker BuildKit secrets, newline `id=value` pairs, forwarded to
+          build-push-action `secrets:`. Consume in the Dockerfile with
+          `RUN --mount=type=secret,id=<id>`. Use for private-module tokens
+          (e.g. `gh_pat=<PAT>`) so they never land in an image layer or build-arg.
+        required: false
     outputs:
       image:
         description: 'Fully-qualified image reference that was built.'
@@ -283,6 +297,13 @@ jobs:
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
+      - name: Resolve cache scope
+        id: cache
+        env:
+          CACHE_SCOPE: ${{ inputs.cache_scope }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+        run: echo "scope=${CACHE_SCOPE:-$IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Build & push image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -291,9 +312,10 @@ jobs:
           platforms: ${{ inputs.platforms }}
           push: ${{ !inputs.dry_run }}
           build-args: ${{ inputs.build_args }}
+          secrets: ${{ secrets.build_secrets }}
           tags: ${{ steps.ref.outputs.image }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ steps.cache.outputs.scope }}
+          cache-to: type=gha,mode=max,scope=${{ steps.cache.outputs.scope }}
 
       - name: Detect cluster auth method
         id: detect

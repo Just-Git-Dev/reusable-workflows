@@ -10,8 +10,9 @@
 #   helm             — `helm upgrade --install` with a chart + values.
 #
 # Monorepo change-detection / path-filtering stays in the caller's `on.paths`
-# (that is where it belongs). Config is not managed here — use Secret-Manager
-# bundles (`sync-bundle-key`); a stage→prod promote (no rebuild) is
+# (that is where it belongs). Config/secret VALUES are not managed here — a GKE
+# service's ConfigMap and secrets are managed by `manage-config-secrets` (Cloud
+# Run bundles are `sync-bundle-key`). A stage→prod promote (no rebuild) is
 # `promote-image`, and non-GCP / key-based clusters use `deploy-cluster-keyed`.
 name: deploy-gke-service
 
@@ -98,6 +99,14 @@ on:
         type: string
         required: false
         default: ''
+      cache_scope:
+        description: 'BuildKit gha cache scope. Empty ⇒ image_name. Give each service
+          its own scope so parallel matrix legs do not evict one another''s cache
+          (mode=max writes are per-scope). Set to a shared value only to deliberately
+          share layers between services.'
+        type: string
+        required: false
+        default: ''
       helm_chart:
         description: 'Chart reference (required when deploy_method=helm).'
         type: string
@@ -133,6 +142,14 @@ on:
         type: boolean
         required: false
         default: false
+    secrets:
+      build_secrets:
+        description: >-
+          Docker BuildKit secrets, newline `id=value` pairs, forwarded to
+          build-push-action `secrets:`. Consume in the Dockerfile with
+          `RUN --mount=type=secret,id=<id>` — for private-module tokens that must
+          not land in an image layer or build-arg.
+        required: false
     outputs:
       image:
         description: 'Fully-qualified image reference that was built.'
@@ -184,6 +201,16 @@ jobs:
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
+      - name: Resolve cache scope
+        id: cache
+        env:
+          CACHE_SCOPE: ${{ inputs.cache_scope }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          # Per-service scope (default: image_name). Without a scope, a matrix of
+          # services shares one gha cache and mode=max writes evict each other.
+          echo "scope=${CACHE_SCOPE:-$IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Build & push image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -192,9 +219,10 @@ jobs:
           platforms: ${{ inputs.platforms }}
           push: ${{ !inputs.dry_run }}
           build-args: ${{ inputs.build_args }}
+          secrets: ${{ secrets.build_secrets }}
           tags: ${{ steps.ref.outputs.image }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ steps.cache.outputs.scope }}
+          cache-to: type=gha,mode=max,scope=${{ steps.cache.outputs.scope }}
 
       - name: Get GKE credentials
         uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0

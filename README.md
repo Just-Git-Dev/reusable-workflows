@@ -35,6 +35,7 @@ lands everywhere.
 
 | Workflow | Purpose |
 |---|---|
+| [`manage-config-secrets.yml`](docs/manage-config-secrets.md) | Manage a **GKE** service's config **values**: dotenv → ConfigMap (keyvalue / react-`window.env`) + secrets into a backend (`k8s` / `gsm` blob or per-key). Values only — no deploy, no pod wiring |
 | [`sync-bundle-key.yml`](docs/sync-bundle-key.md) | Upsert key(s) into a Secret Manager bundle → roll Cloud Run → disable the old version |
 | [`rotate-signing-keypair.yml`](docs/rotate-signing-keypair.md) | Rotate an RS256 (JWT) signing keypair in a bundle → roll Cloud Run → disable the old version |
 | [`rotate-worker-signing-secret.yml`](docs/rotate-worker-signing-secret.md) | Rotate an HMAC secret shared by a Cloudflare Worker + Cloud Run signer, zero-downtime via a two-slot grace window |

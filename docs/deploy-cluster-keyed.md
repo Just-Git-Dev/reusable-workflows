@@ -49,7 +49,7 @@ clouds — never overwrite one another.
 | registry | `registry_type` (req), `image_registry`, `registry_project`, `registry_repo`, `registry_region`, `image_name` (⇒ `svc_name`), `image_tag` (⇒ SHA) |
 | cluster | `cluster_type` (auto), `cluster_name`, `cluster_region`, `cluster_project`, `azure_resource_group` |
 | deploy | `namespace` (req), `svc_name` (req), `workload_type` (`deployment`\|`cron`), `deploy_method` (`kubectl`\|`helm`), `helm_*`, `app_version` |
-| build | `context`, `dockerfile`, `platforms`, `build_args`, `dry_run` |
+| build | `context`, `dockerfile`, `platforms`, `build_args`, `cache_scope`, `dry_run`; secret `build_secrets` (newline `id=value` → build-push `secrets:`, e.g. `gh_pat=<PAT>` for private modules via `RUN --mount=type=secret,id=gh_pat`) |
 
 ## Example — ECR + EKS (kubectl)
 

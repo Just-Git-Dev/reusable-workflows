@@ -138,6 +138,17 @@ on:
         type: boolean
         required: false
         default: true
+      go_private:
+        description: 'GOPRIVATE glob for private modules (e.g. github.com/zopsmart/*). When set,
+          git is configured to fetch over HTTPS with the github_token secret. Empty ⇒ off.'
+        type: string
+        required: false
+        default: ''
+
+    secrets:
+      github_token:
+        description: 'Token for fetching private Go modules. Required when go_private is set.'
+        required: false
 
 permissions:
   contents: read
@@ -167,6 +178,18 @@ jobs:
           # setup-go ignores go-version-file when go-version is set.
           go-version-file: ${{ inputs.go_version == '' && inputs.go_version_file || '' }}
           cache: true # module + build cache keyed on go.sum
+
+      - name: Configure private module access
+        if: ${{ inputs.go_private != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.github_token }}
+          GO_PRIVATE: ${{ inputs.go_private }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::go_private is set but the github_token secret is empty."; exit 1
+          fi
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "GOPRIVATE=${GO_PRIVATE}" >> "$GITHUB_ENV"
 
       - name: go build
         if: ${{ inputs.run_build }}
@@ -252,6 +275,18 @@ jobs:
           go-version: ${{ inputs.go_version }}
           go-version-file: ${{ inputs.go_version == '' && inputs.go_version_file || '' }}
           cache: true
+
+      - name: Configure private module access
+        if: ${{ inputs.go_private != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.github_token }}
+          GO_PRIVATE: ${{ inputs.go_private }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::go_private is set but the github_token secret is empty."; exit 1
+          fi
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "GOPRIVATE=${GO_PRIVATE}" >> "$GITHUB_ENV"
 
       - name: go test (with services)
         env:
