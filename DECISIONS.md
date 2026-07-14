@@ -47,6 +47,18 @@ new optional inputs with defaults equal to prior behaviour; nothing is removed o
 re-defaulted, so no caller breaks → minor bump. (Contrast: removing
 `extra_deploy_flags` would be major — so it stays.)
 
+**Also in v1.5.0 — `ci-go` golangci-lint-action v8 → v9.3.0.** Wiring golangci-lint
+into AutoMahn/api + Traide-Co/api CI for the first time surfaced two things: (a)
+real pre-existing lint debt (handled in those callers, not here), and (b) a
+`Node.js 20 is deprecated … golangci-lint-action forced to run on Node 24`
+warning — the action wrapper was pinned at v8.0.0 (a node20 action). The *linter*
+was never stale: `golangci_version` already defaults to `latest` and is
+overridable. Bumped the **action** to v9.3.0 (SHA `ba0d7d2…`), whose only
+substantive change is the node20→node24 runtime (two other changes are additive:
+install-only, module plugin system) — no config break, so it rides the same minor
+bump. Both the linter-version default (`latest`) and its override input are
+unchanged; this only clears the deprecation on the wrapper.
+
 **Caller follow-ups this unblocks.** The AutoMahn/Traide-Co PRs that inlined
 `build_env`, dropped tag re-deploy, or unquoted `extra_deploy_flags` can be
 simplified to the new inputs once v1.5.0 is tagged — noted on each PR. Still
