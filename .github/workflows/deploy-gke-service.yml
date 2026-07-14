@@ -1,0 +1,267 @@
+# Reusable GKE service deploy: build → push (GAR, gha-cached) → roll a workload.
+#
+# The Just-Git-Dev replacement for `zopsmart/workflows` stage/prod-deploy, scoped
+# to GKE. Two things it fixes versus the external system: it authenticates with
+# keyless WIF (no stored SA JSON key), and it is SHA-pinned and versioned here
+# instead of floating on an external `@main`.
+#
+# Deploy methods:
+#   kubectl (default) — `kubectl set image` on a Deployment or CronJob.
+#   helm             — `helm upgrade --install` with a chart + values.
+#
+# Monorepo change-detection / path-filtering stays in the caller's `on.paths`
+# (that is where it belongs — see the geo-engine callers). ConfigMap sync from
+# an env file is optional via `configmap_from_env_file`.
+name: deploy-gke-service
+
+on:
+  workflow_call:
+    inputs:
+      gcp_region:
+        description: 'Region of the Artifact Registry host (…-docker.pkg.dev).'
+        type: string
+        required: true
+      gar_project:
+        description: 'GCP project owning the Artifact Registry repo. Defaults to cluster_project.'
+        type: string
+        required: false
+        default: ''
+      gar_repo:
+        description: 'Artifact Registry repository name.'
+        type: string
+        required: true
+      image_name:
+        description: 'Image name within the GAR repo (may contain slashes, e.g. staging/api).'
+        type: string
+        required: true
+      image_tag:
+        description: 'Image tag. Empty ⇒ the commit SHA.'
+        type: string
+        required: false
+        default: ''
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Deployer service account email to impersonate via WIF.'
+        type: string
+        required: true
+      cluster_project:
+        description: 'GCP project owning the GKE cluster.'
+        type: string
+        required: true
+      cluster_name:
+        description: 'GKE cluster name.'
+        type: string
+        required: true
+      cluster_location:
+        description: 'GKE cluster region or zone.'
+        type: string
+        required: true
+      namespace:
+        description: 'Kubernetes namespace.'
+        type: string
+        required: true
+      svc_name:
+        description: 'Workload name AND container name (kubectl set image sets svc=image).'
+        type: string
+        required: true
+      workload_type:
+        description: 'deployment | cron.'
+        type: string
+        required: false
+        default: 'deployment'
+      deploy_method:
+        description: 'kubectl | helm.'
+        type: string
+        required: false
+        default: 'kubectl'
+      context:
+        description: 'Docker build context.'
+        type: string
+        required: false
+        default: '.'
+      dockerfile:
+        description: 'Dockerfile path, relative to context.'
+        type: string
+        required: false
+        default: 'Dockerfile'
+      platforms:
+        description: 'Target build platform(s).'
+        type: string
+        required: false
+        default: 'linux/amd64'
+      build_args:
+        description: 'Newline-separated docker build args.'
+        type: string
+        required: false
+        default: ''
+      helm_chart:
+        description: 'Chart reference (required when deploy_method=helm).'
+        type: string
+        required: false
+        default: ''
+      helm_release:
+        description: 'Helm release name. Defaults to svc_name.'
+        type: string
+        required: false
+        default: ''
+      helm_values_path:
+        description: 'Path to a Helm values file.'
+        type: string
+        required: false
+        default: ''
+      helm_extra_args:
+        description: 'Extra args appended to `helm upgrade`.'
+        type: string
+        required: false
+        default: ''
+      app_version:
+        description: 'When set (kubectl/deployment), `kubectl set env APP_VERSION=…` after the image roll.'
+        type: string
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 20
+      dry_run:
+        description: 'Build only: do not push, and pass --dry-run to kubectl/helm.'
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      image:
+        description: 'Fully-qualified image reference that was built.'
+        value: ${{ jobs.deploy.outputs.image }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gke-${{ inputs.cluster_name }}-${{ inputs.namespace }}-${{ inputs.svc_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build · push · ${{ inputs.deploy_method }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve image ref
+        id: ref
+        env:
+          REGION: ${{ inputs.gcp_region }}
+          GAR_PROJECT: ${{ inputs.gar_project != '' && inputs.gar_project || inputs.cluster_project }}
+          GAR_REPO: ${{ inputs.gar_repo }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IN_TAG: ${{ inputs.image_tag }}
+        run: |
+          TAG="${IN_TAG:-$GITHUB_SHA}"
+          echo "image=${REGION}-docker.pkg.dev/${GAR_PROJECT}/${GAR_REPO}/${IMAGE_NAME}:${TAG}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ inputs.gcp_region }}-docker.pkg.dev" --quiet
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build & push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ !inputs.dry_run }}
+          build-args: ${{ inputs.build_args }}
+          tags: ${{ steps.ref.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
+        with:
+          cluster_name: ${{ inputs.cluster_name }}
+          location: ${{ inputs.cluster_location }}
+          project_id: ${{ inputs.cluster_project }}
+
+      - name: Set up Helm
+        if: ${{ inputs.deploy_method == 'helm' }}
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Roll workload (kubectl)
+        if: ${{ inputs.deploy_method == 'kubectl' }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          SVC: ${{ inputs.svc_name }}
+          NS: ${{ inputs.namespace }}
+          WORKLOAD_TYPE: ${{ inputs.workload_type }}
+          APP_VERSION: ${{ inputs.app_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          case "$WORKLOAD_TYPE" in
+            deployment) KIND=deployment ;;
+            cron)       KIND=cronjob ;;
+            *) echo "::error::workload_type must be 'deployment' or 'cron'" >&2; exit 1 ;;
+          esac
+          DR=()
+          [ "$DRY_RUN" = "true" ] && DR=(--dry-run=client)
+          kubectl set image "${KIND}/${SVC}" "${SVC}=${IMAGE}" --namespace "$NS" "${DR[@]}"
+          if [ -n "$APP_VERSION" ] && [ "$KIND" = "deployment" ]; then
+            kubectl set env "deployment/${SVC}" "APP_VERSION=${APP_VERSION}" --namespace "$NS" "${DR[@]}"
+          fi
+
+      - name: Roll workload (helm)
+        if: ${{ inputs.deploy_method == 'helm' }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          RELEASE: ${{ inputs.helm_release != '' && inputs.helm_release || inputs.svc_name }}
+          CHART: ${{ inputs.helm_chart }}
+          NS: ${{ inputs.namespace }}
+          VALUES: ${{ inputs.helm_values_path }}
+          EXTRA: ${{ inputs.helm_extra_args }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CHART" ]; then
+            echo "::error::helm_chart is required when deploy_method=helm" >&2
+            exit 1
+          fi
+          set -- helm upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NS" --set image="$IMAGE"
+          [ -n "$VALUES" ] && set -- "$@" --values "$VALUES"
+          [ "$DRY_RUN" = "true" ] && set -- "$@" --dry-run
+          # shellcheck disable=SC2086
+          "$@" $EXTRA
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## GKE deploy — ${{ inputs.svc_name }}"
+            echo ""
+            echo "- Method: \`${{ inputs.deploy_method }}\`${DRY_RUN:+ (dry run)}"
+            echo "- Cluster: \`${{ inputs.cluster_name }}\` / ns \`${{ inputs.namespace }}\`"
+            echo "- Image: \`$IMAGE\`"
+          } >> "$GITHUB_STEP_SUMMARY"

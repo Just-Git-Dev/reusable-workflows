@@ -1,5 +1,57 @@
 # Decisions — reusable-workflows
 
+## 2026-07-14 — Fleet-wide audit; reverse the "deploy/CI kept per-repo" call
+
+**Problem.** A one-time survey of every workflow across all 16 accessible orgs
+(379 repos → ~60 with workflows; full findings in
+[docs/convergence-audit.md](docs/convergence-audit.md)) showed that the two
+*most*-duplicated workflows are the two this library deliberately left out in the
+first pass: **Cloud-Run deploy** and **language CI**. ~13 repos hand-roll CI and
+~7 hand-roll a deploy, sharing no code. Separately, RevvUp-AI and quizzing-pro
+deploy through **`zopsmart/workflows@main`** — an external org, a mutable ref that
+mints cloud creds and pushes images.
+
+**Decision.** Reverse the first-pass exclusion. Build, in reach × safety order:
+`ci-go`, `ci-node`, `deploy-cloud-run`, `deploy-gke-service`, then the long tail
+(`bootstrap-cf`, `deploy-cloudflare-worker`, `cloud-run-update`, `run-db-job`).
+The **stated goal is to let platform app repos drop `zopsmart/workflows`
+entirely**, which is what puts a GKE service-deploy reusable in-scope here even
+though this library is otherwise Cloud-Run-centric.
+
+**Why the first pass was right *then* and wrong *now*.** The original call
+("backend Cloud Run deploys too divergent; ci/lint/release same filename but
+different jobs") was correct for a 5-workflow library proving a pattern. The
+audit shows the divergence is mostly **surface** (build target, language,
+service name) and cleanly parameterizable; the cost of *not* converging is real —
+duplicated deploy logic is where the failing runs and the un-pinned, un-`pipefail`
+`run:` blocks concentrate.
+
+**Constraints carried forward.** Every new reusable keeps the house rules:
+`workflow_call` inputs for all project-specific values, no `secrets: inherit`,
+WIF provider + SA as inputs, SHA-pinned third-party actions, `shell: bash` on
+every `run:`, `dry_run` on destructive paths, and a `docs/<name>.md` page. CI
+enforcement (`actionlint` + the SHA-pin grep) applies to the new files.
+
+**Adoption debt found (fix at caller-migration time, not here).** Every live
+adopter pins the frozen `@v1` alias (`bootstrap-alerts`, `cleanup-gar-images`,
+`neon-backup`/`backup-db`) — repin to `v1.2.0`. `bootstrap-alerts` — the one
+workflow with real adoption — is failing 86–100% where used; triage before
+promoting it as the template.
+
+**Not converged.** Legacy `zopsmart` (its own platform, separate ownership; the
+thing we want callers to *leave*, not fold in), `Zopsmart-HIMS` spec-lint
+(already 40→1 in-org, domain-specific), and single-repo publishers (goreleaser,
+maven/npm) stay put.
+
+**Release.** `v1.3.0` ships the first four together — `ci-go`, `ci-node`,
+`deploy-cloud-run`, `deploy-gke-service` — plus a failure-isolation fix to
+`bootstrap-alerts` (a single invalid policy no longer aborts the apply loop; a
+new additive `policies_failed` output; the pass/fail contract is unchanged).
+All additive → minor bump. The long tail (`bootstrap-cf`,
+`deploy-cloudflare-worker`, `cloud-run-update`, `run-db-job`) follows in later
+minors. Caller migrations are separate PRs in each app repo, one at a time,
+after the tag is cut.
+
 ## 2026-07-13 — Add `rotate-signing-keypair` (v1.2.0, with `rotate-worker-signing-secret`)
 
 **Problem.** Reviewing AutoMahn's workflows for reuse candidates surfaced

@@ -1,0 +1,138 @@
+# Reusable Node CI: install · lint · test · build, with setup-node caching.
+#
+# The universal core every Node/React repo copy-pastes. Bespoke steps (OpenAPI
+# type-drift checks, sibling-repo checkouts, custom guards) stay as their own
+# jobs/steps in the caller. Every stage is toggleable; commands default to npm
+# but are overridable, so yarn/pnpm and no-dependency suites (`node --test`) fit
+# by overriding install/test commands and the cache backend.
+name: ci-node
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: 'Runner label.'
+        type: string
+        required: false
+        default: 'ubuntu-latest'
+      working_directory:
+        description: 'Directory to run install/lint/test/build in (monorepo package root).'
+        type: string
+        required: false
+        default: '.'
+      node_version:
+        description: 'Node.js version (any setup-node spec: 20, 22, lts/*).'
+        type: string
+        required: false
+        default: '20'
+      node_cache:
+        description: 'setup-node cache backend (npm | yarn | pnpm). Empty string disables caching.'
+        type: string
+        required: false
+        default: 'npm'
+      cache_dependency_path:
+        description: 'Lockfile setup-node keys its cache on. Defaults to package-lock.json in working_directory.'
+        type: string
+        required: false
+        default: ''
+      enable_corepack:
+        description: 'Run `corepack enable` before setup-node (needed for pnpm / modern yarn caching).'
+        type: boolean
+        required: false
+        default: false
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 15
+      install:
+        description: 'Run the install step.'
+        type: boolean
+        required: false
+        default: true
+      install_command:
+        description: 'Dependency install command.'
+        type: string
+        required: false
+        default: 'npm ci'
+      run_lint:
+        description: 'Run the lint step.'
+        type: boolean
+        required: false
+        default: true
+      lint_command:
+        description: 'Lint command.'
+        type: string
+        required: false
+        default: 'npm run lint'
+      lint_blocking:
+        description: 'When false, a lint failure is reported but does not fail the job.'
+        type: boolean
+        required: false
+        default: true
+      run_tests:
+        description: 'Run the test step.'
+        type: boolean
+        required: false
+        default: true
+      test_command:
+        description: 'Test command.'
+        type: string
+        required: false
+        default: 'npm test'
+      run_build:
+        description: 'Run the build step.'
+        type: boolean
+        required: false
+        default: true
+      build_command:
+        description: 'Build command.'
+        type: string
+        required: false
+        default: 'npm run build'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-node-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: install · lint · test · build
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Enable corepack
+        if: ${{ inputs.enable_corepack }}
+        run: corepack enable
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.node_cache }}
+          cache-dependency-path: ${{ inputs.cache_dependency_path != '' && inputs.cache_dependency_path || format('{0}/package-lock.json', inputs.working_directory) }}
+
+      - name: Install
+        if: ${{ inputs.install }}
+        run: ${{ inputs.install_command }}
+
+      - name: Lint
+        if: ${{ inputs.run_lint }}
+        continue-on-error: ${{ !inputs.lint_blocking }}
+        run: ${{ inputs.lint_command }}
+
+      - name: Test
+        if: ${{ inputs.run_tests }}
+        run: ${{ inputs.test_command }}
+
+      - name: Build
+        if: ${{ inputs.run_build }}
+        run: ${{ inputs.build_command }}

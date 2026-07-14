@@ -26,6 +26,16 @@ GCP project id, region, service names, secret names, Cloudflare account and zone
 | `rotate-cloudflare-token.yml` | Verify the Cloudflare API token is active + print a rotation runbook | [docs](docs/rotate-cloudflare-token.md) |
 | `rotate-worker-signing-secret.yml` | Rotate an HMAC signing secret shared by a Cloudflare Worker (verifier) and a Cloud Run signer, zero-downtime via a two-slot grace window | [docs](docs/rotate-worker-signing-secret.md) |
 | `rotate-signing-keypair.yml` | Rotate an RS256 (JWT) signing keypair in a Secret Manager bundle → roll Cloud Run → disable the old version | [docs](docs/rotate-signing-keypair.md) |
+| `ci-go.yml` | Go CI core: build · vet · test · golangci-lint, with module/build caching | [docs](docs/ci-go.md) |
+| `ci-node.yml` | Node/React CI core: install · lint · test · build, with setup-node caching | [docs](docs/ci-node.md) |
+| `deploy-cloud-run.yml` | Build → push (GAR, gha-cached) → roll a Cloud Run service (image-flip or full deploy) | [docs](docs/deploy-cloud-run.md) |
+| `deploy-gke-service.yml` | Build → push (GAR, gha-cached) → roll a GKE workload via kubectl/helm (keyless WIF) | [docs](docs/deploy-gke-service.md) |
+
+> **Convergence audit (2026-07-14).** These four were added after a fleet-wide
+> survey of every workflow across all accessible orgs — see
+> [docs/convergence-audit.md](docs/convergence-audit.md) and the DECISIONS entry.
+> `deploy-gke-service` exists so platform app repos can drop their dependency on
+> the external `zopsmart/workflows@main`.
 
 ## Versioning — pin to a release tag
 
