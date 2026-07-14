@@ -57,6 +57,20 @@ WIF, SHA-pin. Runtime ≈ 0, and naïve mapping *regresses* it.
    caller `on.paths` is coarse for a single matrixed workflow. Tracked as
    follow-up (a `watch_paths` gate on `deploy-gke-service`).
 
+**R5 (private-module auth) — build-secret plumbing + ci-go GOPRIVATE.** quizzing
+imports the **private** `github.com/zopsmart/auth-service-v2` in `main.go` + ~30
+source files. The old build fetched it host-side (setup-go + PAT `git insteadOf`)
+then `COPY`ed the binary — the shortcut we're replacing. Hermetic compile-in-docker
+must fetch it too. Decision: (a) `ci-go` gains `go_private` + a `github_token`
+secret (git insteadOf + GOPRIVATE, in **both** the `go` and `go-db` jobs); (b)
+`deploy-cluster-keyed` and `deploy-gke-service` gain a `build_secrets` secret
+forwarded to build-push-action `secrets:`, so the Dockerfile uses
+`RUN --mount=type=secret,id=gh_pat` — the token never lands in a build-arg or
+image layer. Also: `manage-config-secrets` and both cache fixes were extended to
+key-based auth so **not-yet-WIF** callers (quizzing) can use them —
+`deploy-cluster-keyed` is the sanctioned stored-key path until infra-provisioning
+onboards quizzing to WIF.
+
 **Runtime finding recorded so the next person doesn't re-justify on speed:** for
 these GKE monorepo callers, both libraries are performance peers. The win is
 supply-chain + auth, and the *risk* is losing zopsmart's change-detection/config

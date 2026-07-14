@@ -31,6 +31,7 @@ only the universal core so it stays adoptable everywhere.
 | `golangci_version` | `latest` | linter version — tracks latest by default, override e.g. `v2.5` (v9 action ⇒ golangci-lint v2 config) |
 | `golangci_args` | `--timeout=5m` | passed to golangci-lint |
 | `lint_blocking` | `true` | `false` = report lint failures without failing the job (paydown mode) |
+| `go_private` | `''` | GOPRIVATE glob (e.g. `github.com/zopsmart/*`); when set, git fetches private modules over HTTPS using the `github_token` **secret** (required then) |
 
 No secrets — public/read-only CI.
 

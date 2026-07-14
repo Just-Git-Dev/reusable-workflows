@@ -180,6 +180,13 @@ on:
           aws_access_key_id/aws_secret_access_key(/aws_region). aks: JSON with
           clientId/clientSecret/tenantId. kubeconfig: base64-encoded kubeconfig.
         required: true
+      build_secrets:
+        description: >-
+          Docker BuildKit secrets, newline `id=value` pairs, forwarded to
+          build-push-action `secrets:`. Consume in the Dockerfile with
+          `RUN --mount=type=secret,id=<id>`. Use for private-module tokens
+          (e.g. `gh_pat=<PAT>`) so they never land in an image layer or build-arg.
+        required: false
     outputs:
       image:
         description: 'Fully-qualified image reference that was built.'
@@ -305,6 +312,7 @@ jobs:
           platforms: ${{ inputs.platforms }}
           push: ${{ !inputs.dry_run }}
           build-args: ${{ inputs.build_args }}
+          secrets: ${{ secrets.build_secrets }}
           tags: ${{ steps.ref.outputs.image }}
           cache-from: type=gha,scope=${{ steps.cache.outputs.scope }}
           cache-to: type=gha,mode=max,scope=${{ steps.cache.outputs.scope }}
