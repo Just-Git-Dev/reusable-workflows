@@ -6,16 +6,17 @@ Just-Git-Dev replacement for `zopsmart/workflows` stage/prod-deploy on GKE.**
 
 Two fixes over the external system:
 
-- **Keyless WIF** (`wif_provider` + `service_account`), no stored SA JSON key
-  (retires zop-mannai's `credentials_json` and the geo-engine SA-key secrets).
+- **Keyless WIF** (`wif_provider` + `service_account`), no stored SA JSON key.
+  (Callers still on an SA-JSON key can bridge via
+  [`deploy-cluster-keyed`](deploy-cluster-keyed.md) until the deployer SA is
+  federated.)
 - **SHA-pinned and versioned here**, instead of floating on an external
   `zopsmart/workflows@main` that mints cluster creds.
 
 ## What stays in the caller
 
-- **Monorepo change-detection** — keep it in `on.paths` (e.g. `backend/worker/**`),
-  exactly as the geo-engine callers already do. This workflow deploys one
-  service; the caller decides *when* to run it.
+- **Monorepo change-detection** — keep it in `on.paths` (e.g. `backend/worker/**`).
+  This workflow deploys one service; the caller decides *when* to run it.
 - **Pre-deploy tests / preflight gates** — separate caller jobs gating via `needs:`.
 
 ## Inputs (no secrets — WIF is keyless)
@@ -37,7 +38,7 @@ Two fixes over the external system:
 | `app_version` | `''` | kubectl/deployment: `set env APP_VERSION=…` after the roll |
 | `dry_run` | `false` | build only, no push, `--dry-run` on kubectl/helm |
 
-## Example — kubectl (replaces zop-mannai's inline SA-JSON deploy)
+## Example — kubectl (single-service GKE deploy)
 
 ```yaml
 name: Deploy api
@@ -68,7 +69,7 @@ jobs:
         JAR_FILE=build/libs/app.jar
 ```
 
-## Example — monorepo service (replaces a geo-engine stage-deploy-*)
+## Example — monorepo service (path-filtered in the caller)
 
 ```yaml
 on:
@@ -97,12 +98,24 @@ jobs:
 
 ## Migration note
 
-The external `zopsmart/workflows` system also did multi-registry resolution,
-language auto-detection, host-side builds and a ConfigMap-diff apply. Those are
-either handled elsewhere in the JGD model (`ci-go`/`ci-node` for build/test,
-Secret-Manager bundles for config) or intentionally dropped. Confirm each
-service's config source before cutting over, and migrate to WIF (grant the
-deployer SA on the cluster) as part of the same PR.
+The external `zopsmart/workflows` system also does a few things this workflow
+does not. Verified against its live callers (`zopsmart/*`, `quizzing-pro/*`),
+here is where each lands in the JGD model:
+
+| zopsmart capability | JGD home |
+|---|---|
+| Stage→prod **retag/promote** (no rebuild) | [`promote-image`](promote-image.md) |
+| **Multi-registry** (ecr/acr/ghcr/…) + **multi-cloud** key-based deploy | [`deploy-cluster-keyed`](deploy-cluster-keyed.md) |
+| Language auto-detect | dropped — use explicit `ci-go`/`ci-node` |
+| Env-file → **ConfigMap** (change-routed, applied with `kubectl apply --force` — *not* a semantic diff) + config-only updates | Secret-Manager bundles (`sync-bundle-key`); see the GKE config note below |
+
+Confirm each service's config source before cutting over, and migrate to WIF
+(grant the deployer SA on the cluster) as part of the same PR.
+
+**GKE config on Secret-Manager bundles.** Unlike Cloud Run (`--set-secrets`),
+GKE has no native secret-mount, so a bundle needs a mechanism in-cluster
+(External Secrets Operator, or an initContainer that pulls the secret). Plan
+that per service; it does not need a new reusable.
 
 ## Concurrency
 

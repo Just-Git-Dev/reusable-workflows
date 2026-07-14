@@ -1,0 +1,432 @@
+# Reusable KEY-BASED, multi-cloud, multi-registry deploy: build → push → roll a
+# Kubernetes workload — for clusters and registries that do NOT support keyless
+# WIF.
+#
+# This is the parity path for the parts of `zopsmart/workflows` the WIF-native
+# deploy-* workflows deliberately don't cover: EKS/AKS/kubeconfig clusters and
+# ECR/ACR/GHCR/DockerHub registries, authenticated with a stored credential.
+#
+#   PREFER the keyless workflows when you can:
+#     GCP + GAR + Cloud Run → deploy-cloud-run.yml
+#     GCP + GAR + GKE       → deploy-gke-service.yml
+#   Use THIS workflow only when a stored key is unavoidable (non-GCP cloud, or a
+#   registry/cluster without federation). It takes long-lived credentials as
+#   secrets by design; rotate them.
+#
+# Registry (registry_type): gar | gcr | ecr | acr | ghcr | dockerhub | custom.
+# Cluster  (cluster_type):   gke | eks | aks | kubeconfig  (empty ⇒ auto-detect
+#           from the credential format).
+name: deploy-cluster-keyed
+
+on:
+  workflow_call:
+    inputs:
+      # ---------- registry ----------
+      registry_type:
+        description: 'gar | gcr | ecr | acr | ghcr | dockerhub | custom.'
+        type: string
+        required: true
+      image_registry:
+        description: >-
+          Registry host. Required for gar/ecr/acr/custom; auto for
+          gcr(gcr.io)/ghcr(ghcr.io)/dockerhub(docker.io).
+        type: string
+        required: false
+        default: ''
+      registry_project:
+        description: 'Project/account/namespace segment (REGISTRY/PROJECT/REPO/IMAGE).'
+        type: string
+        required: false
+        default: ''
+      registry_repo:
+        description: 'Repository segment within the project.'
+        type: string
+        required: false
+        default: ''
+      registry_region:
+        description: 'Region for ECR login when not present in the credential JSON.'
+        type: string
+        required: false
+        default: ''
+      image_name:
+        description: 'Image name segment. Defaults to svc_name.'
+        type: string
+        required: false
+        default: ''
+      image_tag:
+        description: 'Image tag. Empty ⇒ the commit SHA.'
+        type: string
+        required: false
+        default: ''
+      # ---------- cluster ----------
+      cluster_type:
+        description: 'gke | eks | aks | kubeconfig. Empty ⇒ auto-detect from cluster_credentials.'
+        type: string
+        required: false
+        default: ''
+      cluster_name:
+        description: 'Cluster name (gke/eks/aks).'
+        type: string
+        required: false
+        default: ''
+      cluster_region:
+        description: 'Cluster region/zone (gke/eks).'
+        type: string
+        required: false
+        default: ''
+      cluster_project:
+        description: 'GCP project owning the cluster (gke).'
+        type: string
+        required: false
+        default: ''
+      azure_resource_group:
+        description: 'Azure resource group (aks).'
+        type: string
+        required: false
+        default: ''
+      # ---------- deploy ----------
+      namespace:
+        description: 'Kubernetes namespace.'
+        type: string
+        required: true
+      svc_name:
+        description: 'Workload AND container name (kubectl set image sets svc=image).'
+        type: string
+        required: true
+      workload_type:
+        description: 'deployment | cron.'
+        type: string
+        required: false
+        default: 'deployment'
+      deploy_method:
+        description: 'kubectl | helm.'
+        type: string
+        required: false
+        default: 'kubectl'
+      helm_chart:
+        description: 'Chart reference (required when deploy_method=helm).'
+        type: string
+        required: false
+        default: ''
+      helm_release:
+        description: 'Helm release name. Defaults to svc_name.'
+        type: string
+        required: false
+        default: ''
+      helm_values_path:
+        description: 'Path to a Helm values file.'
+        type: string
+        required: false
+        default: ''
+      helm_extra_args:
+        description: 'Extra args appended to `helm upgrade`.'
+        type: string
+        required: false
+        default: ''
+      app_version:
+        description: 'When set (kubectl/deployment), `kubectl set env APP_VERSION=…` after the roll.'
+        type: string
+        required: false
+        default: ''
+      # ---------- build ----------
+      context:
+        description: 'Docker build context.'
+        type: string
+        required: false
+        default: '.'
+      dockerfile:
+        description: 'Dockerfile path, relative to context.'
+        type: string
+        required: false
+        default: 'Dockerfile'
+      platforms:
+        description: 'Target build platform(s).'
+        type: string
+        required: false
+        default: 'linux/amd64'
+      build_args:
+        description: 'Newline-separated docker build args.'
+        type: string
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 25
+      dry_run:
+        description: 'Build only: do not push, and pass --dry-run to kubectl/helm.'
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      registry_credentials:
+        description: >-
+          Registry credential. gar/gcr: GCP SA-key JSON. ecr: JSON with
+          aws_access_key_id/aws_secret_access_key(/aws_region). acr: JSON with
+          clientId/clientSecret/tenantId. dockerhub/custom: JSON {username,password}
+          or "username:password". ghcr uses the workflow token (leave unset).
+        required: false
+      cluster_credentials:
+        description: >-
+          Cluster credential. gke: GCP SA-key JSON. eks: JSON with
+          aws_access_key_id/aws_secret_access_key(/aws_region). aks: JSON with
+          clientId/clientSecret/tenantId. kubeconfig: base64-encoded kubeconfig.
+        required: true
+    outputs:
+      image:
+        description: 'Fully-qualified image reference that was built.'
+        value: ${{ jobs.deploy.outputs.image }}
+
+permissions:
+  contents: read
+  packages: write # ghcr push with the workflow token
+
+concurrency:
+  group: deploy-keyed-${{ inputs.cluster_name }}-${{ inputs.namespace }}-${{ inputs.svc_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build · push · ${{ inputs.deploy_method }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve image ref
+        id: ref
+        env:
+          REGISTRY_TYPE: ${{ inputs.registry_type }}
+          IN_REGISTRY: ${{ inputs.image_registry }}
+          REGISTRY_PROJECT: ${{ inputs.registry_project }}
+          REGISTRY_REPO: ${{ inputs.registry_repo }}
+          IN_IMAGE_NAME: ${{ inputs.image_name }}
+          SVC_NAME: ${{ inputs.svc_name }}
+          IN_TAG: ${{ inputs.image_tag }}
+        run: |
+          case "$REGISTRY_TYPE" in
+            gcr)       REG="${IN_REGISTRY:-gcr.io}" ;;
+            ghcr)      REG="${IN_REGISTRY:-ghcr.io}" ;;
+            dockerhub) REG="${IN_REGISTRY:-docker.io}" ;;
+            gar|ecr|acr|custom)
+              REG="$IN_REGISTRY"
+              if [ -z "$REG" ]; then
+                echo "::error::image_registry is required for registry_type=$REGISTRY_TYPE" >&2
+                exit 1
+              fi ;;
+            *) echo "::error::unknown registry_type '$REGISTRY_TYPE'" >&2; exit 1 ;;
+          esac
+
+          IMAGE_NAME="${IN_IMAGE_NAME:-$SVC_NAME}"
+          if [ -n "$REGISTRY_PROJECT" ] && [ -n "$REGISTRY_REPO" ]; then
+            BASE="${REG}/${REGISTRY_PROJECT}/${REGISTRY_REPO}/${IMAGE_NAME}"
+          elif [ -n "$REGISTRY_PROJECT" ]; then
+            BASE="${REG}/${REGISTRY_PROJECT}/${IMAGE_NAME}"
+          else
+            BASE="${REG}/${IMAGE_NAME}"
+          fi
+
+          TAG="${IN_TAG:-$GITHUB_SHA}"
+          {
+            echo "registry=$REG"
+            echo "image=${BASE}:${TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Registry login BEFORE build/push so the push is authenticated. Cluster
+      # auth happens AFTER the push, so registry and cluster credentials — which
+      # may target different clouds — never overwrite one another.
+      - name: Log in to registry
+        if: ${{ !inputs.dry_run }}
+        env:
+          REGISTRY_TYPE: ${{ inputs.registry_type }}
+          REG_HOST: ${{ steps.ref.outputs.registry }}
+          REGISTRY_REGION: ${{ inputs.registry_region }}
+          CREDS: ${{ secrets.registry_credentials }}
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          case "$REGISTRY_TYPE" in
+            gar|gcr)
+              KEY="$(mktemp)"; printf '%s' "$CREDS" > "$KEY"
+              gcloud auth activate-service-account --key-file="$KEY"
+              gcloud auth configure-docker "$REG_HOST" --quiet
+              rm -f "$KEY" ;;
+            ghcr)
+              printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin ;;
+            ecr)
+              AKID="$(printf '%s' "$CREDS" | jq -r '.aws_access_key_id // empty')"
+              ASAK="$(printf '%s' "$CREDS" | jq -r '.aws_secret_access_key // empty')"
+              AREG="$(printf '%s' "$CREDS" | jq -r '.aws_region // empty')"
+              AREG="${AREG:-$REGISTRY_REGION}"
+              aws configure set aws_access_key_id "$AKID"
+              aws configure set aws_secret_access_key "$ASAK"
+              aws configure set region "$AREG"
+              aws ecr get-login-password --region "$AREG" | docker login "$REG_HOST" -u AWS --password-stdin ;;
+            acr)
+              CID="$(printf '%s' "$CREDS" | jq -r '.clientId // empty')"
+              CSEC="$(printf '%s' "$CREDS" | jq -r '.clientSecret // empty')"
+              TID="$(printf '%s' "$CREDS" | jq -r '.tenantId // empty')"
+              az login --service-principal -u "$CID" -p "$CSEC" --tenant "$TID" >/dev/null
+              az acr login --name "${REG_HOST%%.azurecr.io}" ;;
+            dockerhub|custom)
+              USERNAME="$(printf '%s' "$CREDS" | jq -r 'if type=="object" then (.username // empty) else empty end' 2>/dev/null || true)"
+              PASSWORD="$(printf '%s' "$CREDS" | jq -r 'if type=="object" then (.password // empty) else empty end' 2>/dev/null || true)"
+              if [ -z "$USERNAME" ]; then USERNAME="${CREDS%%:*}"; PASSWORD="${CREDS#*:}"; fi
+              printf '%s' "$PASSWORD" | docker login "$REG_HOST" -u "$USERNAME" --password-stdin ;;
+          esac
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build & push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ !inputs.dry_run }}
+          build-args: ${{ inputs.build_args }}
+          tags: ${{ steps.ref.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Detect cluster auth method
+        id: detect
+        env:
+          CLUSTER_TYPE: ${{ inputs.cluster_type }}
+          CREDS: ${{ secrets.cluster_credentials }}
+        run: |
+          M="$CLUSTER_TYPE"
+          if [ -z "$M" ]; then
+            if   printf '%s' "$CREDS" | jq -e '.type == "service_account"' >/dev/null 2>&1; then M=gke
+            elif printf '%s' "$CREDS" | jq -e '.aws_secret_access_key'     >/dev/null 2>&1; then M=eks
+            elif printf '%s' "$CREDS" | jq -e '.clientSecret'              >/dev/null 2>&1; then M=aks
+            elif printf '%s' "$CREDS" | base64 -d 2>/dev/null | grep -q "kind: Config";      then M=kubeconfig
+            else M=kubeconfig
+            fi
+          fi
+          echo "::notice::cluster auth method: $M"
+          echo "method=$M" >> "$GITHUB_OUTPUT"
+
+      # -- GKE: use the SHA-pinned Google actions (they install the
+      #    gke-gcloud-auth-plugin, which the bare CLI would not). --
+      - name: Auth to GCP (gke)
+        if: ${{ steps.detect.outputs.method == 'gke' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.cluster_credentials }}
+
+      - name: Get GKE credentials
+        if: ${{ steps.detect.outputs.method == 'gke' }}
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
+        with:
+          cluster_name: ${{ inputs.cluster_name }}
+          location: ${{ inputs.cluster_region }}
+          project_id: ${{ inputs.cluster_project }}
+
+      - name: Auth to cluster (eks)
+        if: ${{ steps.detect.outputs.method == 'eks' }}
+        env:
+          CREDS: ${{ secrets.cluster_credentials }}
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          CLUSTER_REGION: ${{ inputs.cluster_region }}
+        run: |
+          AKID="$(printf '%s' "$CREDS" | jq -r '.aws_access_key_id // empty')"
+          ASAK="$(printf '%s' "$CREDS" | jq -r '.aws_secret_access_key // empty')"
+          AREG="$(printf '%s' "$CREDS" | jq -r '.aws_region // empty')"
+          AREG="${AREG:-$CLUSTER_REGION}"
+          aws configure set aws_access_key_id "$AKID"
+          aws configure set aws_secret_access_key "$ASAK"
+          aws configure set region "$AREG"
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AREG"
+
+      - name: Auth to cluster (aks)
+        if: ${{ steps.detect.outputs.method == 'aks' }}
+        env:
+          CREDS: ${{ secrets.cluster_credentials }}
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          RESOURCE_GROUP: ${{ inputs.azure_resource_group }}
+        run: |
+          CID="$(printf '%s' "$CREDS" | jq -r '.clientId // empty')"
+          CSEC="$(printf '%s' "$CREDS" | jq -r '.clientSecret // empty')"
+          TID="$(printf '%s' "$CREDS" | jq -r '.tenantId // empty')"
+          az login --service-principal -u "$CID" -p "$CSEC" --tenant "$TID" >/dev/null
+          az aks get-credentials --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --overwrite-existing
+
+      - name: Auth to cluster (kubeconfig)
+        if: ${{ steps.detect.outputs.method == 'kubeconfig' }}
+        env:
+          CREDS: ${{ secrets.cluster_credentials }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$CREDS" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Set up Helm
+        if: ${{ inputs.deploy_method == 'helm' }}
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Roll workload (kubectl)
+        if: ${{ inputs.deploy_method == 'kubectl' }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          SVC: ${{ inputs.svc_name }}
+          NS: ${{ inputs.namespace }}
+          WORKLOAD_TYPE: ${{ inputs.workload_type }}
+          APP_VERSION: ${{ inputs.app_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          case "$WORKLOAD_TYPE" in
+            deployment) KIND=deployment ;;
+            cron)       KIND=cronjob ;;
+            *) echo "::error::workload_type must be 'deployment' or 'cron'" >&2; exit 1 ;;
+          esac
+          DR=()
+          [ "$DRY_RUN" = "true" ] && DR=(--dry-run=client)
+          kubectl set image "${KIND}/${SVC}" "${SVC}=${IMAGE}" --namespace "$NS" "${DR[@]}"
+          if [ -n "$APP_VERSION" ] && [ "$KIND" = "deployment" ]; then
+            kubectl set env "deployment/${SVC}" "APP_VERSION=${APP_VERSION}" --namespace "$NS" "${DR[@]}"
+          fi
+
+      - name: Roll workload (helm)
+        if: ${{ inputs.deploy_method == 'helm' }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          RELEASE: ${{ inputs.helm_release != '' && inputs.helm_release || inputs.svc_name }}
+          CHART: ${{ inputs.helm_chart }}
+          NS: ${{ inputs.namespace }}
+          VALUES: ${{ inputs.helm_values_path }}
+          EXTRA: ${{ inputs.helm_extra_args }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ -z "$CHART" ]; then
+            echo "::error::helm_chart is required when deploy_method=helm" >&2
+            exit 1
+          fi
+          set -- helm upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NS" --set image="$IMAGE"
+          [ -n "$VALUES" ] && set -- "$@" --values "$VALUES"
+          [ "$DRY_RUN" = "true" ] && set -- "$@" --dry-run
+          # shellcheck disable=SC2086
+          "$@" $EXTRA
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          METHOD: ${{ steps.detect.outputs.method }}
+          DEPLOY_METHOD: ${{ inputs.deploy_method }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## Keyed deploy — ${{ inputs.svc_name }}"
+            echo ""
+            echo "- Registry: \`${{ inputs.registry_type }}\` · Cluster: \`${METHOD}\`"
+            echo "- Roll: \`${DEPLOY_METHOD}\`${DRY_RUN:+ (dry run)} · ns \`${{ inputs.namespace }}\`"
+            echo "- Image: \`$IMAGE\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,5 +1,71 @@
 # Decisions — reusable-workflows
 
+## 2026-07-14 — Capability parity with `zopsmart/workflows`, verified from live callers (v1.4.0)
+
+**Problem.** The v1.3.0 `deploy-gke-service` migration note claimed the external
+system did "multi-registry resolution, language auto-detection, host-side builds
+and a ConfigMap-diff apply" — a list written from memory, and partly wrong
+(`ConfigMap-diff` is not a diff; it is git-change-routing + generate-from-env +
+`kubectl apply --force`). "Don't reduce capabilities" needed a *verified* answer,
+not a remembered one.
+
+**What I actually verified.** Read the `zopsmart/workflows` source (the composite
+actions + `_*.yaml` bodies) and the `with:` blocks of its live callers
+(`quizzing-pro/{api,ui,engine,admin-ui}`, `zopsmart/{skillup-ui,auth-service-v2,
+hiring-portal-api,…}`). Findings:
+
+- **Not used by any caller → dropping them is correct, not a regression.**
+  Multi-registry (every caller → `us-central1-docker.pkg.dev`, GAR), multi-cloud
+  EKS/AKS (every caller → `CLUSTER_PROJECT`, GKE), language auto-detect (every
+  caller passes `LANGUAGE:` explicitly).
+- **Used, and genuinely missing from JGD.** (1) **Stage→prod retag/promote** —
+  `stage-deploy` builds `:sha`, `prod-deploy` retags `:sha`→`:release` with *no
+  build*. JGD's deploy-* always rebuild → a real correctness gap (prod could
+  differ from stage). (2) DB **service containers** + **coverage threshold** in
+  CI (`MYSQL_ENABLE`/`REDIS_ENABLE`/`TESTCOVERAGE_THRESHOLD`).
+- **Used, but a deliberate improvement to keep.** SA-JSON creds
+  (`PROD_DEPLOY_KEY`) → keyless WIF.
+
+**Decision.** Ship four additive changes as **v1.4.0**:
+
+1. **`promote-image`** — server-side retag (`gcloud container images add-tag`, no
+   pull/push) + optional roll of GKE (kubectl/helm) or Cloud Run. Keyless WIF.
+   The JGD equivalent of zopsmart `prod-deploy`; guarantees prod runs stage's bytes.
+2. **`deploy-cluster-keyed`** — the one place multi-cloud (GKE/EKS/AKS/kubeconfig)
+   **and** multi-registry (gar/gcr/ecr/acr/ghcr/dockerhub/custom) live, **key-based
+   by design**. Explicitly separated from the WIF-native deploy-* so the keyless
+   path never regresses to stored keys. Auth is CLI-based (gcloud/aws/az/docker)
+   except GKE, which uses the SHA-pinned Google actions for the auth plugin.
+3. **`ci-go` + `ci-node`: `enable_services`** (postgres+mysql+redis service
+   containers, run in a second `*-db` job — GitHub can't attach a service
+   conditionally to one job) **+ `coverage_threshold`** on `ci-go`. Service
+   containers are language-agnostic, so both CI workflows get them.
+4. Doc corrections: the `ConfigMap-diff` mislabel, a stale
+   `configmap_from_env_file` reference in `deploy-gke-service.yml`, and
+   unverified `zop-mannai`/`geo-engine` caller names (the real callers are
+   `zopsmart/*` + `quizzing-pro/*`).
+
+**Why key-based multi-cloud is a *separate* workflow, not a mode on deploy-gke.**
+Folding EKS/AKS + stored keys into the WIF-native workflow would blur its one
+guarantee (keyless). A caller reaching for `deploy-cluster-keyed` is opting into a
+long-lived credential explicitly; the split makes that visible and rotatable, and
+keeps the recommended path (`deploy-cloud-run`/`deploy-gke-service`) keyless.
+
+**Config on GKE — deferred, not solved.** Callers keep config in a git
+`.env`→ConfigMap; JGD's model is Secret-Manager bundles. On GKE (unlike Cloud
+Run's `--set-secrets`) a bundle needs an in-cluster mechanism (External Secrets
+Operator / initContainer). Documented as a per-caller migration decision; no new
+reusable. Chosen over porting the ConfigMap flow to avoid running two config
+models.
+
+**Not done here.** Caller migrations remain per-repo PRs (user-driven, one at a
+time). `promote-image` for Cloud Run overlaps `deploy-cloud-run --update-image`
+but skips the rebuild — kept distinct on purpose.
+
+**Release.** All additive → **v1.4.0** (minor). `actionlint` + the SHA-pin grep
+pass locally; no new third-party action SHAs were introduced (auth is CLI or
+reuses already-pinned Google/Docker/Azure actions).
+
 ## 2026-07-14 — Fleet-wide audit; reverse the "deploy/CI kept per-repo" call
 
 **Problem.** A one-time survey of every workflow across all 16 accessible orgs

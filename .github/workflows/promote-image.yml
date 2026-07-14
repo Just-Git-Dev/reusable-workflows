@@ -1,0 +1,340 @@
+# Reusable image promote: retag an already-built image WITHOUT rebuilding, then
+# roll the target service onto it.
+#
+# This is the Just-Git-Dev equivalent of `zopsmart/workflows` prod-deploy: a
+# stage pipeline builds & pushes  image:<sha>, and this workflow retags that
+# exact image  :<sha> -> :<release>  in Artifact Registry (server-side, via
+# `gcloud container images add-tag` — no pull/push of layers) and rolls prod.
+# Because nothing is rebuilt, prod is guaranteed to run the identical bytes that
+# stage tested. Keyless WIF; the provider and SA are inputs.
+#
+# Roll targets:
+#   none       — retag only (a later job/deploy consumes `outputs.image`).
+#   gke        — `kubectl set image` / `helm upgrade` onto the promoted tag.
+#   cloud-run  — `gcloud run services update --image` onto the promoted tag.
+name: promote-image
+
+on:
+  workflow_call:
+    inputs:
+      gcp_region:
+        description: 'Region of the Artifact Registry host (…-docker.pkg.dev).'
+        type: string
+        required: true
+      gar_project:
+        description: 'GCP project owning the Artifact Registry repo.'
+        type: string
+        required: true
+      gar_repo:
+        description: 'Artifact Registry repository name.'
+        type: string
+        required: true
+      image_name:
+        description: 'Image name within the GAR repo (may contain slashes, e.g. staging/api).'
+        type: string
+        required: true
+      source_tag:
+        description: 'Existing tag to promote FROM (usually the stage commit SHA).'
+        type: string
+        required: true
+      target_tag:
+        description: 'Tag to promote TO. Empty ⇒ the triggering ref name (e.g. the pushed git tag).'
+        type: string
+        required: false
+        default: ''
+      require_semver:
+        description: 'Reject a target_tag that is not vX.Y.Z.'
+        type: boolean
+        required: false
+        default: true
+      also_tag_latest:
+        description: 'Also move :latest onto the promoted image.'
+        type: boolean
+        required: false
+        default: false
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Service account email to impersonate via WIF.'
+        type: string
+        required: true
+      deploy_target:
+        description: 'none | gke | cloud-run — what to roll after retagging.'
+        type: string
+        required: false
+        default: 'none'
+      # --- gke roll (deploy_target=gke) ---
+      cluster_project:
+        description: 'GCP project owning the GKE cluster.'
+        type: string
+        required: false
+        default: ''
+      cluster_name:
+        description: 'GKE cluster name.'
+        type: string
+        required: false
+        default: ''
+      cluster_location:
+        description: 'GKE cluster region or zone.'
+        type: string
+        required: false
+        default: ''
+      namespace:
+        description: 'Kubernetes namespace.'
+        type: string
+        required: false
+        default: ''
+      svc_name:
+        description: 'Workload AND container name (kubectl set image sets svc=image).'
+        type: string
+        required: false
+        default: ''
+      workload_type:
+        description: 'deployment | cron.'
+        type: string
+        required: false
+        default: 'deployment'
+      deploy_method:
+        description: 'kubectl | helm.'
+        type: string
+        required: false
+        default: 'kubectl'
+      helm_chart:
+        description: 'Chart reference (required when deploy_method=helm).'
+        type: string
+        required: false
+        default: ''
+      helm_release:
+        description: 'Helm release name. Defaults to svc_name.'
+        type: string
+        required: false
+        default: ''
+      helm_values_path:
+        description: 'Path to a Helm values file.'
+        type: string
+        required: false
+        default: ''
+      helm_extra_args:
+        description: 'Extra args appended to `helm upgrade`.'
+        type: string
+        required: false
+        default: ''
+      app_version:
+        description: 'When set (kubectl/deployment), `kubectl set env APP_VERSION=…` after the roll.'
+        type: string
+        required: false
+        default: ''
+      # --- cloud-run roll (deploy_target=cloud-run) ---
+      run_project:
+        description: 'GCP project owning the Cloud Run service. Defaults to gar_project.'
+        type: string
+        required: false
+        default: ''
+      run_region:
+        description: 'Cloud Run region. Defaults to gcp_region.'
+        type: string
+        required: false
+        default: ''
+      run_service:
+        description: 'Cloud Run service name.'
+        type: string
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 15
+      dry_run:
+        description: 'Print the retag + roll commands without executing them.'
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      image:
+        description: 'Fully-qualified promoted image reference (…:<target_tag>).'
+        value: ${{ jobs.promote.outputs.image }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: promote-${{ inputs.gar_project }}-${{ inputs.image_name }}-${{ inputs.target_tag }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: retag${{ inputs.deploy_target != 'none' && format(' · roll {0}', inputs.deploy_target) || '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve + validate tags
+        id: ref
+        env:
+          REGION: ${{ inputs.gcp_region }}
+          GAR_PROJECT: ${{ inputs.gar_project }}
+          GAR_REPO: ${{ inputs.gar_repo }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          IN_TARGET: ${{ inputs.target_tag }}
+          REQUIRE_SEMVER: ${{ inputs.require_semver }}
+        run: |
+          BASE="${REGION}-docker.pkg.dev/${GAR_PROJECT}/${GAR_REPO}/${IMAGE_NAME}"
+          TARGET="${IN_TARGET:-$GITHUB_REF_NAME}"
+
+          if [ -z "$SOURCE_TAG" ]; then
+            echo "::error::source_tag is empty — nothing to promote from." >&2
+            exit 1
+          fi
+          if [ -z "$TARGET" ]; then
+            echo "::error::target_tag is empty and no ref name is available." >&2
+            exit 1
+          fi
+          if [ "$REQUIRE_SEMVER" = "true" ] && ! printf '%s' "$TARGET" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::target_tag '$TARGET' is not vX.Y.Z (set require_semver: false to allow)." >&2
+            exit 1
+          fi
+
+          {
+            echo "base=$BASE"
+            echo "source=${BASE}:${SOURCE_TAG}"
+            echo "image=${BASE}:${TARGET}"
+            echo "target_tag=$TARGET"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Retag (server-side, no rebuild)
+        env:
+          BASE: ${{ steps.ref.outputs.base }}
+          SOURCE: ${{ steps.ref.outputs.source }}
+          TARGET_TAG: ${{ steps.ref.outputs.target_tag }}
+          ALSO_LATEST: ${{ inputs.also_tag_latest }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # Verify the source image exists before promoting.
+          if ! gcloud container images describe "$SOURCE" >/dev/null 2>&1; then
+            echo "::error::source image not found: $SOURCE" >&2
+            exit 1
+          fi
+
+          DESTS=("${BASE}:${TARGET_TAG}")
+          [ "$ALSO_LATEST" = "true" ] && DESTS+=("${BASE}:latest")
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN — would run:"
+            echo "  gcloud container images add-tag --quiet $SOURCE ${DESTS[*]}"
+            exit 0
+          fi
+          gcloud container images add-tag --quiet "$SOURCE" "${DESTS[@]}"
+          echo "::notice::Promoted $SOURCE -> ${DESTS[*]}"
+
+      # ---------- GKE roll ----------
+      - name: Get GKE credentials
+        if: ${{ inputs.deploy_target == 'gke' }}
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
+        with:
+          cluster_name: ${{ inputs.cluster_name }}
+          location: ${{ inputs.cluster_location }}
+          project_id: ${{ inputs.cluster_project }}
+
+      - name: Set up Helm
+        if: ${{ inputs.deploy_target == 'gke' && inputs.deploy_method == 'helm' }}
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Roll GKE (kubectl)
+        if: ${{ inputs.deploy_target == 'gke' && inputs.deploy_method == 'kubectl' }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          SVC: ${{ inputs.svc_name }}
+          NS: ${{ inputs.namespace }}
+          WORKLOAD_TYPE: ${{ inputs.workload_type }}
+          APP_VERSION: ${{ inputs.app_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          case "$WORKLOAD_TYPE" in
+            deployment) KIND=deployment ;;
+            cron)       KIND=cronjob ;;
+            *) echo "::error::workload_type must be 'deployment' or 'cron'" >&2; exit 1 ;;
+          esac
+          DR=()
+          [ "$DRY_RUN" = "true" ] && DR=(--dry-run=client)
+          kubectl set image "${KIND}/${SVC}" "${SVC}=${IMAGE}" --namespace "$NS" "${DR[@]}"
+          if [ -n "$APP_VERSION" ] && [ "$KIND" = "deployment" ]; then
+            kubectl set env "deployment/${SVC}" "APP_VERSION=${APP_VERSION}" --namespace "$NS" "${DR[@]}"
+          fi
+
+      - name: Roll GKE (helm)
+        if: ${{ inputs.deploy_target == 'gke' && inputs.deploy_method == 'helm' }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          RELEASE: ${{ inputs.helm_release != '' && inputs.helm_release || inputs.svc_name }}
+          CHART: ${{ inputs.helm_chart }}
+          NS: ${{ inputs.namespace }}
+          VALUES: ${{ inputs.helm_values_path }}
+          EXTRA: ${{ inputs.helm_extra_args }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ -z "$CHART" ]; then
+            echo "::error::helm_chart is required when deploy_method=helm" >&2
+            exit 1
+          fi
+          set -- helm upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NS" --set image="$IMAGE"
+          [ -n "$VALUES" ] && set -- "$@" --values "$VALUES"
+          [ "$DRY_RUN" = "true" ] && set -- "$@" --dry-run
+          # shellcheck disable=SC2086
+          "$@" $EXTRA
+
+      # ---------- Cloud Run roll ----------
+      - name: Roll Cloud Run
+        if: ${{ inputs.deploy_target == 'cloud-run' }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          RUN_PROJECT: ${{ inputs.run_project != '' && inputs.run_project || inputs.gar_project }}
+          RUN_REGION: ${{ inputs.run_region != '' && inputs.run_region || inputs.gcp_region }}
+          RUN_SERVICE: ${{ inputs.run_service }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ -z "$RUN_SERVICE" ]; then
+            echo "::error::run_service is required when deploy_target=cloud-run" >&2
+            exit 1
+          fi
+          set -- gcloud run services update "$RUN_SERVICE" \
+            --project "$RUN_PROJECT" --region "$RUN_REGION" \
+            --image "$IMAGE" --quiet
+          if [ "$DRY_RUN" = "true" ]; then
+            printf 'DRY RUN — would run:'; printf ' %q' "$@"; printf '\n'
+            exit 0
+          fi
+          "$@"
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          SOURCE: ${{ steps.ref.outputs.source }}
+          TARGET_DESC: ${{ inputs.deploy_target }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## Promote image"
+            echo ""
+            echo "- From: \`${SOURCE}\`"
+            echo "- To:   \`${IMAGE}\`${DRY_RUN:+ (dry run)}"
+            echo "- Roll: \`${TARGET_DESC}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

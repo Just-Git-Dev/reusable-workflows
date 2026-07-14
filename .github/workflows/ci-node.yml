@@ -5,6 +5,11 @@
 # jobs/steps in the caller. Every stage is toggleable; commands default to npm
 # but are overridable, so yarn/pnpm and no-dependency suites (`node --test`) fit
 # by overriding install/test commands and the cache backend.
+#
+# enable_services runs the test step in a `node-db` job with postgres + mysql +
+# redis service containers on localhost (5432 / 3306 / 6379), for DB-backed Node
+# backends — the same capability ci-go offers. Service containers are not
+# language-specific; a Node/Python/Java backend gets them the same way.
 name: ci-node
 
 on:
@@ -80,6 +85,48 @@ on:
         type: string
         required: false
         default: 'npm test'
+      enable_services:
+        description: >-
+          Run tests in a job with postgres + mysql + redis service containers
+          (localhost 5432 / 3306 / 6379). Use for DB-backed Node backends.
+        type: boolean
+        required: false
+        default: false
+      postgres_image:
+        description: 'Postgres service image (enable_services only).'
+        type: string
+        required: false
+        default: 'postgres:16'
+      postgres_db:
+        description: 'POSTGRES_DB for the postgres service.'
+        type: string
+        required: false
+        default: 'test'
+      postgres_password:
+        description: 'POSTGRES_PASSWORD for the postgres service.'
+        type: string
+        required: false
+        default: 'postgres'
+      mysql_image:
+        description: 'MySQL service image (enable_services only).'
+        type: string
+        required: false
+        default: 'mysql:8'
+      mysql_database:
+        description: 'MYSQL_DATABASE for the mysql service.'
+        type: string
+        required: false
+        default: 'test'
+      mysql_root_password:
+        description: 'MYSQL_ROOT_PASSWORD for the mysql service.'
+        type: string
+        required: false
+        default: 'root'
+      redis_image:
+        description: 'Redis service image (enable_services only).'
+        type: string
+        required: false
+        default: 'redis:7'
       run_build:
         description: 'Run the build step.'
         type: boolean
@@ -99,8 +146,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # install · lint · build always here; tests here too UNLESS enable_services
+  # routes them to the node-db job below (service containers cannot be attached
+  # conditionally to a single job, so the DB path is a second job).
   node:
-    name: install · lint · test · build
+    name: install · lint${{ inputs.enable_services && '' || ' · test' }} · build
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     defaults:
@@ -130,9 +180,69 @@ jobs:
         run: ${{ inputs.lint_command }}
 
       - name: Test
-        if: ${{ inputs.run_tests }}
+        if: ${{ inputs.run_tests && !inputs.enable_services }}
         run: ${{ inputs.test_command }}
 
       - name: Build
         if: ${{ inputs.run_build }}
         run: ${{ inputs.build_command }}
+
+  # DB-backed tests. Only runs when enable_services=true. postgres/mysql/redis
+  # all start (GitHub cannot attach a service conditionally); a suite connects to
+  # whichever it needs on localhost. Override *_image to pin/skip-pull versions.
+  node-db:
+    name: test (postgres · mysql · redis)
+    if: ${{ inputs.run_tests && inputs.enable_services }}
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working_directory }}
+    services:
+      postgres:
+        image: ${{ inputs.postgres_image }}
+        env:
+          POSTGRES_DB: ${{ inputs.postgres_db }}
+          POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+      mysql:
+        image: ${{ inputs.mysql_image }}
+        env:
+          MYSQL_DATABASE: ${{ inputs.mysql_database }}
+          MYSQL_ROOT_PASSWORD: ${{ inputs.mysql_root_password }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: ${{ inputs.redis_image }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Enable corepack
+        if: ${{ inputs.enable_corepack }}
+        run: corepack enable
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.node_cache }}
+          cache-dependency-path: ${{ inputs.cache_dependency_path != '' && inputs.cache_dependency_path || format('{0}/package-lock.json', inputs.working_directory) }}
+
+      - name: Install
+        if: ${{ inputs.install }}
+        run: ${{ inputs.install_command }}
+
+      - name: Test (with services)
+        run: ${{ inputs.test_command }}
