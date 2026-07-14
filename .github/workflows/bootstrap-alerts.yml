@@ -62,6 +62,9 @@ on:
       policies_skipped:
         description: 'Number of alert policies left untouched because they already existed.'
         value: ${{ jobs.apply.outputs.skipped }}
+      policies_failed:
+        description: 'Number of alert policies that failed to apply (the run also exits non-zero).'
+        value: ${{ jobs.apply.outputs.failed }}
 
 permissions:
   contents: read
@@ -90,6 +93,7 @@ jobs:
       created: ${{ steps.policies.outputs.created }}
       updated: ${{ steps.policies.outputs.updated }}
       skipped: ${{ steps.policies.outputs.skipped }}
+      failed: ${{ steps.policies.outputs.failed }}
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -162,7 +166,8 @@ jobs:
             exit 1
           fi
 
-          CREATED=0; UPDATED=0; SKIPPED=0
+          CREATED=0; UPDATED=0; SKIPPED=0; FAILED=0
+          FAILED_NAMES=()
           for f in "${FILES[@]}"; do
             DISPLAY=$(awk '/^displayName:/ { sub(/^displayName:[[:space:]]*/, ""); print; exit }' "$f")
             if [ -z "$DISPLAY" ]; then
@@ -178,23 +183,36 @@ jobs:
             TMP=$(mktemp)
             sed "s|NOTIFICATION_CHANNEL_PLACEHOLDER|${CHANNEL_NAME}|g" "$f" > "$TMP"
 
+            # Isolate each policy: a single invalid file (e.g. a bad condition
+            # filter) is reported and counted, but does NOT abort the loop, so
+            # every valid policy still applies. The step still exits non-zero at
+            # the end if anything failed — the pass/fail contract is unchanged,
+            # only the blast radius and the reporting improve.
             if [ -n "$EXISTING" ]; then
               if [ "$FORCE_UPDATE" = "true" ]; then
-                gcloud alpha monitoring policies update "$EXISTING" \
-                  --project="$GCP_PROJECT" \
-                  --policy-from-file="$TMP" --quiet
-                echo "  updated: $DISPLAY"
-                UPDATED=$((UPDATED + 1))
+                if gcloud alpha monitoring policies update "$EXISTING" \
+                    --project="$GCP_PROJECT" \
+                    --policy-from-file="$TMP" --quiet; then
+                  echo "  updated: $DISPLAY"
+                  UPDATED=$((UPDATED + 1))
+                else
+                  echo "::error::update failed: $DISPLAY (in $f)"
+                  FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+                fi
               else
                 echo "  skipped (exists): $DISPLAY"
                 SKIPPED=$((SKIPPED + 1))
               fi
             else
-              gcloud alpha monitoring policies create \
-                --project="$GCP_PROJECT" \
-                --policy-from-file="$TMP" --quiet
-              echo "  created: $DISPLAY"
-              CREATED=$((CREATED + 1))
+              if gcloud alpha monitoring policies create \
+                  --project="$GCP_PROJECT" \
+                  --policy-from-file="$TMP" --quiet; then
+                echo "  created: $DISPLAY"
+                CREATED=$((CREATED + 1))
+              else
+                echo "::error::create failed: $DISPLAY (in $f)"
+                FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+              fi
             fi
             rm -f "$TMP"
           done
@@ -203,7 +221,13 @@ jobs:
             echo "created=$CREATED"
             echo "updated=$UPDATED"
             echo "skipped=$SKIPPED"
+            echo "failed=$FAILED"
           } >> "$GITHUB_OUTPUT"
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} policy/policies failed to apply: ${FAILED_NAMES[*]}. ${CREATED} created, ${UPDATED} updated, ${SKIPPED} skipped."
+            exit 1
+          fi
 
       - name: Summary
         if: always()
@@ -212,13 +236,14 @@ jobs:
           CREATED:      ${{ steps.policies.outputs.created }}
           UPDATED:      ${{ steps.policies.outputs.updated }}
           SKIPPED:      ${{ steps.policies.outputs.skipped }}
+          FAILED:       ${{ steps.policies.outputs.failed }}
         run: |
           {
             echo "## Monitoring alert policies — ${GCP_PROJECT}"
             echo ''
             echo "- Notification channel: ${CHANNEL_NAME:-<unresolved>}"
             echo "- Policies from: ${ALERTS_DIR}/${POLICY_GLOB}"
-            echo "- Created: ${CREATED:-0} · Updated: ${UPDATED:-0} · Skipped: ${SKIPPED:-0}"
+            echo "- Created: ${CREATED:-0} · Updated: ${UPDATED:-0} · Skipped: ${SKIPPED:-0} · Failed: ${FAILED:-0}"
             echo ""
             echo "Edit the YAML files and re-run to add new policies. Use \`force_update: true\` to overwrite existing ones."
           } >> "$GITHUB_STEP_SUMMARY"

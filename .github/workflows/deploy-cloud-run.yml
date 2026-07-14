@@ -1,0 +1,245 @@
+# Reusable Cloud Run deploy: build → push (GAR, gha-cached) → deploy.
+#
+# Two modes (deploy_mode):
+#   update-image  (default, safest) — `gcloud run services update --image`, a
+#                 strict image flip. Env/secrets/scale/SA/probes are owned by a
+#                 separate provision workflow; this only moves which image is live.
+#   deploy        — `gcloud run deploy`, which can create/configure the service.
+#                 Pass service config through `extra_deploy_flags`.
+#
+# App-specific pre-deploy gates (unit tests, version-file cross-checks, migration
+# smokes) stay as their own jobs in the caller and gate this via `needs:`.
+name: deploy-cloud-run
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id owning the Artifact Registry repo and Cloud Run service.'
+        type: string
+        required: true
+      gcp_region:
+        description: 'Region of the Artifact Registry repo and the Cloud Run service.'
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Releaser service account email to impersonate via WIF.'
+        type: string
+        required: true
+      gar_repo:
+        description: 'Artifact Registry repository name (e.g. backend).'
+        type: string
+        required: true
+      image_name:
+        description: 'Image name within the GAR repo (may differ from the service name).'
+        type: string
+        required: true
+      service:
+        description: 'Cloud Run service name.'
+        type: string
+        required: true
+      image_tag:
+        description: 'Image tag to build/deploy. Empty ⇒ the ref name that triggered the run.'
+        type: string
+        required: false
+        default: ''
+      require_semver:
+        description: 'Reject a tag that is not vX.Y.Z.'
+        type: boolean
+        required: false
+        default: true
+      also_tag_latest:
+        description: 'Also push/tag the image as :latest.'
+        type: boolean
+        required: false
+        default: true
+      context:
+        description: 'Docker build context.'
+        type: string
+        required: false
+        default: '.'
+      dockerfile:
+        description: 'Dockerfile path, relative to context.'
+        type: string
+        required: false
+        default: 'Dockerfile'
+      platforms:
+        description: 'Target build platform(s).'
+        type: string
+        required: false
+        default: 'linux/amd64'
+      build_args:
+        description: 'Newline-separated docker build args (e.g. GOPROXY=direct).'
+        type: string
+        required: false
+        default: ''
+      deploy_mode:
+        description: 'update-image (strict flip) | deploy (full gcloud run deploy).'
+        type: string
+        required: false
+        default: 'update-image'
+      extra_deploy_flags:
+        description: 'Extra flags for deploy_mode=deploy (e.g. --allow-unauthenticated --set-env-vars=K=V). Ignored for update-image.'
+        type: string
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 20
+      dry_run:
+        description: 'Build only: do not push the image and do not mutate Cloud Run.'
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      image:
+        description: 'Fully-qualified image reference that was built.'
+        value: ${{ jobs.deploy.outputs.image }}
+      service_url:
+        description: 'Cloud Run service URL after the deploy.'
+        value: ${{ jobs.deploy.outputs.service_url }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Never cancel an in-flight deploy of the same service.
+  group: deploy-cloud-run-${{ inputs.gcp_project }}-${{ inputs.service }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build · push · ${{ inputs.deploy_mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+      service_url: ${{ steps.url.outputs.url }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve tag + image ref
+        id: ref
+        env:
+          IN_TAG: ${{ inputs.image_tag }}
+          FALLBACK_TAG: ${{ github.ref_name }}
+          REQUIRE_SEMVER: ${{ inputs.require_semver }}
+          REGION: ${{ inputs.gcp_region }}
+          PROJECT: ${{ inputs.gcp_project }}
+          GAR_REPO: ${{ inputs.gar_repo }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          ALSO_LATEST: ${{ inputs.also_tag_latest }}
+        run: |
+          TAG="${IN_TAG:-$FALLBACK_TAG}"
+          if [ -z "$TAG" ]; then
+            echo "::error::no image tag: pass image_tag or trigger on a tag ref" >&2
+            exit 1
+          fi
+          if [ "$REQUIRE_SEMVER" = "true" ] && [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$TAG' is not a vX.Y.Z semver tag (set require_semver:false to allow)" >&2
+            exit 1
+          fi
+          BASE="${REGION}-docker.pkg.dev/${PROJECT}/${GAR_REPO}/${IMAGE_NAME}"
+          # tags is a newline-separated list for docker/build-push-action.
+          {
+            echo "tag=$TAG"
+            echo "image=${BASE}:${TAG}"
+            echo "tags<<__TAGS__"
+            echo "${BASE}:${TAG}"
+            [ "$ALSO_LATEST" = "true" ] && echo "${BASE}:latest"
+            echo "__TAGS__"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ inputs.gcp_region }}-docker.pkg.dev" --quiet
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build & push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ !inputs.dry_run }}
+          build-args: ${{ inputs.build_args }}
+          tags: ${{ steps.ref.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          SERVICE: ${{ inputs.service }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+          MODE: ${{ inputs.deploy_mode }}
+          EXTRA: ${{ inputs.extra_deploy_flags }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "update-image" ]; then
+            set -- gcloud run services update "$SERVICE" \
+              --project="$PROJECT" --region="$REGION" --image="$IMAGE"
+          elif [ "$MODE" = "deploy" ]; then
+            # shellcheck disable=SC2086
+            set -- gcloud run deploy "$SERVICE" \
+              --project="$PROJECT" --region="$REGION" --image="$IMAGE" $EXTRA
+          else
+            echo "::error::deploy_mode must be 'update-image' or 'deploy' (got '$MODE')" >&2
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN — would execute:"
+            printf ' %q' "$@"; echo
+            exit 0
+          fi
+          "$@"
+
+      - name: Get service URL
+        id: url
+        if: ${{ always() && !inputs.dry_run }}
+        env:
+          SERVICE: ${{ inputs.service }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+        run: |
+          URL=$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          URL: ${{ steps.url.outputs.url }}
+          MODE: ${{ inputs.deploy_mode }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## Cloud Run deploy — ${{ inputs.service }}"
+            echo ""
+            echo "- Mode: \`$MODE\`${DRY_RUN:+ (dry run)}"
+            echo "- Image: \`$IMAGE\`"
+            [ -n "${URL:-}" ] && echo "- Service URL: $URL"
+          } >> "$GITHUB_STEP_SUMMARY"
