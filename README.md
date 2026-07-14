@@ -1,18 +1,27 @@
 # reusable-workflows
 
-Shared **`workflow_call`** GitHub Actions workflows for teams running apps on
-**Google Cloud Run + Postgres + Cloudflare**, authenticating to GCP with
-[Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation)
-and mounting application config from a Secret Manager "bundle" secret.
+Shared **`workflow_call`** GitHub Actions workflows for teams shipping apps on
+**Google Cloud (Cloud Run + GKE) + Postgres + Cloudflare**. GCP access is keyless
+via [Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation);
+application config is mounted from a Secret Manager "bundle" secret.
 
-They are the ops workflows that every such repo ends up copy-pasting: apply
-monitoring alerts, rotate a secret and roll the services onto it, back up the
-database, sweep old container images, deploy a static site, nag about an
-expiring API token. Hosting them once means a fix lands everywhere.
+They are the **build/deploy and ops** workflows every such repo ends up
+copy-pasting:
 
-Nothing here is specific to any one project. Every project-specific value —
-GCP project id, region, service names, secret names, Cloudflare account and zone
-— is a `workflow_call` input.
+- **CI** — Go and Node/React toolchain cores (build · vet/lint · test · coverage),
+  with optional postgres/mysql/redis service containers.
+- **Deploy** — build → push (GAR) → roll **Cloud Run** or a **GKE** workload
+  (kubectl/helm), keyless WIF; **promote** an existing image to prod with no
+  rebuild; or a **key-based, multi-cloud + multi-registry** deploy for
+  EKS/AKS/kubeconfig clusters and non-GAR registries.
+- **Ops** — apply monitoring alerts, rotate a secret/keypair and roll onto it,
+  back up the database, sweep old container images, deploy a static site, nag
+  about an expiring API token.
+
+Hosting them once means a fix lands everywhere. Nothing here is specific to any
+one project: every project-specific value — GCP project id, region, cluster,
+service and secret names, Cloudflare account and zone — is a `workflow_call`
+input.
 
 ## Workflows
 
