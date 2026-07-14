@@ -1,5 +1,70 @@
 # Decisions — reusable-workflows
 
+## 2026-07-14 — Deploy-reusable gaps surfaced by the AutoMahn/Traide-Co caller migration (v1.5.0)
+
+**Problem.** Migrating all ~11 AutoMahn + Traide-Co caller repos onto the
+reusables (one PR per repo) surfaced four places where a faithful re-expression of
+a caller's existing workflow either lost a capability or introduced a latent bug.
+These are library defects, not caller mistakes, so they belong here — fixed once,
+not worked around 11 times.
+
+**The four gaps (each confirmed against a real caller, not hypothesised).**
+
+1. **`deploy-cloudflare-pages` had no `ref` input.** Callers with a
+   `workflow_dispatch` "re-deploy tag X" flow (AutoMahn `website`/`admin-ui`,
+   Traide-Co `website`/`webapp`) validated the tag then `checkout`ed it. The
+   reusable always built the triggering ref, so tag-pinned manual re-deploy was
+   silently lost.
+2. **`deploy-cloudflare-pages` had no `build_env` passthrough.** The build step
+   `eval`s `build_command` with no way to inject build-time vars, so callers
+   (AutoMahn `admin-ui`/`ui`) had to splice 6 `VITE_*`/`FIREBASE_*` values into
+   `build_command` — less isolated than the old `env:` block.
+3. **`deploy-cloud-run` expanded `extra_deploy_flags` unquoted** (`… $EXTRA` with
+   a blanket `SC2086` disable). Multiple flags need the word-split, but a *value*
+   containing a space (e.g. `--set-env-vars=CORS_ORIGINS=https://a, https://b`)
+   also splits and corrupts argv — a live hazard in Traide-Co `api`.
+4. **`deploy-cloud-run` conflated the image tag with the git checkout ref.** The
+   single `image_tag` fed both the Docker tag *and* `checkout.ref`, so you could
+   not tag an image `0.1.8` while building git tag `v0.1.8` (checkout would fail).
+   Hit in AutoMahn `image-service`, whose old workflow tagged the un-prefixed
+   pyproject version.
+
+**Decision.** Ship four **additive, backward-compatible** inputs as **v1.5.0**
+(no existing caller changes behaviour; every default reproduces today's output):
+
+1. `deploy-cloudflare-pages.ref` — git ref to check out; empty ⇒ triggering ref.
+2. `deploy-cloudflare-pages.build_env` — newline `KEY=VALUE`, exported into the
+   build step's shell **only** (never `$GITHUB_ENV`, so a smuggled newline can't
+   inject an env entry and vars don't leak to later steps).
+3. `deploy-cloud-run.deploy_flags` — deploy flags **one per line**; spaces within
+   a line are preserved (built into a bash array, not word-split). `extra_deploy_flags`
+   kept as a documented legacy input, not removed.
+4. `deploy-cloud-run.checkout_ref` — git ref to build from; empty ⇒ the resolved
+   image tag (today's behaviour). Decouples "what to tag" from "what to build".
+
+**Why minor, not major.** Semver here tracks the *input contract*. All four are
+new optional inputs with defaults equal to prior behaviour; nothing is removed or
+re-defaulted, so no caller breaks → minor bump. (Contrast: removing
+`extra_deploy_flags` would be major — so it stays.)
+
+**Also in v1.5.0 — `ci-go` golangci-lint-action v8 → v9.3.0.** Wiring golangci-lint
+into AutoMahn/api + Traide-Co/api CI for the first time surfaced two things: (a)
+real pre-existing lint debt (handled in those callers, not here), and (b) a
+`Node.js 20 is deprecated … golangci-lint-action forced to run on Node 24`
+warning — the action wrapper was pinned at v8.0.0 (a node20 action). The *linter*
+was never stale: `golangci_version` already defaults to `latest` and is
+overridable. Bumped the **action** to v9.3.0 (SHA `ba0d7d2…`), whose only
+substantive change is the node20→node24 runtime (two other changes are additive:
+install-only, module plugin system) — no config break, so it rides the same minor
+bump. Both the linter-version default (`latest`) and its override input are
+unchanged; this only clears the deprecation on the wrapper.
+
+**Caller follow-ups this unblocks.** The AutoMahn/Traide-Co PRs that inlined
+`build_env`, dropped tag re-deploy, or unquoted `extra_deploy_flags` can be
+simplified to the new inputs once v1.5.0 is tagged — noted on each PR. Still
+open: `deploy-cloudflare-worker`, `bootstrap-cf`, `cloud-run-update`,
+`run-db-job` (block the workflows left inline in those PRs).
+
 ## 2026-07-14 — Capability parity with `zopsmart/workflows`, verified from live callers (v1.4.0)
 
 **Problem.** The v1.3.0 `deploy-gke-service` migration note claimed the external

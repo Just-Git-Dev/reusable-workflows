@@ -28,7 +28,7 @@ only the universal core so it stays adoptable everywhere.
 | `mysql_image` / `mysql_database` / `mysql_root_password` | `mysql:8` / `test` / `root` | mysql service (`enable_services` only) |
 | `redis_image` | `redis:7` | redis service (`enable_services` only) |
 | `run_lint` | `true` | golangci-lint via `golangci-lint-action` |
-| `golangci_version` | `latest` | e.g. `v2.5` (v8 action ⇒ golangci-lint v2 config) |
+| `golangci_version` | `latest` | linter version — tracks latest by default, override e.g. `v2.5` (v9 action ⇒ golangci-lint v2 config) |
 | `golangci_args` | `--timeout=5m` | passed to golangci-lint |
 | `lint_blocking` | `true` | `false` = report lint failures without failing the job (paydown mode) |
 

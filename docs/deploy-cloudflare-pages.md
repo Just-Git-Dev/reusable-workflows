@@ -21,6 +21,8 @@ cannot hold deploy credentials, so those runs would only fail noisily.
 | `node_cache` | input | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
 | `cache_dependency_path` | input | `<working_directory>/package-lock.json` | lockfile the cache keys on |
 | `branch` | input | `main` | Pages deployment branch |
+| `ref` | input | `''` | git ref to check out and deploy; empty ⇒ the triggering ref. Set it to re-deploy a specific tag from a `workflow_dispatch` run |
+| `build_env` | input | `''` | extra build environment, newline-separated `KEY=VALUE` (values may contain spaces); scoped to the build step only |
 | `cloudflare_api_token` | **secret** (req) | — | needs `Cloudflare Pages: Edit` |
 
 ## Outputs
@@ -68,6 +70,33 @@ A monorepo subdirectory:
       working_directory: apps/docs
       output_dir: build
 ```
+
+Re-deploy a specific tag from a manual run, with build-time variables:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      tag: { description: 'Tag to (re)deploy', required: true }
+
+jobs:
+  deploy:
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.5.0
+    with:
+      project_name: my-app
+      account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      ref: ${{ github.event.inputs.tag }}   # check out & deploy that tag, not the default branch
+      build_command: npm ci && npm run build
+      build_env: |
+        VITE_API_BASE=${{ vars.API_BASE }}
+        VITE_FIREBASE_PROJECT=${{ vars.FIREBASE_PROJECT }}
+    secrets:
+      cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+`build_env` keeps caller build vars out of `build_command` — they're exported
+into the build step's shell only, never `$GITHUB_ENV`, so nothing leaks to later
+steps.
 
 ## Concurrency
 

@@ -48,6 +48,11 @@ on:
         type: string
         required: false
         default: ''
+      checkout_ref:
+        description: 'Git ref to build from. Empty ⇒ the resolved image tag. Set this when the image tag is not itself a git ref (e.g. an app-version tag like 0.1.8 decoupled from the pushed git tag v0.1.8).'
+        type: string
+        required: false
+        default: ''
       require_semver:
         description: 'Reject a tag that is not vX.Y.Z.'
         type: boolean
@@ -83,8 +88,13 @@ on:
         type: string
         required: false
         default: 'update-image'
+      deploy_flags:
+        description: 'Extra flags for deploy_mode=deploy, ONE PER LINE. Spaces within a line are preserved, so --set-env-vars=CORS=a,b or a value containing a space is safe. Preferred over extra_deploy_flags. Ignored for update-image.'
+        type: string
+        required: false
+        default: ''
       extra_deploy_flags:
-        description: 'Extra flags for deploy_mode=deploy (e.g. --allow-unauthenticated --set-env-vars=K=V). Ignored for update-image.'
+        description: 'Legacy: extra deploy flags as a single space-separated string (word-split — a space inside any value breaks argv). Prefer deploy_flags. Ignored for update-image.'
         type: string
         required: false
         default: ''
@@ -161,7 +171,8 @@ jobs:
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ steps.ref.outputs.tag }}
+          # Decoupled from the image tag: checkout_ref wins, else fall back to the tag.
+          ref: ${{ inputs.checkout_ref || steps.ref.outputs.tag }}
 
       - name: Authenticate to GCP via WIF
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -195,6 +206,7 @@ jobs:
           PROJECT: ${{ inputs.gcp_project }}
           REGION: ${{ inputs.gcp_region }}
           MODE: ${{ inputs.deploy_mode }}
+          DEPLOY_FLAGS: ${{ inputs.deploy_flags }}
           EXTRA: ${{ inputs.extra_deploy_flags }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
@@ -203,9 +215,22 @@ jobs:
             set -- gcloud run services update "$SERVICE" \
               --project="$PROJECT" --region="$REGION" --image="$IMAGE"
           elif [ "$MODE" = "deploy" ]; then
-            # shellcheck disable=SC2086
-            set -- gcloud run deploy "$SERVICE" \
-              --project="$PROJECT" --region="$REGION" --image="$IMAGE" $EXTRA
+            args=(gcloud run deploy "$SERVICE"
+              --project="$PROJECT" --region="$REGION" --image="$IMAGE")
+            # Preferred: one flag per line — spaces within a line are preserved.
+            if [ -n "$DEPLOY_FLAGS" ]; then
+              while IFS= read -r flag; do
+                [ -z "$flag" ] && continue
+                args+=("$flag")
+              done <<< "$DEPLOY_FLAGS"
+            fi
+            # Legacy: single space-separated string. Intentional word-split; a space
+            # inside any value breaks — that's why deploy_flags exists.
+            if [ -n "$EXTRA" ]; then
+              # shellcheck disable=SC2206
+              args+=($EXTRA)
+            fi
+            set -- "${args[@]}"
           else
             echo "::error::deploy_mode must be 'update-image' or 'deploy' (got '$MODE')" >&2
             exit 1
