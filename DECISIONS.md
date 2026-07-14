@@ -1,5 +1,67 @@
 # Decisions — reusable-workflows
 
+## 2026-07-14 — quizzing-pro convergence: parity audit + `manage-config-secrets`
+
+**Problem.** Before migrating quizzing-pro (the smart-quiz candidate-assessment
+"hiring motion": `api`, `engine`, `admin-ui`, `ui`) off `zopsmart/workflows@main`
+onto `deploy-gke-service`, we evaluated the runtime saving. There is **none**.
+Read the live zopsmart internals (`_test-go`, `_build`, `docker-build-push`,
+`stage/prod-deploy`, and measured real Actions run durations):
+
+- **Test path caches identically.** zopsmart `_test-go` already does `setup-go
+  cache:true` + `actions/cache` for the linter and go-bin — same as JGD `ci-go`.
+  The 256–359s is inherent (`go test -count=1 -coverpkg=./...`), not the workflow.
+- **Build path is already optimized** (host `setup-go` build cache + `type=gha`
+  docker cache with per-service scope). The prod path is a **83s server-side
+  retag**, not a rebuild.
+
+So the convergence is a **risk play, not a speed play** — kill the mutable
+external `@main` (one bad commit red-lit 40 repos on 2026-06-26), stored-SA-key →
+WIF, SHA-pin. Runtime ≈ 0, and naïve mapping *regresses* it.
+
+**Regressions found in `deploy-gke-service` vs zopsmart `stage-deploy`, and the decisions:**
+
+1. **Per-service BuildKit cache scope (R3).** `deploy-gke-service` hardcoded
+   unscoped `cache-from/to type=gha`; in a matrix, legs evict each other
+   (mode=max is per-scope). zopsmart scopes by `svc_name`. **Fixed:** added a
+   `cache_scope` input (default `image_name`), wired into cache-from/to.
+   Backward-compatible; benefits every caller (incl. RevvUp).
+
+2. **In-docker build cache (R4).** zopsmart builds on the host (warm `setup-go`
+   cache) then a trivial `FROM alpine + COPY main`. `deploy-gke-service` compiles
+   *in* Docker, so parity requires multi-stage Dockerfiles with
+   `RUN --mount=type=cache` for go-build+mod. We **fix the caller convention**
+   (proper hermetic multi-stage) rather than teaching the reusable to mimic the
+   host-build+COPY shortcut. (Caller-side; per-repo in the migration PRs.)
+
+3. **Config/secret VALUES (R6/R2) — `manage-config-secrets.yml` (new).**
+   `deploy-gke-service` manages no config, and `DECISIONS.md` had deferred "config
+   on GKE." `sync-bundle-key` is **Cloud Run only**. Migrating as-is would silently
+   **drop config**. Decision: **harden the reusable set** with a dedicated
+   value-manager. It transforms a caller `dotenv` file into a ConfigMap
+   (`kubectl create … --dry-run=client -o yaml | apply` — escaping-safe, unlike
+   zopsmart's `cut`/`echo` YAML which corrupts values with `:`/quotes; supports a
+   `react-env-js` `window.env` target for the UIs) and materializes a **masked JSON
+   secret payload** into a selectable backend: `k8s` Opaque Secret, `gsm` (blob =
+   one secret / individual = one per key), and a reserved `eso` value.
+
+   - **Scope boundary (per user):** this workflow *only manages values*. **Pod
+     wiring** (GSM→pod via CSI/`SecretProviderClass` or ESO `ExternalSecret`) is a
+     **separate provisioning workflow** — logged in `TODO.md`. `eso` is the
+     reserved extension point; factored in, not built.
+   - **Secrets are never a git file** — masked JSON via `toJSON()` (the
+     `sync-bundle-key` pattern). Config *is* a git file (non-sensitive).
+
+4. **Per-service change-skip / env-only path (R1/R2).** zopsmart skips building
+   unchanged services and has an env-only→configmap fast path. Not yet ported;
+   caller `on.paths` is coarse for a single matrixed workflow. Tracked as
+   follow-up (a `watch_paths` gate on `deploy-gke-service`).
+
+**Runtime finding recorded so the next person doesn't re-justify on speed:** for
+these GKE monorepo callers, both libraries are performance peers. The win is
+supply-chain + auth, and the *risk* is losing zopsmart's change-detection/config
+handling — which is why we hardened the reusable set instead of a lift-and-shift.
+
 ## 2026-07-14 — Deploy-reusable gaps surfaced by the AutoMahn/Traide-Co caller migration (v1.5.0)
 
 **Problem.** Migrating all ~11 AutoMahn + Traide-Co caller repos onto the
