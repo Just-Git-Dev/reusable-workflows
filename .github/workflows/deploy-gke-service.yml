@@ -10,8 +10,9 @@
 #   helm             — `helm upgrade --install` with a chart + values.
 #
 # Monorepo change-detection / path-filtering stays in the caller's `on.paths`
-# (that is where it belongs — see the geo-engine callers). ConfigMap sync from
-# an env file is optional via `configmap_from_env_file`.
+# (that is where it belongs). Config is not managed here — use Secret-Manager
+# bundles (`sync-bundle-key`); a stage→prod promote (no rebuild) is
+# `promote-image`, and non-GCP / key-based clusters use `deploy-cluster-keyed`.
 name: deploy-gke-service
 
 on:

@@ -4,6 +4,14 @@
 # scripts, ephemeral-DB migration smokes, docker VCS-fallback builds) stay as
 # their own jobs in the caller — this workflow owns only the toolchain core, so
 # it stays adoptable everywhere. Each step is individually toggleable.
+#
+# Optional extras (match zopsmart/workflows test-and-lint so callers lose
+# nothing on migration):
+#   coverage_threshold — fail if total statement coverage is below this percent.
+#   enable_services    — run the test job with postgres + mysql + redis service
+#                        containers on localhost (5432 / 3306 / 6379) for
+#                        integration suites. When on, tests run in the `go-db`
+#                        job; build/vet/lint stay in the `go` job.
 name: ci-go
 
 on:
@@ -61,6 +69,55 @@ on:
         type: string
         required: false
         default: '-race -count=1 ./...'
+      coverage_threshold:
+        description: >-
+          Minimum total statement coverage percent. 0 disables the gate. When
+          non-zero, tests run with -coverprofile and the job fails below this.
+        type: number
+        required: false
+        default: 0
+      enable_services:
+        description: >-
+          Run tests in a job with postgres + mysql + redis service containers
+          (localhost 5432 / 3306 / 6379). Use for DB-backed integration suites.
+        type: boolean
+        required: false
+        default: false
+      postgres_image:
+        description: 'Postgres service image (enable_services only).'
+        type: string
+        required: false
+        default: 'postgres:16'
+      postgres_db:
+        description: 'POSTGRES_DB for the postgres service.'
+        type: string
+        required: false
+        default: 'test'
+      postgres_password:
+        description: 'POSTGRES_PASSWORD for the postgres service.'
+        type: string
+        required: false
+        default: 'postgres'
+      mysql_image:
+        description: 'MySQL service image (enable_services only).'
+        type: string
+        required: false
+        default: 'mysql:8'
+      mysql_database:
+        description: 'MYSQL_DATABASE for the mysql service.'
+        type: string
+        required: false
+        default: 'test'
+      mysql_root_password:
+        description: 'MYSQL_ROOT_PASSWORD for the mysql service.'
+        type: string
+        required: false
+        default: 'root'
+      redis_image:
+        description: 'Redis service image (enable_services only).'
+        type: string
+        required: false
+        default: 'redis:7'
       run_lint:
         description: 'Run golangci-lint.'
         type: boolean
@@ -90,8 +147,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # build · vet · lint always here; tests here too UNLESS enable_services routes
+  # them to the go-db job below (service containers cannot be attached
+  # conditionally to a single job, so the DB path is a second job).
   go:
-    name: build · vet · test · lint
+    name: build · vet${{ inputs.enable_services && '' || ' · test' }} · lint
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     defaults:
@@ -117,8 +177,23 @@ jobs:
         run: go vet ./...
 
       - name: go test
-        if: ${{ inputs.run_tests }}
-        run: go test ${{ inputs.test_args }}
+        if: ${{ inputs.run_tests && !inputs.enable_services }}
+        env:
+          TEST_ARGS: ${{ inputs.test_args }}
+          COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
+        run: |
+          # TEST_ARGS is deliberately unquoted — it carries multiple go-test args.
+          # shellcheck disable=SC2086
+          if [ "${COVERAGE_THRESHOLD}" != "0" ]; then
+            go test -coverprofile=coverage.out -covermode=atomic ${TEST_ARGS}
+            TOTAL=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+            echo "::notice::total coverage ${TOTAL}% (threshold ${COVERAGE_THRESHOLD}%)"
+            awk -v t="${TOTAL:-0}" -v thr="${COVERAGE_THRESHOLD}" \
+              'BEGIN { if (t+0 < thr+0) { exit 1 } }' \
+              || { echo "::error::coverage ${TOTAL}% is below threshold ${COVERAGE_THRESHOLD}%"; exit 1; }
+          else
+            go test ${TEST_ARGS}
+          fi
 
       - name: golangci-lint
         if: ${{ inputs.run_lint }}
@@ -128,3 +203,70 @@ jobs:
           version: ${{ inputs.golangci_version }}
           args: ${{ inputs.golangci_args }}
           working-directory: ${{ inputs.working_directory }}
+
+  # DB-backed tests. Only runs when enable_services=true. postgres/mysql/redis
+  # all start (GitHub cannot attach a service conditionally); a suite connects to
+  # whichever it needs on localhost. Override *_image to pin/skip-pull versions.
+  go-db:
+    name: test (postgres · mysql · redis)
+    if: ${{ inputs.run_tests && inputs.enable_services }}
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working_directory }}
+    services:
+      postgres:
+        image: ${{ inputs.postgres_image }}
+        env:
+          POSTGRES_DB: ${{ inputs.postgres_db }}
+          POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+      mysql:
+        image: ${{ inputs.mysql_image }}
+        env:
+          MYSQL_DATABASE: ${{ inputs.mysql_database }}
+          MYSQL_ROOT_PASSWORD: ${{ inputs.mysql_root_password }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: ${{ inputs.redis_image }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ inputs.go_version }}
+          go-version-file: ${{ inputs.go_version == '' && inputs.go_version_file || '' }}
+          cache: true
+
+      - name: go test (with services)
+        env:
+          TEST_ARGS: ${{ inputs.test_args }}
+          COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
+        run: |
+          # TEST_ARGS is deliberately unquoted — it carries multiple go-test args.
+          # shellcheck disable=SC2086
+          if [ "${COVERAGE_THRESHOLD}" != "0" ]; then
+            go test -coverprofile=coverage.out -covermode=atomic ${TEST_ARGS}
+            TOTAL=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+            echo "::notice::total coverage ${TOTAL}% (threshold ${COVERAGE_THRESHOLD}%)"
+            awk -v t="${TOTAL:-0}" -v thr="${COVERAGE_THRESHOLD}" \
+              'BEGIN { if (t+0 < thr+0) { exit 1 } }' \
+              || { echo "::error::coverage ${TOTAL}% is below threshold ${COVERAGE_THRESHOLD}%"; exit 1; }
+          else
+            go test ${TEST_ARGS}
+          fi

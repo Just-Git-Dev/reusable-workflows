@@ -30,12 +30,21 @@ GCP project id, region, service names, secret names, Cloudflare account and zone
 | `ci-node.yml` | Node/React CI core: install · lint · test · build, with setup-node caching | [docs](docs/ci-node.md) |
 | `deploy-cloud-run.yml` | Build → push (GAR, gha-cached) → roll a Cloud Run service (image-flip or full deploy) | [docs](docs/deploy-cloud-run.md) |
 | `deploy-gke-service.yml` | Build → push (GAR, gha-cached) → roll a GKE workload via kubectl/helm (keyless WIF) | [docs](docs/deploy-gke-service.md) |
+| `promote-image.yml` | Retag an existing image (no rebuild) → roll GKE or Cloud Run — stage→prod promotion (keyless WIF) | [docs](docs/promote-image.md) |
+| `deploy-cluster-keyed.yml` | Key-based, **multi-cloud** (GKE/EKS/AKS/kubeconfig) + **multi-registry** (GAR/ECR/ACR/GHCR/…) build → push → roll | [docs](docs/deploy-cluster-keyed.md) |
 
-> **Convergence audit (2026-07-14).** These four were added after a fleet-wide
-> survey of every workflow across all accessible orgs — see
-> [docs/convergence-audit.md](docs/convergence-audit.md) and the DECISIONS entry.
-> `deploy-gke-service` exists so platform app repos can drop their dependency on
-> the external `zopsmart/workflows@main`.
+> **Convergence audit (2026-07-14).** `ci-go`, `ci-node`, `deploy-cloud-run` and
+> `deploy-gke-service` were added after a fleet-wide survey of every workflow
+> across all accessible orgs — see [docs/convergence-audit.md](docs/convergence-audit.md)
+> and the DECISIONS entry. They exist so platform app repos can drop their
+> dependency on the external `zopsmart/workflows@main`.
+>
+> **Capability parity (2026-07-14).** After verifying the *live* `zopsmart/workflows`
+> callers, three genuinely-used capabilities were added: `promote-image`
+> (stage→prod retag, no rebuild), `deploy-cluster-keyed` (key-based multi-cloud +
+> multi-registry), and optional DB service containers + a coverage gate on
+> `ci-go`/`ci-node`. Multi-cloud/multi-registry with stored keys lives *only* in
+> `deploy-cluster-keyed`, keeping the WIF-native path keyless.
 
 ## Versioning — pin to a release tag
 
