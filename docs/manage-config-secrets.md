@@ -59,8 +59,9 @@ is set.
 
 | Name | Kind | Default | Notes |
 |---|---|---|---|
-| `wif_provider` | input (req) | — | WIF provider resource name (not a secret) |
-| `service_account` | input (req) | — | SA email to impersonate (not a secret) |
+| `wif_provider` | input | `''` | WIF provider resource name. Empty ⇒ stored-key auth |
+| `service_account` | input | `''` | SA email to impersonate (with `wif_provider`) |
+| `cluster_credentials` | secret | — | GCP SA-JSON key; **required when `wif_provider` is empty** (parity with `deploy-cluster-keyed` for callers not yet on WIF) |
 | `gcp_project` | input | `''` | project for `gsm`; empty ⇒ `cluster_project` |
 | `checkout_ref` | input | `''` | ref to check out for `config_file`; empty ⇒ caller ref |
 | `cluster_project` / `cluster_name` / `cluster_location` / `namespace` | input | `''` | **required** when writing a ConfigMap or a `k8s` Secret |
