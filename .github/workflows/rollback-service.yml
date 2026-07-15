@@ -1,23 +1,23 @@
-# Reusable image promote: retag an already-built image WITHOUT rebuilding, then
-# roll the target service onto it.
+# Reusable transient rollback: roll a running service back onto an ALREADY-BUILT,
+# previously-shipped image (by tag or digest) WITHOUT rebuilding or retagging.
 #
-# This is the Just-Git-Dev equivalent of `zopsmart/workflows` prod-deploy: a
-# stage pipeline builds & pushes  image:<sha>, and this workflow retags that
-# exact image  :<sha> -> :<release>  in Artifact Registry (server-side, via
-# `gcloud container images add-tag` — no pull/push of layers) and rolls prod.
-# Because nothing is rebuilt, prod is guaranteed to run the identical bytes that
-# stage tested.
+# This is the out-of-band "stop the bleeding" bridge described in
+# docs/release-process.md. It is deliberately SEPARATE from the forward-only,
+# immutable-tag promote flow (promote-image): a fast rollback is a temporary
+# BACKWARD artifact move, so mixing it into the forward promote path would corrupt
+# that invariant. The permanent fix is always `git revert` + a new linear tag
+# through promote-image; this workflow only buys time until that ships.
 #
-# Auth: keyless WIF (set wif_provider + service_account) is preferred. When
-# wif_provider is empty, falls back to KEY-BASED auth — the retag uses the
-# registry_credentials SA-key JSON and the roll uses the cluster_credentials
-# SA-key JSON (the interim path for callers not yet federated).
+# No pin/freeze is set: this stack is push-based (Cloud Run / GKE hold the image
+# they were rolled to — no reconciler re-derives "latest tag"), so nothing
+# autonomously clobbers a rollback. The only re-clobber risk is a human manually
+# re-promoting the bad tag mid-incident; guard that with artifact quarantine in
+# promote-image if ever needed (see TODO), not a blanket freeze here.
 #
-# Roll targets:
-#   none       — retag only (a later job/deploy consumes `outputs.image`).
-#   gke        — `kubectl set image` / `helm upgrade` onto the promoted tag.
-#   cloud-run  — `gcloud run services update --image` onto the promoted tag.
-name: promote-image
+# Auth mirrors promote-image: keyless WIF (wif_provider + service_account)
+# preferred; empty wif_provider ⇒ key-based (registry_credentials verifies the
+# image exists, cluster_credentials authenticates the roll).
+name: rollback-service
 
 on:
   workflow_call:
@@ -32,8 +32,7 @@ on:
       image_registry:
         description: >-
           Full Artifact Registry host (e.g. us-central1-docker.pkg.dev). Empty ⇒
-          derived as `<gcp_region>-docker.pkg.dev`. Set this to point at the exact
-          same host the stage build pushed to, decoupled from gcp_region.
+          derived as `<gcp_region>-docker.pkg.dev`.
         type: string
         required: false
         default: ''
@@ -49,30 +48,52 @@ on:
         description: 'Image name within the GAR repo (may contain slashes, e.g. staging/api).'
         type: string
         required: true
-      source_tag:
-        description: 'Existing tag to promote FROM (usually the stage commit SHA).'
-        type: string
-        required: true
-      target_tag:
-        description: 'Tag to promote TO. Empty ⇒ the triggering ref name (e.g. the pushed git tag).'
+      rollback_tag:
+        description: >-
+          Existing tag to roll the service back TO (e.g. a prior vX.Y.Z). Provide
+          exactly one of rollback_tag / rollback_digest.
         type: string
         required: false
         default: ''
-      require_semver:
-        description: 'Reject a target_tag that is not vX.Y.Z.'
+      rollback_digest:
+        description: >-
+          Existing digest to roll back TO (sha256:…). Immutable — the safest
+          rollback target. Provide exactly one of rollback_tag / rollback_digest.
+        type: string
+        required: false
+        default: ''
+      commit_sha:
+        description: >-
+          Source commit the rolled-to image was built from. Stamped onto the
+          service (Cloud Run label / GKE annotation) and recorded as the env's live
+          commit so forward-only stays accurate after the rollback. Strongly
+          recommended; empty ⇒ stamping/deployment-record are skipped.
+        type: string
+        required: false
+        default: ''
+      reason:
+        description: 'Free-text incident reference, recorded in the run summary and the GitHub Deployment.'
+        type: string
+        required: false
+        default: ''
+      environment:
+        description: 'Environment name for the GitHub Deployment record (e.g. production, staging).'
+        type: string
+        required: false
+        default: 'production'
+      record_github_deployment:
+        description: >-
+          Record a GitHub Deployment (+ success status) marking this environment's
+          live commit = commit_sha. Requires `deployments: write` on the caller and
+          a non-empty commit_sha.
         type: boolean
         required: false
         default: true
-      also_tag_latest:
-        description: 'Also move :latest onto the promoted image.'
-        type: boolean
-        required: false
-        default: false
       wif_provider:
         description: >-
           Workload Identity Federation provider resource name. Empty ⇒ KEY-BASED
-          auth: the retag uses the `registry_credentials` SA-key JSON secret and
-          the roll uses the `cluster_credentials` SA-key JSON secret.
+          auth: image verification uses `registry_credentials`, the roll uses
+          `cluster_credentials`.
         type: string
         required: false
         default: ''
@@ -82,10 +103,9 @@ on:
         required: false
         default: ''
       deploy_target:
-        description: 'none | gke | cloud-run — what to roll after retagging.'
+        description: 'gke | cloud-run — what to roll. (No "none": a rollback must roll something.)'
         type: string
-        required: false
-        default: 'none'
+        required: true
       # --- gke roll (deploy_target=gke) ---
       cluster_project:
         description: 'GCP project owning the GKE cluster.'
@@ -163,66 +183,33 @@ on:
         type: string
         required: false
         default: ''
-      commit_sha:
-        description: >-
-          Source commit of the promoted image, stamped onto the service (Cloud Run
-          label / GKE annotation) and recorded as this env's live commit so
-          forward-only stays accurate. Empty ⇒ falls back to the triggering commit
-          (github.sha), which for a tag-triggered promote is the released commit.
-        type: string
-        required: false
-        default: ''
-      environment:
-        description: >-
-          Environment name (e.g. production). When set, records a GitHub Deployment
-          marking this env's live commit. Empty ⇒ no Deployment record (the service
-          label/annotation is still stamped).
-        type: string
-        required: false
-        default: ''
-      record_github_deployment:
-        description: 'Record a GitHub Deployment (needs `environment` set + `deployments: write`).'
-        type: boolean
-        required: false
-        default: true
-      enforce_forward_only:
-        description: >-
-          Reject a promotion whose commit is BEHIND the environment's current live
-          commit (an out-of-order / older release). Reads the live commit from the
-          latest successful GitHub Deployment for `environment`, compares via the
-          GitHub compare API, and blocks only when the candidate is strictly behind
-          ("block iff behind" — allows ahead/diverged/identical). Requires
-          `environment`. Opt-in (default off) — these workflows run in others' prod.
-        type: boolean
-        required: false
-        default: false
       timeout_minutes:
         description: 'Job timeout.'
         type: number
         required: false
         default: 15
       dry_run:
-        description: 'Print the retag + roll commands without executing them.'
+        description: 'Print the roll commands without executing them.'
         type: boolean
         required: false
         default: false
     secrets:
       registry_credentials:
         description: >-
-          GCP SA-key JSON used to authenticate the server-side retag
-          (`gcloud container images add-tag`). Required when `wif_provider` is
-          empty (key-based auth); ignored on the WIF path.
+          GCP SA-key JSON used to verify the rollback image exists
+          (`gcloud container images describe`). Required when `wif_provider` is
+          empty; ignored on the WIF path.
         required: false
       cluster_credentials:
         description: >-
           GCP SA-key JSON used to authenticate the roll (GKE/Cloud Run). Required
-          when `wif_provider` is empty and `deploy_target` != none; ignored on the
-          WIF path. May be the same key as `registry_credentials`.
+          when `wif_provider` is empty; ignored on the WIF path. May equal
+          `registry_credentials`.
         required: false
     outputs:
       image:
-        description: 'Fully-qualified promoted image reference (…:<target_tag>).'
-        value: ${{ jobs.promote.outputs.image }}
+        description: 'Fully-qualified image the service was rolled back onto.'
+        value: ${{ jobs.rollback.outputs.image }}
 
 permissions:
   contents: read
@@ -230,16 +217,14 @@ permissions:
   deployments: write
 
 concurrency:
-  # Per-environment when `environment` is set — same key scheme as rollback-service,
-  # so a promote and a rollback for one env are mutually exclusive. Falls back to
-  # the legacy per-target_tag key for callers not using `environment` (unchanged
-  # behaviour for them).
-  group: deploy-${{ inputs.gar_project }}-${{ inputs.image_name }}-${{ inputs.environment != '' && inputs.environment || inputs.target_tag }}
+  # Serialize with normal promotes AND other rollbacks for the same target so the
+  # last write wins deterministically.
+  group: deploy-${{ inputs.gar_project }}-${{ inputs.image_name }}-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
-  promote:
-    name: retag${{ inputs.deploy_target != 'none' && format(' · roll {0}', inputs.deploy_target) || '' }}
+  rollback:
+    name: rollback · roll ${{ inputs.deploy_target }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
     outputs:
@@ -248,7 +233,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Resolve + validate tags
+      - name: Resolve rollback target
         id: ref
         env:
           REGION: ${{ inputs.gcp_region }}
@@ -256,98 +241,55 @@ jobs:
           GAR_PROJECT: ${{ inputs.gar_project }}
           GAR_REPO: ${{ inputs.gar_repo }}
           IMAGE_NAME: ${{ inputs.image_name }}
-          SOURCE_TAG: ${{ inputs.source_tag }}
-          IN_TARGET: ${{ inputs.target_tag }}
-          REQUIRE_SEMVER: ${{ inputs.require_semver }}
+          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
+          ROLLBACK_DIGEST: ${{ inputs.rollback_digest }}
+          DEPLOY_TARGET: ${{ inputs.deploy_target }}
         run: |
+          case "$DEPLOY_TARGET" in
+            gke|cloud-run) ;;
+            *) echo "::error::deploy_target must be 'gke' or 'cloud-run' (got '$DEPLOY_TARGET')." >&2; exit 1 ;;
+          esac
+
+          if [ -n "$ROLLBACK_TAG" ] && [ -n "$ROLLBACK_DIGEST" ]; then
+            echo "::error::provide exactly one of rollback_tag / rollback_digest, not both." >&2
+            exit 1
+          fi
+          if [ -z "$ROLLBACK_TAG" ] && [ -z "$ROLLBACK_DIGEST" ]; then
+            echo "::error::provide one of rollback_tag / rollback_digest — nothing to roll back to." >&2
+            exit 1
+          fi
+
           HOST="${IN_REGISTRY:-${REGION}-docker.pkg.dev}"
           BASE="${HOST}/${GAR_PROJECT}/${GAR_REPO}/${IMAGE_NAME}"
-          TARGET="${IN_TARGET:-$GITHUB_REF_NAME}"
-
-          if [ -z "$SOURCE_TAG" ]; then
-            echo "::error::source_tag is empty — nothing to promote from." >&2
-            exit 1
-          fi
-          if [ -z "$TARGET" ]; then
-            echo "::error::target_tag is empty and no ref name is available." >&2
-            exit 1
-          fi
-          if [ "$REQUIRE_SEMVER" = "true" ] && ! printf '%s' "$TARGET" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::target_tag '$TARGET' is not vX.Y.Z (set require_semver: false to allow)." >&2
-            exit 1
+          if [ -n "$ROLLBACK_DIGEST" ]; then
+            IMAGE="${BASE}@${ROLLBACK_DIGEST}"
+            RELEASE_LABEL="$ROLLBACK_DIGEST"
+          else
+            IMAGE="${BASE}:${ROLLBACK_TAG}"
+            RELEASE_LABEL="$ROLLBACK_TAG"
           fi
 
           {
-            echo "base=$BASE"
-            echo "source=${BASE}:${SOURCE_TAG}"
-            echo "image=${BASE}:${TARGET}"
-            echo "target_tag=$TARGET"
+            echo "image=$IMAGE"
+            echo "release_label=$RELEASE_LABEL"
           } >> "$GITHUB_OUTPUT"
-
-      # Forward-only: reject an out-of-order (older) release before any mutation.
-      # Uses github.token only (no cloud auth), so it runs first and fails fast.
-      - name: Forward-only guard
-        if: ${{ inputs.enforce_forward_only }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          ENVIRONMENT: ${{ inputs.environment }}
-          HEAD: ${{ inputs.commit_sha != '' && inputs.commit_sha || github.sha }}
-        run: |
-          if [ -z "$ENVIRONMENT" ]; then
-            echo "::error::enforce_forward_only requires 'environment' (to read the live commit)." >&2
-            exit 1
-          fi
-          # Live baseline = sha of the most recent SUCCESSFUL deployment for the env
-          # (deployment ids are monotonic, so sort desc for newest-first).
-          BASE=""
-          for id in $(gh api "repos/${REPO}/deployments?environment=${ENVIRONMENT}&per_page=30" \
-                        --jq 'sort_by(.id) | reverse | .[].id' 2>/dev/null); do
-            state="$(gh api "repos/${REPO}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // ""' 2>/dev/null || echo '')"
-            if [ "$state" = "success" ]; then
-              BASE="$(gh api "repos/${REPO}/deployments/${id}" --jq '.sha' 2>/dev/null || echo '')"
-              break
-            fi
-          done
-          if [ -z "$BASE" ]; then
-            echo "::notice::forward-only: no prior successful deployment for '${ENVIRONMENT}' — allowing (no baseline)."
-            exit 0
-          fi
-          if [ "$BASE" = "$HEAD" ]; then
-            echo "::notice::forward-only: candidate equals live (${HEAD}) — no-op, allowed."
-            exit 0
-          fi
-          # compare BASE...HEAD: 'behind' ⇒ HEAD is an ancestor of BASE ⇒ out-of-order.
-          STATUS="$(gh api "repos/${REPO}/compare/${BASE}...${HEAD}" --jq '.status' 2>/dev/null || echo 'ERROR')"
-          case "$STATUS" in
-            behind)
-              echo "::error::forward-only: candidate ${HEAD} is BEHIND live ${BASE} for '${ENVIRONMENT}' — refusing out-of-order release." >&2
-              exit 1 ;;
-            ahead|identical|diverged)
-              echo "::notice::forward-only OK: ${HEAD} is '${STATUS}' relative to live ${BASE}." ;;
-            *)
-              # Fail closed: a safety guard must not wave a release through on an API error.
-              echo "::error::forward-only: could not compare ${BASE}...${HEAD} (compare API error/unknown commit). Refusing; re-run, or set enforce_forward_only:false to override." >&2
-              exit 1 ;;
-          esac
 
       - name: Validate key-based credentials
         if: ${{ inputs.wif_provider == '' }}
         env:
           REG_CREDS: ${{ secrets.registry_credentials }}
           CLUSTER_CREDS: ${{ secrets.cluster_credentials }}
-          DEPLOY_TARGET: ${{ inputs.deploy_target }}
         run: |
           if [ -z "$REG_CREDS" ]; then
-            echo "::error::wif_provider is empty (key-based auth) but the registry_credentials secret is empty." >&2
+            echo "::error::wif_provider is empty (key-based auth) but registry_credentials is empty." >&2
             exit 1
           fi
-          if [ "$DEPLOY_TARGET" != "none" ] && [ -z "$CLUSTER_CREDS" ]; then
-            echo "::error::wif_provider is empty and deploy_target=$DEPLOY_TARGET but the cluster_credentials secret is empty." >&2
+          if [ -z "$CLUSTER_CREDS" ]; then
+            echo "::error::wif_provider is empty (key-based auth) but cluster_credentials is empty." >&2
             exit 1
           fi
 
-      # WIF path: one auth sets ADC for both the retag and the roll.
+      # WIF path: one auth sets ADC for both the image check and the roll.
       - name: Authenticate to GCP via WIF
         if: ${{ inputs.wif_provider != '' }}
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -355,8 +297,7 @@ jobs:
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account: ${{ inputs.service_account }}
 
-      # Key path: activate the registry SA on the CLI so `add-tag` can read/write
-      # the Artifact Registry repo. The roll re-auths with the cluster SA below.
+      # Key path: activate the registry SA so the describe below can read GAR.
       - name: Authenticate to GAR (key-based)
         if: ${{ inputs.wif_provider == '' }}
         env:
@@ -368,34 +309,18 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Retag (server-side, no rebuild)
+      - name: Verify rollback image exists
         env:
-          BASE: ${{ steps.ref.outputs.base }}
-          SOURCE: ${{ steps.ref.outputs.source }}
-          TARGET_TAG: ${{ steps.ref.outputs.target_tag }}
-          ALSO_LATEST: ${{ inputs.also_tag_latest }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          IMAGE: ${{ steps.ref.outputs.image }}
         run: |
-          # Verify the source image exists before promoting.
-          if ! gcloud container images describe "$SOURCE" >/dev/null 2>&1; then
-            echo "::error::source image not found: $SOURCE" >&2
+          if ! gcloud container images describe "$IMAGE" >/dev/null 2>&1; then
+            echo "::error::rollback image not found in registry: $IMAGE" >&2
+            echo "::error::refusing to roll a service onto an image that does not exist." >&2
             exit 1
           fi
-
-          DESTS=("${BASE}:${TARGET_TAG}")
-          [ "$ALSO_LATEST" = "true" ] && DESTS+=("${BASE}:latest")
-
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "DRY RUN — would run:"
-            echo "  gcloud container images add-tag --quiet $SOURCE ${DESTS[*]}"
-            exit 0
-          fi
-          gcloud container images add-tag --quiet "$SOURCE" "${DESTS[@]}"
-          echo "::notice::Promoted $SOURCE -> ${DESTS[*]}"
+          echo "::notice::rollback target verified: $IMAGE"
 
       # ---------- GKE roll ----------
-      # Key path: re-auth with the cluster SA (may differ from the registry SA)
-      # so get-gke-credentials builds ADC from the right key.
       - name: Authenticate to GKE cluster (key-based)
         if: ${{ inputs.deploy_target == 'gke' && inputs.wif_provider == '' }}
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -422,7 +347,7 @@ jobs:
           NS: ${{ inputs.namespace }}
           WORKLOAD_TYPE: ${{ inputs.workload_type }}
           APP_VERSION: ${{ inputs.app_version }}
-          COMMIT: ${{ inputs.commit_sha != '' && inputs.commit_sha || github.sha }}
+          COMMIT: ${{ inputs.commit_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           case "$WORKLOAD_TYPE" in
@@ -433,7 +358,7 @@ jobs:
           DR=()
           [ "$DRY_RUN" = "true" ] && DR=(--dry-run=client)
           kubectl set image "${KIND}/${SVC}" "${SVC}=${IMAGE}" --namespace "$NS" "${DR[@]}"
-          # Stamp the live commit so forward-only can read it back.
+          # Stamp the live commit so forward-only stays accurate after the rollback.
           if [ -n "$COMMIT" ]; then
             kubectl annotate "${KIND}/${SVC}" "jgd.dev/commit=${COMMIT}" --overwrite --namespace "$NS" "${DR[@]}"
           fi
@@ -464,7 +389,6 @@ jobs:
           "$@" $EXTRA
 
       # ---------- Cloud Run roll ----------
-      # Key path: activate the cluster SA on the CLI so `run services update` uses it.
       - name: Authenticate to Cloud Run (key-based)
         if: ${{ inputs.deploy_target == 'cloud-run' && inputs.wif_provider == '' }}
         env:
@@ -481,7 +405,7 @@ jobs:
           RUN_PROJECT: ${{ inputs.run_project != '' && inputs.run_project || inputs.gar_project }}
           RUN_REGION: ${{ inputs.run_region != '' && inputs.run_region || inputs.gcp_region }}
           RUN_SERVICE: ${{ inputs.run_service }}
-          COMMIT: ${{ inputs.commit_sha != '' && inputs.commit_sha || github.sha }}
+          COMMIT: ${{ inputs.commit_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           if [ -z "$RUN_SERVICE" ]; then
@@ -492,7 +416,9 @@ jobs:
             --project "$RUN_PROJECT" --region "$RUN_REGION" \
             --image "$IMAGE" --quiet
           # Stamp the live commit (Cloud Run label; keys are slash-free).
-          [ -n "$COMMIT" ] && set -- "$@" --update-labels "jgd_commit=${COMMIT}"
+          if [ -n "$COMMIT" ]; then
+            set -- "$@" --update-labels "jgd_commit=${COMMIT}"
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             printf 'DRY RUN — would run:'; printf ' %q' "$@"; printf '\n'
             exit 0
@@ -500,27 +426,30 @@ jobs:
           "$@"
 
       - name: Record GitHub Deployment (live-commit marker)
-        if: ${{ inputs.environment != '' && inputs.record_github_deployment && inputs.deploy_target != 'none' && !inputs.dry_run }}
+        if: ${{ inputs.record_github_deployment && inputs.environment != '' && inputs.commit_sha != '' && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          COMMIT: ${{ inputs.commit_sha != '' && inputs.commit_sha || github.sha }}
+          COMMIT: ${{ inputs.commit_sha }}
           ENVIRONMENT: ${{ inputs.environment }}
           IMAGE: ${{ steps.ref.outputs.image }}
+          REASON: ${{ inputs.reason }}
         run: |
           # Best-effort audit record: the roll already happened, so a Deployments
-          # API hiccup must NOT fail the job. Warn and move on.
-          [ -z "$COMMIT" ] && { echo "::warning::no commit resolved; skipping Deployment record." >&2; exit 0; }
+          # API hiccup must NOT fail the rollback. Warn and move on.
+          DESC="rollback to ${IMAGE}${REASON:+ — ${REASON}}"
+          # required_contexts:[] forces creation regardless of the old commit's
+          # status checks. Build the body with jq so DESC is safely escaped.
           BODY="$(jq -nc \
-            --arg ref "$COMMIT" --arg env "$ENVIRONMENT" --arg desc "promote ${IMAGE}" \
+            --arg ref "$COMMIT" --arg env "$ENVIRONMENT" --arg desc "$DESC" \
             '{ref:$ref, environment:$env, description:$desc, auto_merge:false, required_contexts:[]}')"
           DEP_ID="$(printf '%s' "$BODY" | gh api "repos/${REPO}/deployments" --input - --jq '.id' 2>/dev/null || true)"
           if [ -z "$DEP_ID" ] || [ "$DEP_ID" = "null" ]; then
-            echo "::warning::could not create GitHub Deployment (missing deployments: write, or API conflict); service label/annotation still stamped." >&2
+            echo "::warning::could not create GitHub Deployment (missing deployments: write, or API conflict); live-commit still stamped on the service." >&2
             exit 0
           fi
           gh api "repos/${REPO}/deployments/${DEP_ID}/statuses" \
-            -f state=success -f environment="$ENVIRONMENT" -f description="promote ${IMAGE}" >/dev/null 2>&1 \
+            -f state=success -f environment="$ENVIRONMENT" -f description="$DESC" >/dev/null 2>&1 \
             || echo "::warning::deployment #${DEP_ID} created but status update failed." >&2
           echo "::notice::recorded GitHub Deployment #${DEP_ID} (${ENVIRONMENT} @ ${COMMIT})"
 
@@ -528,14 +457,21 @@ jobs:
         if: ${{ always() }}
         env:
           IMAGE: ${{ steps.ref.outputs.image }}
-          SOURCE: ${{ steps.ref.outputs.source }}
           TARGET_DESC: ${{ inputs.deploy_target }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          COMMIT: ${{ inputs.commit_sha }}
+          REASON: ${{ inputs.reason }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           {
-            echo "## Promote image"
+            echo "## Rollback"
             echo ""
-            echo "- From: \`${SOURCE}\`"
-            echo "- To:   \`${IMAGE}\`${DRY_RUN:+ (dry run)}"
-            echo "- Roll: \`${TARGET_DESC}\`"
+            echo "- Environment: \`${ENVIRONMENT}\`"
+            echo "- Rolled onto: \`${IMAGE}\`${DRY_RUN:+ (dry run)}"
+            echo "- Roll target: \`${TARGET_DESC}\`"
+            echo "- Live commit: \`${COMMIT:-unknown (not stamped)}\`"
+            echo "- Reason:      ${REASON:-—}"
+            echo ""
+            echo "> Transient bridge. Follow up with \`git revert\` + a new linear tag"
+            echo "> through \`promote-image\` for the permanent, forward-only fix."
           } >> "$GITHUB_STEP_SUMMARY"

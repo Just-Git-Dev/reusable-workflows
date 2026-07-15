@@ -31,9 +31,15 @@ only the universal core so it stays adoptable everywhere.
 | `golangci_version` | `latest` | linter version — tracks latest by default, override e.g. `v2.5` (v9 action ⇒ golangci-lint v2 config) |
 | `golangci_args` | `--timeout=5m` | passed to golangci-lint |
 | `lint_blocking` | `true` | `false` = report lint failures without failing the job (paydown mode) |
-| `go_private` | `''` | GOPRIVATE glob (e.g. `github.com/zopsmart/*`); when set, git fetches private modules over HTTPS using the `github_token` **secret** (required then) |
+| `go_private` | `''` | GOPRIVATE glob (e.g. `github.com/zopsmart/*`); when set, git fetches private modules over HTTPS using the `go_private_token` **secret** (required then) |
 
-No secrets — public/read-only CI.
+**Secrets:** only `go_private_token` — a PAT/token for fetching private Go modules,
+required when `go_private` is set (otherwise none; public CI needs no secrets). It is
+**not** named `github_token`: GitHub reserves `github_token`/`GITHUB_TOKEN` as a
+`workflow_call` secret name and rejects the workflow at parse time
+("would collide with system reserved name"). Pass it from the caller as
+`secrets: { go_private_token: ${{ secrets.GITHUB_TOKEN }} }` (or a PAT with cross-repo
+read).
 
 **Service containers are language-agnostic** — the same `enable_services` inputs
 exist on [`ci-node`](ci-node.md). When `enable_services: true`, all three

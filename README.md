@@ -29,6 +29,7 @@ lands everywhere.
 | [`deploy-cloud-run.yml`](docs/deploy-cloud-run.md) | Build → push (GAR, gha-cached) → roll a **Cloud Run** service (image-flip or full deploy), keyless WIF |
 | [`deploy-gke-service.yml`](docs/deploy-gke-service.md) | Build → push (GAR, gha-cached) → roll a **GKE** workload via kubectl/helm, keyless WIF |
 | [`promote-image.yml`](docs/promote-image.md) | Retag an existing image (**no rebuild**) → roll GKE or Cloud Run — stage→prod promotion, keyless WIF |
+| [`rollback-service.yml`](docs/rollback-service.md) | Roll a service **back** onto a prior image (by tag/digest, **no rebuild/retag**) — out-of-band incident bridge, stamps the live commit |
 | [`deploy-cluster-keyed.yml`](docs/deploy-cluster-keyed.md) | **Key-based** deploy: **multi-cloud** (GKE/EKS/AKS/kubeconfig) + **multi-registry** (GAR/ECR/ACR/GHCR/DockerHub/…) build → push → roll |
 
 ### Secrets & rotation
@@ -51,9 +52,12 @@ lands everywhere.
 | [`deploy-cloudflare-pages.yml`](docs/deploy-cloudflare-pages.md) | Build a static site and deploy it to Cloudflare Pages |
 
 Each workflow has a `docs/<name>.md` page with its full input/secret contract and
-copy-paste caller examples. Background on why the CI/deploy set exists (and how it
-replaces the external `zopsmart/workflows`) is in
-[docs/convergence-audit.md](docs/convergence-audit.md) and [DECISIONS.md](DECISIONS.md).
+copy-paste caller examples. The **release model** these deploy/promote workflows
+serve — trunk-based, build-once, promote-by-retag, forward-only, and how rollback is
+fenced out-of-band — is in [docs/release-process.md](docs/release-process.md).
+Background on why the CI/deploy set exists (and how it replaces the external
+`zopsmart/workflows`) is in [docs/convergence-audit.md](docs/convergence-audit.md)
+and [DECISIONS.md](DECISIONS.md).
 
 ## Usage
 

@@ -117,6 +117,23 @@ GKE has no native secret-mount, so a bundle needs a mechanism in-cluster
 (External Secrets Operator, or an initContainer that pulls the secret). Plan
 that per service; it does not need a new reusable.
 
+## Live-commit stamping
+
+The kubectl path stamps the built commit onto the workload as an annotation
+`jgd.dev/commit=<sha>`, so the [forward-only](release-process.md) check can read
+back "what is live". Set `environment` (e.g. `staging`) to also record a **GitHub
+Deployment** on that commit (best-effort; needs `deployments: write`, opt out with
+`record_github_deployment: false`). Helm-managed workloads get the Deployment record
+but not the annotation (bake a `jgd.dev/commit` label into the chart if you need it
+on the resource). Callers that set no `environment` are unaffected.
+
+Set `enforce_forward_only: true` (with `environment`) to **reject an out-of-order
+deploy** — a commit older than what's already live. The guard runs *before the
+build*, reads the live commit from the env's latest successful GitHub Deployment, and
+blocks only when the candidate is `behind` (`ahead`/`identical`/`diverged` pass, so a
+stage lineage switch is allowed); it fails closed on a compare-API error. Same guard
+as [`promote-image`](promote-image.md#forward-only-opt-in).
+
 ## Concurrency
 
 Keyed on `<cluster>-<namespace>-<svc>` with `cancel-in-progress: false`.
