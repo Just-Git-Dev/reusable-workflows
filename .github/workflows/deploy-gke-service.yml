@@ -142,6 +142,32 @@ on:
         type: boolean
         required: false
         default: false
+      environment:
+        description: >-
+          Environment name (e.g. staging, production). When set, records a GitHub
+          Deployment marking this env's live commit — the git-native half of the
+          live-commit record that forward-only reads back. Empty ⇒ no Deployment
+          record (the workload annotation is still stamped on the kubectl path).
+        type: string
+        required: false
+        default: ''
+      record_github_deployment:
+        description: 'Record a GitHub Deployment (needs `environment` set + `deployments: write`).'
+        type: boolean
+        required: false
+        default: true
+      enforce_forward_only:
+        description: >-
+          Reject a deploy whose commit is BEHIND this environment's current live
+          commit (an out-of-order / older deploy). Reads the live commit from the
+          latest successful GitHub Deployment for `environment`, compares via the
+          GitHub compare API, blocks only when strictly behind ("block iff behind" —
+          allows ahead/diverged/identical, so a stage lineage switch passes).
+          Requires `environment`. Opt-in (default off). Runs before the build, so a
+          blocked deploy wastes no build.
+        type: boolean
+        required: false
+        default: false
     secrets:
       build_secrets:
         description: >-
@@ -158,6 +184,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  deployments: write
 
 concurrency:
   group: deploy-gke-${{ inputs.cluster_name }}-${{ inputs.namespace }}-${{ inputs.svc_name }}
@@ -187,6 +214,59 @@ jobs:
           echo "image=${REGION}-docker.pkg.dev/${GAR_PROJECT}/${GAR_REPO}/${IMAGE_NAME}:${TAG}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Resolve built commit
+        id: commit
+        # The exact commit built — stamped onto the workload so forward-only can
+        # read back "what is live" for this environment.
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Forward-only: reject an out-of-order (older) deploy before the build.
+      # Uses github.token only (no cloud auth), so it runs early and fails fast.
+      - name: Forward-only guard
+        if: ${{ inputs.enforce_forward_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          HEAD: ${{ steps.commit.outputs.sha }}
+        run: |
+          if [ -z "$ENVIRONMENT" ]; then
+            echo "::error::enforce_forward_only requires 'environment' (to read the live commit)." >&2
+            exit 1
+          fi
+          # Live baseline = sha of the most recent SUCCESSFUL deployment for the env
+          # (deployment ids are monotonic, so sort desc for newest-first).
+          BASE=""
+          for id in $(gh api "repos/${REPO}/deployments?environment=${ENVIRONMENT}&per_page=30" \
+                        --jq 'sort_by(.id) | reverse | .[].id' 2>/dev/null); do
+            state="$(gh api "repos/${REPO}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // ""' 2>/dev/null || echo '')"
+            if [ "$state" = "success" ]; then
+              BASE="$(gh api "repos/${REPO}/deployments/${id}" --jq '.sha' 2>/dev/null || echo '')"
+              break
+            fi
+          done
+          if [ -z "$BASE" ]; then
+            echo "::notice::forward-only: no prior successful deployment for '${ENVIRONMENT}' — allowing (no baseline)."
+            exit 0
+          fi
+          if [ "$BASE" = "$HEAD" ]; then
+            echo "::notice::forward-only: candidate equals live (${HEAD}) — no-op, allowed."
+            exit 0
+          fi
+          # compare BASE...HEAD: 'behind' ⇒ HEAD is an ancestor of BASE ⇒ out-of-order.
+          STATUS="$(gh api "repos/${REPO}/compare/${BASE}...${HEAD}" --jq '.status' 2>/dev/null || echo 'ERROR')"
+          case "$STATUS" in
+            behind)
+              echo "::error::forward-only: candidate ${HEAD} is BEHIND live ${BASE} for '${ENVIRONMENT}' — refusing out-of-order deploy." >&2
+              exit 1 ;;
+            ahead|identical|diverged)
+              echo "::notice::forward-only OK: ${HEAD} is '${STATUS}' relative to live ${BASE}." ;;
+            *)
+              # Fail closed: a safety guard must not wave a deploy through on an API error.
+              echo "::error::forward-only: could not compare ${BASE}...${HEAD} (compare API error/unknown commit). Refusing; re-run, or set enforce_forward_only:false to override." >&2
+              exit 1 ;;
+          esac
 
       - name: Authenticate to GCP via WIF
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -243,6 +323,7 @@ jobs:
           NS: ${{ inputs.namespace }}
           WORKLOAD_TYPE: ${{ inputs.workload_type }}
           APP_VERSION: ${{ inputs.app_version }}
+          COMMIT: ${{ steps.commit.outputs.sha }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
@@ -254,6 +335,10 @@ jobs:
           DR=()
           [ "$DRY_RUN" = "true" ] && DR=(--dry-run=client)
           kubectl set image "${KIND}/${SVC}" "${SVC}=${IMAGE}" --namespace "$NS" "${DR[@]}"
+          # Stamp the live commit so forward-only can read it back.
+          if [ -n "$COMMIT" ]; then
+            kubectl annotate "${KIND}/${SVC}" "jgd.dev/commit=${COMMIT}" --overwrite --namespace "$NS" "${DR[@]}"
+          fi
           if [ -n "$APP_VERSION" ] && [ "$KIND" = "deployment" ]; then
             kubectl set env "deployment/${SVC}" "APP_VERSION=${APP_VERSION}" --namespace "$NS" "${DR[@]}"
           fi
@@ -280,6 +365,31 @@ jobs:
           [ "$DRY_RUN" = "true" ] && set -- "$@" --dry-run
           # shellcheck disable=SC2086
           "$@" $EXTRA
+
+      - name: Record GitHub Deployment (live-commit marker)
+        if: ${{ inputs.environment != '' && inputs.record_github_deployment && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMIT: ${{ steps.commit.outputs.sha }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          # Best-effort audit record: the roll already happened, so a Deployments
+          # API hiccup must NOT fail the job. Warn and move on.
+          [ -z "$COMMIT" ] && { echo "::warning::no commit resolved; skipping Deployment record." >&2; exit 0; }
+          BODY="$(jq -nc \
+            --arg ref "$COMMIT" --arg env "$ENVIRONMENT" --arg desc "deploy ${IMAGE}" \
+            '{ref:$ref, environment:$env, description:$desc, auto_merge:false, required_contexts:[]}')"
+          DEP_ID="$(printf '%s' "$BODY" | gh api "repos/${REPO}/deployments" --input - --jq '.id' 2>/dev/null || true)"
+          if [ -z "$DEP_ID" ] || [ "$DEP_ID" = "null" ]; then
+            echo "::warning::could not create GitHub Deployment (missing deployments: write, or API conflict); workload annotation still stamped." >&2
+            exit 0
+          fi
+          gh api "repos/${REPO}/deployments/${DEP_ID}/statuses" \
+            -f state=success -f environment="$ENVIRONMENT" -f description="deploy ${IMAGE}" >/dev/null 2>&1 \
+            || echo "::warning::deployment #${DEP_ID} created but status update failed." >&2
+          echo "::notice::recorded GitHub Deployment #${DEP_ID} (${ENVIRONMENT} @ ${COMMIT})"
 
       - name: Summary
         if: ${{ always() }}

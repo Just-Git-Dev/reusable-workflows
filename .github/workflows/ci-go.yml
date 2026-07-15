@@ -140,13 +140,16 @@ on:
         default: true
       go_private:
         description: 'GOPRIVATE glob for private modules (e.g. github.com/zopsmart/*). When set,
-          git is configured to fetch over HTTPS with the github_token secret. Empty ⇒ off.'
+          git is configured to fetch over HTTPS with the go_private_token secret. Empty ⇒ off.'
         type: string
         required: false
         default: ''
 
     secrets:
-      github_token:
+      # NOTE: must NOT be named github_token / GITHUB_TOKEN — GitHub reserves those
+      # as a system secret name inside workflow_call and rejects the workflow at parse
+      # time ("would collide with system reserved name").
+      go_private_token:
         description: 'Token for fetching private Go modules. Required when go_private is set.'
         required: false
 
@@ -182,11 +185,11 @@ jobs:
       - name: Configure private module access
         if: ${{ inputs.go_private != '' }}
         env:
-          GH_TOKEN: ${{ secrets.github_token }}
+          GH_TOKEN: ${{ secrets.go_private_token }}
           GO_PRIVATE: ${{ inputs.go_private }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::go_private is set but the github_token secret is empty."; exit 1
+            echo "::error::go_private is set but the go_private_token secret is empty."; exit 1
           fi
           git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
           echo "GOPRIVATE=${GO_PRIVATE}" >> "$GITHUB_ENV"
@@ -279,11 +282,11 @@ jobs:
       - name: Configure private module access
         if: ${{ inputs.go_private != '' }}
         env:
-          GH_TOKEN: ${{ secrets.github_token }}
+          GH_TOKEN: ${{ secrets.go_private_token }}
           GO_PRIVATE: ${{ inputs.go_private }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::go_private is set but the github_token secret is empty."; exit 1
+            echo "::error::go_private is set but the go_private_token secret is empty."; exit 1
           fi
           git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
           echo "GOPRIVATE=${GO_PRIVATE}" >> "$GITHUB_ENV"

@@ -116,6 +116,24 @@ the image is tagged independently:
       require_semver: false                 # 0.1.8 is not vX.Y.Z
 ```
 
+## Live-commit stamping
+
+Every deploy stamps the built commit onto the service as a Cloud Run resource label
+`jgd_commit=<sha>`, so the [forward-only](release-process.md) check can read back
+"what is live" for this environment. Additionally, set `environment` (e.g.
+`staging`) to also record a **GitHub Deployment** on that commit — the git-native
+half of the record (best-effort; needs `deployments: write`, opt out with
+`record_github_deployment: false`). Existing callers that set no `environment` are
+unaffected — only the label is added.
+
+Set `enforce_forward_only: true` (with `environment`) to **reject an out-of-order
+deploy** — a commit older than what's already live in this environment. The guard
+runs *before the build* (so a blocked deploy wastes no build), reads the live commit
+from the env's latest successful GitHub Deployment, and blocks only when the
+candidate is `behind` (`ahead`/`identical`/`diverged` pass, so a stage lineage switch
+is allowed). It fails closed on a compare-API error. Same guard as
+[`promote-image`](promote-image.md#forward-only-opt-in).
+
 ## Concurrency
 
 Keyed on `<project>-<service>` with `cancel-in-progress: false` — a deploy is

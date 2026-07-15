@@ -38,6 +38,10 @@ For the build-and-deploy step itself, use `deploy-cloud-run` / `deploy-gke-servi
 | `helm_chart` / `helm_release` / `helm_values_path` / `helm_extra_args` | — | helm only |
 | `app_version` | `''` | kubectl/deployment: `set env APP_VERSION=…` after the roll |
 | `run_project` / `run_region` / `run_service` | `gar_project` / `gcp_region` / — | Cloud Run target (`deploy_target=cloud-run`) |
+| `commit_sha` | `''` | source commit of the promoted image; stamped as the live commit. Empty ⇒ `github.sha` (the released commit on a tag-triggered promote) |
+| `environment` | `''` | when set, also record a GitHub Deployment marking this env's live commit |
+| `record_github_deployment` | `true` | record the Deployment (needs `environment` + `deployments: write`) |
+| `enforce_forward_only` | `false` | reject an out-of-order (older) release — see below. Requires `environment` |
 | `dry_run` | `false` | print the retag + roll commands without executing |
 
 ## Auth — WIF (preferred) or key-based
@@ -154,6 +158,39 @@ jobs:
 commands without executing them — the retag is a mutation, so it honours the
 repo convention that every mutating workflow has a safe plan mode.
 
+## Live-commit stamping
+
+On the roll, the promoted commit (`commit_sha`, else `github.sha`) is stamped onto
+the target — Cloud Run label `jgd_commit=<sha>` / GKE annotation
+`jgd.dev/commit=<sha>` — and, when `environment` is set, recorded as a GitHub
+Deployment. This keeps the [forward-only](release-process.md) baseline accurate:
+prod's live commit advances with each promote. Skipped for `deploy_target: none`
+(nothing is rolled).
+
+## Forward-only (opt-in)
+
+Set `enforce_forward_only: true` (with `environment`) to **reject an out-of-order
+release** — a tag cut from a commit older than what's already live. The guard, run
+before any retag/roll:
+
+1. reads the live commit = the sha of the latest **successful GitHub Deployment**
+   for `environment` (recorded by prior promotes/deploys — so those must run with
+   `environment` set too, to build the baseline);
+2. compares `live...candidate` via the GitHub compare API;
+3. **blocks only when the candidate is `behind`** (an ancestor of live). `ahead`,
+   `identical`, and `diverged` pass — "block iff behind" gives strict latest-only on
+   linear `main` while permitting a stage lineage switch.
+
+No baseline yet (first release) ⇒ allowed. It **fails closed**: a compare API error
+or unknown commit blocks the promote rather than waving it through — re-run, or set
+`enforce_forward_only: false` to override. The guard reads via `github.token`
+(`contents: read` + `deployments: read`, both already granted); it needs no cloud
+auth.
+
 ## Concurrency
 
-Keyed on `<gar_project>-<image_name>-<target_tag>` with `cancel-in-progress: false`.
+Keyed on `<gar_project>-<image_name>-<environment>` when `environment` is set — the
+**same scheme as [`rollback-service`](rollback-service.md)**, so a promote and a
+rollback for one environment are mutually exclusive. Falls back to the legacy
+`<gar_project>-<image_name>-<target_tag>` key when `environment` is empty (unchanged
+for existing callers). `cancel-in-progress: false`.

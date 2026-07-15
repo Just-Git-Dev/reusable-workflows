@@ -1,5 +1,251 @@
 # Decisions — reusable-workflows
 
+> **Release note (2026-07-15): the entries below dated 2026-07-15 all ship in a single
+> tag, `v1.11.0`.** Nothing was tagged between `v1.7.0` and this release. The per-phase
+> version numbers in the individual entries (`v1.8.0` rollback-service, `v1.9.0`
+> live-commit stamping, `v1.10.0` prod forward-only, `v1.11.0` stage forward-only) are
+> **logical phase markers**, not separate published tags — they were developed in
+> sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
+> fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
+> series.
+
+## 2026-07-15 — `ci-go` secret renamed `github_token` → `go_private_token` (bug fix)
+
+**Symptom.** The quizzing-pro migration PR (#2041) pinning `ci-go.yml@v1.7.0` failed
+to load with *"secret name `github_token` within `workflow_call` can not be used since
+it would collide with system reserved name."* — a **parse-time** rejection, so v1.7.0
+was un-callable by anyone, not just that repo.
+
+**Root cause.** GitHub reserves `github_token`/`GITHUB_TOKEN` (case-insensitive) as a
+secret name inside `workflow_call` — the auto-injected `secrets.GITHUB_TOKEN` owns it.
+Declaring a same-named `secrets:` entry is invalid. We named the private-modules token
+`github_token` out of habit; it can't be that name.
+
+**Why it wasn't caught.** `actionlint` does not flag the reserved-name collision (it
+lints syntax/shell, not this GitHub-side rule), and we had no caller exercising
+`go_private` end-to-end before publishing v1.7.0 — the collision only surfaces when a
+caller actually invokes the reusable.
+
+**Fix.** Renamed the secret to `go_private_token` (both `secrets.` references + input
+description + error text), with an inline comment on the `secrets:` block warning off
+the reserved name. Updated `docs/ci-go.md` (secret name + a note + the
+`secrets: { go_private_token: ${{ secrets.GITHUB_TOKEN }} }` caller snippet).
+
+**Prevention.** Doc note + code comment record the rule at the collision site. Callers
+map their own `GITHUB_TOKEN` (or a cross-repo PAT) into `go_private_token`.
+
+**Contract change, but the broken workflow was un-callable.** The secret name is part
+of the input contract, so it needs a fresh tag. The `github_token` secret was
+introduced in **v1.6.0** and still present in **v1.7.0** — both are DOA (any caller of
+`ci-go` at those tags hits the parse error), so no *working* caller depends on the old
+name and this is a **fix, not a break** (no major bump). It ships in the single
+**v1.11.0** release cut this session (see the reconciling note at the top of this file).
+quizzing-pro/api #2041 re-pins `ci-go` to `@v1.11.0` and renames its `secrets:` key
+`github_token` → `go_private_token` (value stays `${{ secrets.PAT }}`).
+
+## 2026-07-15 — forward-only extended to the stage build workflows (opt-in)
+
+**Lifted the forward-only guard onto `deploy-cloud-run` + `deploy-gke-service`** so
+stage rejects out-of-order deploys too, not just prod. Same opt-in
+`enforce_forward_only`, same "block iff behind" rule, same fail-closed. On the stage
+workflows the guard runs **before the build** (it needs only `github.token` + the
+checked-out commit), so a blocked deploy wastes no build.
+
+**Why the rule works unchanged on the shared stage env.** "Block iff `behind`"
+permits `diverged` — and a `main` squash commit is `diverged` (not `behind`) versus a
+`development` tip. So the intentional stage lineage switch (development-tip →
+release-candidate) passes, while an actual older/replayed commit is blocked. The
+single rule covers stage and prod without a per-env mode, as the model predicted.
+
+**Duplicated the guard step; did NOT extract a composite action — verified, not
+assumed.** A `./` local composite action referenced from a *reusable* workflow
+resolves against the **caller's** checkout, not the workflow's own repo (confirmed:
+GitHub community discussions [#18601](https://github.com/orgs/community/discussions/18601),
+[#25289](https://github.com/orgs/community/discussions/25289)). The workarounds
+(have every caller check out *our* repo + supply a token, or self-reference by full
+`owner/repo/...@sha`) push fragility onto cross-org consumers — the opposite of this
+library's contract. So the ~30-line guard is duplicated across the three workflows,
+each staying self-contained and independently consumable. Cost: three copies to keep
+in sync — the core logic (baseline lookup → compare → block iff behind → fail closed)
+is identical; they differ only in the `HEAD` source (`commit_sha`/`github.sha` on
+promote, the built `git rev-parse HEAD` on the deploys) and the "release" vs "deploy"
+wording.
+
+**Additive/opt-in → v1.11.0.**
+
+## 2026-07-15 — forward-only guard on `promote-image` (phase 3; opt-in)
+
+**Shipped the forward-only guard** — `promote-image` can now reject an out-of-order
+(older) release. Completes the three-phase plan (rollback → stamping → guard).
+Opt-in via `enforce_forward_only` (default off — runs in others' prod).
+
+**Live-commit source = latest successful GitHub Deployment for the env, not the
+running service.** Both were options (the service label/annotation is ground-truth
+for what's running). Chose the Deployment record because it is **auth-agnostic** —
+read with `github.token`, no cloud auth — so the guard runs *first* and *fails
+fast*, before the WIF/key auth and the retag. Reading the live commit off the
+service would need cloud auth active before the guard, which the key-based path only
+sets up right before the roll (ordering headache). Trade-off accepted: the record
+can drift from reality if someone deploys fully out-of-band — but out-of-band deploys
+are already against policy, and phase-2 stamping keeps the record in lock-step with
+every sanctioned roll.
+
+**Rule = "block iff `behind`."** Compare `live...candidate` via the GitHub compare
+API; block only `behind` (candidate is an ancestor of live). `ahead`/`identical`/
+`diverged` pass. One rule gives strict latest-only on prod (linear `main` never
+diverges) *and* permits a stage lineage switch (a `main` squash is `diverged` vs a
+`development` tip, not `behind`) — the same simplification the model called for. No
+baseline (first release) ⇒ allow.
+
+**Fails closed.** A compare API error / unknown commit **blocks** rather than
+allowing — a safety guard must not wave a release through on a transient error.
+Operationally the escape hatch is a re-run or `enforce_forward_only: false`. Chose
+fail-closed over fail-open because a silent backward prod deploy is worse than a
+blocked release.
+
+**Concurrency re-keyed to per-env** (`deploy-<proj>-<image>-<environment>`, matching
+`rollback-service`) so a promote and a rollback for one env can't race — the gap
+flagged when `rollback-service` shipped. Falls back to the legacy per-`target_tag`
+key when `environment` is empty, so **existing callers are unchanged**.
+
+**Additive/opt-in → v1.10.0.** No behaviour change unless a caller sets
+`enforce_forward_only` (and, for the concurrency change, `environment`).
+
+## 2026-07-15 — live-commit stamping across deploy/promote (phase 2 of the release-process plan)
+
+**Shipped stamping in `deploy-cloud-run`, `deploy-gke-service`, `promote-image`** —
+the prerequisite for the forward-only guard (phase 3), which needs to read back
+"what commit is live" per environment. Each roll now stamps the source commit and,
+opt-in, records a GitHub Deployment (the "both" recording choice, matching
+`rollback-service`).
+
+- **What is stamped.** Cloud Run → resource label `jgd_commit=<sha>` (label keys are
+  slash-free, so no `jgd.dev/…`); GKE (kubectl path) → annotation
+  `jgd.dev/commit=<sha>` (annotations allow slashes + arbitrary values). Helm path:
+  no annotation (resource name isn't knowable generically) — relies on the
+  Deployment record. `commit` is `git rev-parse HEAD` post-checkout for the build
+  workflows (the exact built commit, honouring `checkout_ref`), and
+  `commit_sha`/`github.sha` for `promote-image` (no checkout there).
+- **GitHub Deployment is opt-in via `environment`, and best-effort.** The step only
+  fires when `environment != ''`, so **existing callers are untouched** (no new
+  required input, no noise). It is wrapped so a Deployments API failure (e.g. the
+  caller didn't grant `deployments: write`) **warns but never fails the deploy** —
+  the roll already happened; an audit-record hiccup must not break shipping. Body is
+  built with `jq` and sends `required_contexts:[]` so creation isn't blocked by the
+  (old) commit's status checks.
+- **`deployments: write` added** to all three `permissions:` blocks. In a reusable
+  this is a ceiling intersected with the caller's grant — absent the grant, the
+  best-effort step just warns. Safe to add.
+- **Backward-compatible, additive inputs** (`environment`, `record_github_deployment`;
+  `commit_sha` on promote). New label/annotation is inert for callers that don't read
+  it. → **v1.9.0.**
+
+Phase 3 (opt-in forward-only guard reading these stamps + per-env concurrency
+re-key) remains in `TODO.md`.
+
+## 2026-07-15 — `rollback-service` built; no pin (push-based, not GitOps); triggers stay caller-owned
+
+**Shipped `rollback-service.yml`** — the out-of-band transient-rollback bridge the
+release-process doc called for. Rolls a running Cloud Run / GKE service back onto an
+already-built image (by `vX.Y.Z` tag or `sha256:` digest), **no rebuild, no retag**.
+Mirrors `promote-image`'s dual-auth (WIF / key-based) and roll surface
+(kubectl/helm/cloud-run), minus the retag, plus live-commit stamping. First of the
+three-phase plan (rollback → live-commit stamping → forward-only guard).
+
+**Decision — no pin/freeze.** The design doc originally mandated a pin (fast
+rollback freezes promotion so nothing clobbers it). On review that was **imported
+from GitOps-reconciler thinking** (Argo/Flux constantly drive cluster state to
+"latest tag in git", so a manual rollback is reverted within seconds unless the
+reconciler is frozen). This stack is **push-based**: Cloud Run serves the deployed
+revision and GKE holds the ReplicaSet image — **no reconciler re-derives desired
+state**, so nothing autonomously undoes a rollback. The only re-clobber path is a
+human manually re-promoting the bad tag mid-incident. A blanket pin is a heavy fix
+for that (it also freezes the *fix*, creating the unpin lifecycle we disliked). If
+guarding is ever wanted, **quarantine the specific bad artifact** in `promote-image`
+(refuse that digest/tag) — the permanent fix is a *new* tag, so it promotes with no
+unpin dance. `rollback-service` therefore sets no pin; quarantine logged in `TODO.md`.
+
+**Live-commit recording = annotation/label + GitHub Deployment (both).** So a later
+forward-only check can read back "what is live" per env after a rollback:
+Cloud Run resource label `jgd_commit=<sha>` (label keys are slash-free), GKE
+annotation `jgd.dev/commit=<sha>`, and a `success` GitHub Deployment on the commit
+for the environment (git-native, queryable; opt-out via `record_github_deployment`).
+Stamping is skipped when `commit_sha` is empty — callers are pushed to pass it.
+
+**Triggers stay caller-owned — for stage AND prod.** Confirmed both stage
+("push to `development`") and prod ("release on `main`") are **defaults, not enforced
+by the reusables**. Every workflow here is `workflow_call`; the caller wires the
+trigger (tag on `development`, push to `main`, `workflow_dispatch`, … all valid).
+`rollback-service` follows suit — `workflow_call` only, caller adds the
+`workflow_dispatch`. release-process.md reworded to frame both flows as overridable
+defaults.
+
+**Version.** New workflow = additive input contract → **v1.8.0** (doc examples pin
+it). No change to existing workflows.
+
+## 2026-07-15 — release-process model documented; transient rollback fenced out-of-band
+
+**Context.** `promote-image` (retag `:<sha>`→`:vX.Y.Z`, no rebuild, roll prod)
+already implements the *mechanism* of stage→prod promotion, but the surrounding
+**model** — trunk-based flow, what feeds stage, forward-only, and where rollback
+fits — was undocumented. Wrote [docs/release-process.md](docs/release-process.md)
+to capture it. This entry records the reasoning behind the choices in that doc.
+
+**Trunk-based, build-once, promote-by-retag.** `development` + `main` both feed the
+**same stage env**; prod is a retag of a stage-proven digest. Kept because it
+guarantees prod runs the identical bytes stage tested — the property `promote-image`
+was built for. The load-bearing simplification: the promote decision keys on
+**"does `main`'s tip already have a stage-green digest?"**, *not* on the merge
+strategy. That single predicate handles ff (already green → promote) and
+squash/merge-commit (new SHA → build, stage, then promote) uniformly — which is what
+lets callers keep **squash merges** without breaking build-once. Building from
+`main`'s own tip (not `development`'s) means stage tests the *exact* prod artifact
+even when squash mints a new commit, which is strictly stronger than testing
+`development` and shipping `main`.
+
+**Forward-only, all environments.** Rule: reject a deploy whose candidate commit is
+an *ancestor of* (already contained in) the env's live commit. On the shared stage
+env this must permit a *divergent* commit (a `main` squash is not a descendant of
+`development`'s tip) — a strict "must descend" rule would block the release candidate
+from reaching stage. On prod the same rule auto-strengthens to strict "latest-only"
+because `main` is linear and prod releases only from `main`. **Not yet enforced** —
+`promote-image` gates semver but not ancestry; logged in `TODO.md`.
+
+**Rollback split into two actions, and transient rollback fenced OUT of the promote
+flow.** The promote pipeline is forward-only and immutable-tag driven; a fast
+rollback is a temporary *backward* artifact move. Mixing them would corrupt the
+forward-only invariant, so they are kept separate by design:
+- **Permanent fix = `git revert` + new linear tag.** The revert commit is a
+  *descendant* of the bad commit, so it is forward on the tree and flows through the
+  normal promote path unchanged. This is the git-native, cleanly-tracked incident
+  record.
+- **Transient fast rollback = out-of-band bridge.** Re-select an existing
+  prod-proven digest in seconds (no rebuild), valid only until the revert tag ships.
+  It **must pin/freeze** the env so normal tag-driven promotion can't re-derive
+  "latest tag" and clobber the rollback mid-incident — the pin is the whole point.
+
+**Two steady-states considered for the bridge.** (a) *Tag-driven primary + transient
+bridge* — prod = latest linear tag; rollback is an exception path with a temporary
+pin. (b) *Always pointer-driven (full GitOps)* — prod = whatever a committed pointer
+file says, forever; promote and rollback are one uniform mechanism with no divergence
+window. **Chose (a).** It matches how `promote-image` already works (immutable
+`vX.Y.Z` tags), keeps the steady state simple, and confines the pointer/pin apparatus
+to the incident window instead of maintaining a parallel deploy-state source of truth.
+Cost accepted: during the bridge window live-state isn't derivable from tags alone,
+which is exactly why the pin is mandatory.
+
+**Fast rollback is only as safe as migrations are backward-compatible** (expand/
+contract, N/N+1). A non-backward-compatible migration in the bad release makes the
+prior image unrunnable against the migrated schema — then the bridge is off the table
+and you must roll forward with a data fix. This is a caller-side discipline the
+pipeline can't enforce.
+
+**Separate manual rollback workflow — noted, not built.** A standalone,
+manually-triggered reusable (tag/digest input → roll the service + set the pin) would
+package the bridge cleanly. Deliberately left as an **independent, future** workflow —
+it is orthogonal to the release pipeline and not a dependency of this documentation.
+Logged in `TODO.md`.
+
 ## 2026-07-14 — key-based auth for `promote-image` (quizzing-pro prod parity)
 
 **Problem.** quizzing-pro/api stage migrated onto JGD reusables (v1.6.0), but
