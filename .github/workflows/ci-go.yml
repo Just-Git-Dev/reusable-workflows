@@ -140,13 +140,13 @@ on:
         default: true
       go_private:
         description: 'GOPRIVATE glob for private modules (e.g. github.com/zopsmart/*). When set,
-          git is configured to fetch over HTTPS with the github_token secret. Empty ⇒ off.'
+          git is configured to fetch over HTTPS with the github_pat_token secret. Empty ⇒ off.'
         type: string
         required: false
         default: ''
 
     secrets:
-      github_token:
+      github_pat_token:
         description: 'Token for fetching private Go modules. Required when go_private is set.'
         required: false
 
@@ -182,11 +182,11 @@ jobs:
       - name: Configure private module access
         if: ${{ inputs.go_private != '' }}
         env:
-          GH_TOKEN: ${{ secrets.github_token }}
+          GH_TOKEN: ${{ secrets.github_pat_token }}
           GO_PRIVATE: ${{ inputs.go_private }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::go_private is set but the github_token secret is empty."; exit 1
+            echo "::error::go_private is set but the github_pat_token secret is empty."; exit 1
           fi
           git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
           echo "GOPRIVATE=${GO_PRIVATE}" >> "$GITHUB_ENV"
@@ -279,11 +279,11 @@ jobs:
       - name: Configure private module access
         if: ${{ inputs.go_private != '' }}
         env:
-          GH_TOKEN: ${{ secrets.github_token }}
+          GH_TOKEN: ${{ secrets.github_pat_token }}
           GO_PRIVATE: ${{ inputs.go_private }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::go_private is set but the github_token secret is empty."; exit 1
+            echo "::error::go_private is set but the github_pat_token secret is empty."; exit 1
           fi
           git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
           echo "GOPRIVATE=${GO_PRIVATE}" >> "$GITHUB_ENV"

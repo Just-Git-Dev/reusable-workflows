@@ -120,8 +120,11 @@ WIF, SHA-pin. Runtime ≈ 0, and naïve mapping *regresses* it.
 imports the **private** `github.com/zopsmart/auth-service-v2` in `main.go` + ~30
 source files. The old build fetched it host-side (setup-go + PAT `git insteadOf`)
 then `COPY`ed the binary — the shortcut we're replacing. Hermetic compile-in-docker
-must fetch it too. Decision: (a) `ci-go` gains `go_private` + a `github_token`
-secret (git insteadOf + GOPRIVATE, in **both** the `go` and `go-db` jobs); (b)
+must fetch it too. Decision: (a) `ci-go` gains `go_private` + a `github_pat_token`
+secret (git insteadOf + GOPRIVATE, in **both** the `go` and `go-db` jobs); named
+`github_pat_token` rather than `github_token` — GitHub reserves that name
+(case-insensitive) on `workflow_call.secrets` and rejects the workflow with a
+parse error if used. (b)
 `deploy-cluster-keyed` and `deploy-gke-service` gain a `build_secrets` secret
 forwarded to build-push-action `secrets:`, so the Dockerfile uses
 `RUN --mount=type=secret,id=gh_pat` — the token never lands in a build-arg or
