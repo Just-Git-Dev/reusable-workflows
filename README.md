@@ -13,6 +13,11 @@ lands everywhere.
 - **Safe to run in production.** Third-party actions are SHA-pinned, every `run:`
   is `shell: bash` (pipefail), and destructive workflows have a `dry_run` plan mode.
 
+> **New here? Read the [platform handbook](docs/PLATFORM.md)** — the connected guide to
+> using these workflows end-to-end: the access your repo is granted, an "I want to… → use
+> this" index, the full lifecycle (CI → deploy → promote → operate → rollback), and a
+> copy-paste app-repo example. The catalog below is the quick reference.
+
 ## Workflows
 
 ### CI
