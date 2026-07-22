@@ -1,0 +1,221 @@
+name: Bootstrap Cloud Monitoring dashboards (reusable)
+
+# Applies Cloud Monitoring dashboards from the CALLER repo's dashboards
+# directory, mirroring bootstrap-alerts.yml: this workflow checks out the
+# caller, so each project keeps its own dashboard JSON under version control.
+#
+# Identity is displayName, matching the alerts workflow's convention. Existing
+# dashboards are left untouched unless force_update=true, in which case they are
+# updated in place via their resource name (NOT delete+create — recreating would
+# mint a new dashboard id and break every bookmark and console link to it).
+#
+# Dashboards are declared as JSON rather than YAML because that is the format
+# the console's "JSON editor" round-trips, so a dashboard tuned by hand in the
+# UI can be pasted straight back into the repo.
+#
+# Required IAM on service_account:
+#   roles/monitoring.dashboardEditor  (or roles/monitoring.editor, which subsumes it)
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id the dashboards belong to.'
+        type: string
+        required: true
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Service account email to impersonate via WIF.'
+        type: string
+        required: true
+      dashboards_dir:
+        description: 'Directory in the caller repo holding the dashboard JSON files.'
+        type: string
+        required: false
+        default: 'infra/dashboards'
+      dashboard_glob:
+        description: 'Glob matching the dashboard files, relative to dashboards_dir.'
+        type: string
+        required: false
+        default: 'dashboard-*.json'
+      force_update:
+        description: 'Update existing dashboards in place instead of skipping them.'
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      created:
+        description: 'Number of dashboards created.'
+        value: ${{ jobs.apply.outputs.created }}
+      updated:
+        description: 'Number of dashboards updated (force_update only).'
+        value: ${{ jobs.apply.outputs.updated }}
+      skipped:
+        description: 'Number of dashboards left untouched because they already existed.'
+        value: ${{ jobs.apply.outputs.skipped }}
+      failed:
+        description: 'Number of dashboards that failed to apply (the run also exits non-zero).'
+        value: ${{ jobs.apply.outputs.failed }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: bootstrap-dashboards-${{ inputs.gcp_project }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    env:
+      GCP_PROJECT:    ${{ inputs.gcp_project }}
+      DASHBOARDS_DIR: ${{ inputs.dashboards_dir }}
+      DASHBOARD_GLOB: ${{ inputs.dashboard_glob }}
+    outputs:
+      created: ${{ steps.dashboards.outputs.created }}
+      updated: ${{ steps.dashboards.outputs.updated }}
+      skipped: ${{ steps.dashboards.outputs.skipped }}
+      failed:  ${{ steps.dashboards.outputs.failed }}
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Validate dashboard JSON (offline, before any apply)
+        # A malformed file should fail the run before we have half-applied the
+        # set — same reasoning as the alert validator: cheap checks first.
+        run: |
+          shopt -s nullglob
+          # shellcheck disable=SC2206
+          FILES=("${DASHBOARDS_DIR}"/${DASHBOARD_GLOB})
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::No dashboard files matched ${DASHBOARDS_DIR}/${DASHBOARD_GLOB}"
+            exit 1
+          fi
+          BAD=0
+          for f in "${FILES[@]}"; do
+            if ! jq -e . "$f" >/dev/null 2>&1; then
+              echo "::error file=${f}::not valid JSON"
+              BAD=$((BAD + 1)); continue
+            fi
+            DISPLAY=$(jq -r '.displayName // ""' "$f")
+            if [ -z "$DISPLAY" ]; then
+              echo "::error file=${f}::missing displayName (used as the dashboard's identity)"
+              BAD=$((BAD + 1)); continue
+            fi
+            # A dashboard carrying an inherited `name` would make create fail and
+            # update target whatever project it was exported from.
+            if jq -e 'has("name")' "$f" >/dev/null 2>&1; then
+              echo "::error file=${f}::remove the top-level \"name\" field — it pins the dashboard to the project it was exported from"
+              BAD=$((BAD + 1)); continue
+            fi
+            echo "  ok: $f ($DISPLAY)"
+          done
+          if [ "$BAD" -gt 0 ]; then
+            echo "::error::${BAD} dashboard file(s) failed validation — nothing applied."
+            exit 1
+          fi
+
+      - name: Apply dashboards
+        id: dashboards
+        env:
+          FORCE_UPDATE: ${{ inputs.force_update }}
+        run: |
+          shopt -s nullglob
+          # shellcheck disable=SC2206
+          FILES=("${DASHBOARDS_DIR}"/${DASHBOARD_GLOB})
+
+          CREATED=0; UPDATED=0; SKIPPED=0; FAILED=0
+          FAILED_NAMES=()
+
+          # One list call for the whole set — listing per file would be N round
+          # trips for no benefit.
+          EXISTING_JSON=$(gcloud monitoring dashboards list \
+            --project="$GCP_PROJECT" \
+            --format=json 2>/dev/null || echo '[]')
+
+          for f in "${FILES[@]}"; do
+            DISPLAY=$(jq -r '.displayName' "$f")
+            NAME=$(printf '%s' "$EXISTING_JSON" \
+              | jq -r --arg d "$DISPLAY" '.[] | select(.displayName == $d) | .name' | head -1)
+
+            if [ -n "$NAME" ]; then
+              if [ "$FORCE_UPDATE" = "true" ]; then
+                # Update in place: the resource name must be inside the payload,
+                # and must match the existing dashboard so the id is preserved.
+                TMP=$(mktemp)
+                jq --arg n "$NAME" '. + {name: $n}' "$f" > "$TMP"
+                if gcloud monitoring dashboards update "$NAME" \
+                    --project="$GCP_PROJECT" \
+                    --config-from-file="$TMP" --quiet; then
+                  echo "  updated: $DISPLAY"
+                  UPDATED=$((UPDATED + 1))
+                else
+                  echo "::error file=${f}::update failed: $DISPLAY"
+                  FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+                fi
+                rm -f "$TMP"
+              else
+                echo "  skipped (exists): $DISPLAY"
+                SKIPPED=$((SKIPPED + 1))
+              fi
+            else
+              if gcloud monitoring dashboards create \
+                  --project="$GCP_PROJECT" \
+                  --config-from-file="$f" --quiet; then
+                echo "  created: $DISPLAY"
+                CREATED=$((CREATED + 1))
+              else
+                echo "::error file=${f}::create failed: $DISPLAY"
+                FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+              fi
+            fi
+          done
+
+          {
+            echo "created=$CREATED"
+            echo "updated=$UPDATED"
+            echo "skipped=$SKIPPED"
+            echo "failed=$FAILED"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} dashboard(s) failed to apply: ${FAILED_NAMES[*]}."
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          CREATED: ${{ steps.dashboards.outputs.created }}
+          UPDATED: ${{ steps.dashboards.outputs.updated }}
+          SKIPPED: ${{ steps.dashboards.outputs.skipped }}
+          FAILED:  ${{ steps.dashboards.outputs.failed }}
+        run: |
+          {
+            echo "## Monitoring dashboards — ${GCP_PROJECT}"
+            echo ""
+            echo "- Dashboards from: \`${DASHBOARDS_DIR}/${DASHBOARD_GLOB}\`"
+            echo "- Created: ${CREATED:-0} · Updated: ${UPDATED:-0} · Skipped: ${SKIPPED:-0} · Failed: ${FAILED:-0}"
+            echo ""
+            echo "[Open Monitoring dashboards](https://console.cloud.google.com/monitoring/dashboards?project=${GCP_PROJECT})"
+            echo ""
+            echo "_Existing dashboards are skipped unless \`force_update: true\`. Updates preserve"
+            echo "the dashboard id, so console links and bookmarks keep working._"
+          } >> "$GITHUB_STEP_SUMMARY"

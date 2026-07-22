@@ -1,0 +1,361 @@
+name: Validate Cloud Monitoring alert policies (reusable)
+
+# PR-time preflight for the policy files that `bootstrap-alerts.yml` applies.
+# Motivated by an RCA where five latent bugs in a policy set were discovered
+# only by running the apply loop against the live project — each one an
+# INVALID_ARGUMENT that a human then fixed and re-ran, one at a time.
+#
+# WHY THIS IS NOT `--validate-only`: the Monitoring API has no such mode.
+# `projects.alertPolicies.create` in the v3 discovery document accepts exactly
+# one parameter (`name`), there is no `validateOnly` query param, and
+# `gcloud alpha monitoring policies create` exposes no `--validate` flag. The
+# only server-side check available is to actually create the policy. So this
+# workflow validates in two cheaper layers instead:
+#
+#   1. OFFLINE LINT — structural rules, no credentials needed. Encodes the
+#      exact constraints that produced the RCA's INVALID_ARGUMENTs (log-based
+#      policies must declare a notification rate limit; autoClose has a
+#      30m..168h domain; displayName must be greppable; the channel
+#      placeholder must be present or the apply writes a literal string).
+#
+#   2. MQL EXECUTION — for conditionMonitoringQueryLanguage policies, run the
+#      query through `projects.timeSeries.query`. This is the only way to catch
+#      a semantically invalid pipeline (the RCA's headline bug was a
+#      `ratio numerator:/denominator:` form that is not MQL at all), short of
+#      creating the policy for real.
+#
+# Layer 2 needs GCP auth; omit gcp_project to run layer 1 alone.
+
+on:
+  workflow_call:
+    inputs:
+      alerts_dir:
+        description: 'Directory in the caller repo holding the channel file and the policy files.'
+        type: string
+        required: false
+        default: 'infra/alerts'
+      channel_file:
+        description: 'Notification-channel definition file, relative to alerts_dir.'
+        type: string
+        required: false
+        default: 'email-channel.yaml'
+      policy_glob:
+        description: 'Glob matching the alert-policy files, relative to alerts_dir.'
+        type: string
+        required: false
+        default: 'policy-*.yaml'
+      gcp_project:
+        description: >-
+          GCP project to run MQL validation against. Leave empty to skip layer 2
+          and run the offline lint only (no credentials required).
+        type: string
+        required: false
+        default: ''
+      wif_provider:
+        description: 'Workload Identity Federation provider. Required when gcp_project is set.'
+        type: string
+        required: false
+        default: ''
+      service_account:
+        description: >-
+          Service account to impersonate. Required when gcp_project is set.
+          Needs monitoring.timeSeries.list (roles/monitoring.viewer or .editor).
+        type: string
+        required: false
+        default: ''
+    outputs:
+      policies_checked:
+        description: 'Number of policy files that passed the offline lint.'
+        value: ${{ jobs.validate.outputs.checked }}
+      mql_checked:
+        description: 'Number of MQL queries executed against the Monitoring API.'
+        value: ${{ jobs.validate.outputs.mql_checked }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        # Explicit bash => `-eo pipefail`; the implicit default is only `-e`,
+        # which lets a failing head-of-pipe pass silently.
+        shell: bash
+    env:
+      ALERTS_DIR:   ${{ inputs.alerts_dir }}
+      CHANNEL_FILE: ${{ inputs.channel_file }}
+      POLICY_GLOB:  ${{ inputs.policy_glob }}
+      GCP_PROJECT:  ${{ inputs.gcp_project }}
+    outputs:
+      checked: ${{ steps.lint.outputs.checked }}
+      mql_checked: ${{ steps.mql.outputs.mql_checked }}
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Guard input combination
+        # Failing here beats silently skipping layer 2 because a caller set the
+        # project but forgot the credentials — a validator that quietly does
+        # less than advertised is the failure mode this whole workflow exists
+        # to remove.
+        run: |
+          if [ -n "$GCP_PROJECT" ]; then
+            if [ -z "${{ inputs.wif_provider }}" ] || [ -z "${{ inputs.service_account }}" ]; then
+              echo "::error::gcp_project is set but wif_provider/service_account are not — MQL validation cannot run."
+              exit 1
+            fi
+          fi
+
+      - name: Lint policy files (offline)
+        id: lint
+        run: |
+          python3 - <<'PY' | tee /tmp/lint.out
+          import glob, os, re, sys, yaml
+
+          alerts_dir = os.environ["ALERTS_DIR"]
+          channel_file = os.path.join(alerts_dir, os.environ["CHANNEL_FILE"])
+          policy_glob = os.path.join(alerts_dir, os.environ["POLICY_GLOB"])
+
+          errors = []
+          def err(f, msg):
+              errors.append((f, msg))
+              print(f"::error file={f}::{msg}")
+
+          # GCP rejects autoClose outside [30m, 168h]. The RCA hit this with
+          # 900s, which reads as reasonable and is not.
+          AUTOCLOSE_MIN, AUTOCLOSE_MAX = 1800, 604800
+          COMBINERS = {"OR", "AND", "AND_WITH_MATCHING_RESOURCE"}
+          CONDITION_KEYS = {
+              "conditionThreshold",
+              "conditionAbsent",
+              "conditionMatchedLog",
+              "conditionMonitoringQueryLanguage",
+              "conditionPrometheusQueryLanguage",
+          }
+          PLACEHOLDER = "NOTIFICATION_CHANNEL_PLACEHOLDER"
+
+          def dur_seconds(v, f, where):
+              """Durations are strings like '300s'. Anything else is a config bug."""
+              if not isinstance(v, str) or not v.endswith("s"):
+                  err(f, f"{where}: duration must be a string ending in 's', got {v!r}")
+                  return None
+              try:
+                  return float(v[:-1])
+              except ValueError:
+                  err(f, f"{where}: duration {v!r} is not numeric")
+                  return None
+
+          # ---- channel file -------------------------------------------------
+          if not os.path.isfile(channel_file):
+              err(channel_file, "notification-channel file not found")
+          else:
+              ch = yaml.safe_load(open(channel_file)) or {}
+              if not isinstance(ch, dict):
+                  err(channel_file, "channel file must be a YAML mapping")
+              else:
+                  for k in ("type", "displayName", "labels"):
+                      if not ch.get(k):
+                          err(channel_file, f"channel file missing required key: {k}")
+
+          # ---- policy files -------------------------------------------------
+          files = sorted(glob.glob(policy_glob))
+          if not files:
+              print(f"::error::no policy files matched {policy_glob}")
+              sys.exit(1)
+
+          mql_queries = []
+          for f in files:
+              try:
+                  doc = yaml.safe_load(open(f)) or {}
+              except yaml.YAMLError as e:
+                  err(f, f"YAML parse error: {e}")
+                  continue
+              if not isinstance(doc, dict):
+                  err(f, "policy file must be a YAML mapping")
+                  continue
+
+              # The apply loop extracts displayName with awk and hard-fails on
+              # empty, so an absent one breaks the run rather than the policy.
+              if not doc.get("displayName"):
+                  err(f, "missing displayName (the apply loop greps for it)")
+
+              combiner = doc.get("combiner")
+              if combiner is not None and combiner not in COMBINERS:
+                  err(f, f"invalid combiner {combiner!r}; expected one of {sorted(COMBINERS)}")
+
+              # Without the placeholder, the apply's sed substitutes nothing and
+              # the policy is created with an unroutable literal channel.
+              chans = doc.get("notificationChannels") or []
+              if not chans:
+                  err(f, "notificationChannels is empty — the policy would notify nobody")
+              elif PLACEHOLDER not in chans:
+                  err(f, f"notificationChannels must contain {PLACEHOLDER}; got {chans!r}")
+
+              conditions = doc.get("conditions") or []
+              if not conditions:
+                  err(f, "policy has no conditions")
+
+              has_log_condition = False
+              for i, cond in enumerate(conditions):
+                  if not isinstance(cond, dict):
+                      err(f, f"conditions[{i}] is not a mapping")
+                      continue
+                  present = CONDITION_KEYS & set(cond)
+                  if len(present) != 1:
+                      err(f, f"conditions[{i}] must hold exactly one condition type, found {sorted(present) or 'none'}")
+                      continue
+                  kind = present.pop()
+                  if kind == "conditionMatchedLog":
+                      has_log_condition = True
+                      if not cond[kind].get("filter"):
+                          err(f, f"conditions[{i}].conditionMatchedLog has no filter")
+                  if kind == "conditionMonitoringQueryLanguage":
+                      q = (cond[kind] or {}).get("query")
+                      if not q:
+                          err(f, f"conditions[{i}] MQL condition has no query")
+                      else:
+                          # The RCA's headline bug: `ratio numerator: X
+                          # denominator: Y` is not MQL. Named args do not exist
+                          # in the language; ratio consumes a two-stream input.
+                          if re.search(r"\b(numerator|denominator)\s*:", q):
+                              err(f, f"conditions[{i}]: 'numerator:'/'denominator:' are not valid MQL — "
+                                     "use the two-stream form `{ filter <num> ; ident } | ... | ratio`")
+                          mql_queries.append((f, q))
+                      dur = (cond[kind] or {}).get("duration")
+                      if dur is not None:
+                          dur_seconds(dur, f, f"conditions[{i}].duration")
+
+              strategy = doc.get("alertStrategy") or {}
+
+              # Log-based policies MUST declare a rate limit or policies.create
+              # returns INVALID_ARGUMENT. This is not documented prominently and
+              # cost the RCA a full apply cycle.
+              if has_log_condition:
+                  rl = (strategy.get("notificationRateLimit") or {}).get("period")
+                  if not rl:
+                      err(f, "conditionMatchedLog requires alertStrategy.notificationRateLimit.period")
+                  else:
+                      dur_seconds(rl, f, "alertStrategy.notificationRateLimit.period")
+
+              ac = strategy.get("autoClose")
+              if ac is not None:
+                  secs = dur_seconds(ac, f, "alertStrategy.autoClose")
+                  if secs is not None and not (AUTOCLOSE_MIN <= secs <= AUTOCLOSE_MAX):
+                      err(f, f"autoClose {ac} outside GCP's accepted range "
+                             f"[{AUTOCLOSE_MIN}s, {AUTOCLOSE_MAX}s] (30m..168h)")
+
+              print(f"  linted: {f}")
+
+          with open("/tmp/mql_queries.txt", "w") as fh:
+              for f, q in mql_queries:
+                  # NUL-delimited: MQL is multi-line by nature.
+                  fh.write(f"{f}\x00{q}\x00")
+
+          print(f"checked={len(files)}")
+          print(f"mql_found={len(mql_queries)}")
+          if errors:
+              print(f"\n{len(errors)} problem(s) found across {len({e[0] for e in errors})} file(s).")
+              sys.exit(1)
+          print(f"\nOffline lint passed: {len(files)} policy file(s).")
+          PY
+          {
+            grep -E '^checked=' /tmp/lint.out
+            grep -E '^mql_found=' /tmp/lint.out
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GCP via WIF
+        id: auth
+        if: inputs.gcp_project != ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+          token_format:               access_token
+
+      - name: Validate MQL queries against the Monitoring API
+        id: mql
+        if: inputs.gcp_project != ''
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          COUNT=0
+          FAILED=0
+
+          # token_format:access_token on the auth step hands us a bearer token
+          # directly, so no setup-gcloud install and no ADC exchange is needed.
+          TOKEN="${ACCESS_TOKEN}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No access token available — cannot run MQL validation."
+            exit 1
+          fi
+
+          # Read NUL-delimited (file, query) pairs.
+          while IFS= read -r -d '' f && IFS= read -r -d '' q; do
+            COUNT=$((COUNT + 1))
+
+            # `| condition ...` is an alerting-only operator; timeSeries.query
+            # rejects it. Strip the trailing clause and validate the pipeline
+            # that produces the value — which is where malformed MQL lives.
+            STRIPPED=$(printf '%s' "$q" | sed -E '/^[[:space:]]*\|[[:space:]]*condition\b/d')
+
+            BODY=$(jq -n --arg q "$STRIPPED" '{query:$q}')
+            HTTP=$(curl -sS -o /tmp/mql.json -w '%{http_code}' -X POST \
+              "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/timeSeries:query" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H 'Content-Type: application/json' \
+              -d "$BODY" || echo "000")
+
+            case "$HTTP" in
+              200)
+                echo "  ✅ MQL OK: $f"
+                ;;
+              400)
+                MSG=$(jq -r '.error.message // "unknown"' /tmp/mql.json)
+                echo "::error file=${f}::MQL rejected by the Monitoring API: ${MSG}"
+                FAILED=$((FAILED + 1))
+                ;;
+              401|403)
+                # Never treat "could not check" as "checked and fine" — that is
+                # precisely the silent-pass this workflow exists to prevent.
+                MSG=$(jq -r '.error.message // "unknown"' /tmp/mql.json)
+                echo "::error::MQL validation could not run (HTTP ${HTTP}: ${MSG}). The service account needs monitoring.timeSeries.list."
+                exit 1
+                ;;
+              *)
+                echo "::error file=${f}::MQL check returned HTTP ${HTTP} — treating as failure."
+                FAILED=$((FAILED + 1))
+                ;;
+            esac
+          done < /tmp/mql_queries.txt
+
+          echo "mql_checked=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} of ${COUNT} MQL query/queries failed validation."
+            exit 1
+          fi
+          echo "All ${COUNT} MQL query/queries validated."
+
+      - name: Summary
+        if: always()
+        env:
+          CHECKED:     ${{ steps.lint.outputs.checked }}
+          MQL_FOUND:   ${{ steps.lint.outputs.mql_found }}
+          MQL_CHECKED: ${{ steps.mql.outputs.mql_checked }}
+        run: |
+          {
+            echo "## Alert-policy validation"
+            echo ""
+            echo "- Policy files linted: **${CHECKED:-0}** (from \`${ALERTS_DIR}/${POLICY_GLOB}\`)"
+            echo "- MQL queries found: **${MQL_FOUND:-0}**"
+            if [ -n "$GCP_PROJECT" ]; then
+              echo "- MQL queries executed against \`${GCP_PROJECT}\`: **${MQL_CHECKED:-0}**"
+            else
+              echo "- MQL execution: _skipped_ (no \`gcp_project\` input; offline lint only)"
+            fi
+            echo ""
+            echo "_The Monitoring API has no \`validateOnly\` mode for alert policies, so this"
+            echo "is a lint plus a real MQL execution — not a server-side dry run of the policy._"
+          } >> "$GITHUB_STEP_SUMMARY"
