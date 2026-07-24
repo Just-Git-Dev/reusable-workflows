@@ -33,3 +33,4 @@
 - [ ] `.github/workflows/manage-config-secrets.yml` — implement the reserved `eso`
   backend (currently errors "not implemented"): emit an `ExternalSecret` CR
   referencing the GSM secret written by the `gsm` backend.
+- [ ] `.github/workflows/ci.yml` / branch protection — make the `actionlint + shellcheck` check a required status check on `main` so a red lint cannot merge (see DECISIONS.md 2026-07-24 SC2020 entry)

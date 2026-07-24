@@ -137,7 +137,7 @@ jobs:
         id: plan
         run: |
           set -euo pipefail
-          mapfile -t PKGS < <(printf '%s' "$PACKAGES_IN" | tr ', ' '\n\n' | grep -v '^$' | sort -u)
+          mapfile -t PKGS < <(printf '%s' "$PACKAGES_IN" | tr ',' '\n' | tr ' ' '\n' | grep -v '^$' | sort -u)
           if [ "${#PKGS[@]}" -eq 0 ]; then
             echo "::error::No packages given in 'packages' input."; exit 1
           fi
