@@ -1,0 +1,208 @@
+name: Retire GAR packages (reusable)
+
+# Deletes ENTIRE Artifact Registry packages (all versions + tags) — for RETIRED
+# services whose images the age-based sweep (cleanup-gar-images.yml) will never
+# remove, because it always keeps N semver tags per package regardless of whether
+# the package is dead. DESTRUCTIVE + irreversible.
+#
+# Safety: builds the same live-digest set as the image sweep (every digest
+# referenced by a live Cloud Run Service OR Job in-region) and REFUSES to delete
+# any named package that still has a live reference — a typo'd or not-actually-dead
+# package aborts the run instead of taking down prod. dry_run defaults to true.
+#
+# The caller owns the package list + the dry_run decision. Run dry_run: true first.
+#
+# Required IAM on service_account:
+#   roles/artifactregistry.repoAdmin  (delete packages)
+#   roles/run.viewer                  (enumerate live Services + Jobs)
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id owning the Artifact Registry repo.'
+        type: string
+        required: true
+      gcp_region:
+        description: 'Region of the AR repo and the Cloud Run Services/Jobs.'
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        type: string
+        required: true
+      service_account:
+        type: string
+        required: true
+      gar_repo:
+        description: 'Artifact Registry repository name (e.g. backend).'
+        type: string
+        required: true
+      packages:
+        description: 'Comma/space-separated package names to retire (delete entirely).'
+        type: string
+        required: true
+      dry_run:
+        description: 'true = print the plan only, delete nothing.'
+        type: boolean
+        required: false
+        default: true
+    outputs:
+      retired:
+        description: 'Number of packages actually deleted (0 on a dry run).'
+        value: ${{ jobs.retire.outputs.retired }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: retire-gar-${{ inputs.gcp_project }}-${{ inputs.gar_repo }}
+  cancel-in-progress: false
+
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      GCP_PROJECT: ${{ inputs.gcp_project }}
+      GCP_REGION:  ${{ inputs.gcp_region }}
+      GAR_REPO:    ${{ inputs.gar_repo }}
+      REPO_PATH:   ${{ inputs.gcp_region }}-docker.pkg.dev/${{ inputs.gcp_project }}/${{ inputs.gar_repo }}
+      PACKAGES_IN: ${{ inputs.packages }}
+      DRY_RUN:     ${{ inputs.dry_run }}
+    outputs:
+      retired: ${{ steps.exec.outputs.retired }}
+
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Collect live image digests (all Services + Jobs)
+        run: |
+          set -euo pipefail
+          : > /tmp/live-digests.txt
+
+          resolve() {
+            local ref="$1"
+            if [[ "$ref" == *@sha256:* ]]; then
+              echo "${ref#*@}"
+            else
+              gcloud artifacts docker images describe "$ref" \
+                --format='value(image_summary.digest)' 2>/dev/null || echo ""
+            fi
+          }
+          record() {
+            local kind="$1" name="$2" img="$3"
+            [ -z "$img" ] && return 0
+            case "$img" in
+              "$REPO_PATH"/*) ;;
+              *) echo "skip (other repo): $kind/$name -> $img"; return 0 ;;
+            esac
+            local dig; dig=$(resolve "$img")
+            if [ -z "$dig" ]; then
+              echo "::error::Could not resolve live image for $kind/$name ($img). Aborting for safety."
+              exit 1
+            fi
+            echo "$dig" >> /tmp/live-digests.txt
+            echo "live: $kind/$name -> $img ($dig)"
+          }
+
+          for svc in $(gcloud run services list --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                         --format='value(metadata.name)'); do
+            IMG=$(gcloud run services describe "$svc" --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format='value(spec.template.spec.containers[0].image)' 2>/dev/null || echo "")
+            record service "$svc" "$IMG"
+          done
+          for job in $(gcloud run jobs list --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                         --format='value(metadata.name)'); do
+            IMG=$(gcloud run jobs describe "$job" --region="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format='value(spec.template.spec.template.spec.containers[0].image)' 2>/dev/null || echo "")
+            record job "$job" "$IMG"
+          done
+
+          sort -u -o /tmp/live-digests.txt /tmp/live-digests.txt
+          echo "Collected $(wc -l < /tmp/live-digests.txt | tr -d ' ') live digest(s)."
+
+      - name: Verify named packages are dead + plan
+        id: plan
+        run: |
+          set -euo pipefail
+          mapfile -t PKGS < <(printf '%s' "$PACKAGES_IN" | tr ', ' '\n\n' | grep -v '^$' | sort -u)
+          if [ "${#PKGS[@]}" -eq 0 ]; then
+            echo "::error::No packages given in 'packages' input."; exit 1
+          fi
+
+          : > /tmp/retire.txt
+          BLOCKED=0
+          {
+            echo "## Retire GAR packages — ${REPO_PATH}"
+            echo ""
+            echo "- Dry run: ${DRY_RUN}"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for pkg in "${PKGS[@]}"; do
+            # Does the package exist?
+            if ! gcloud artifacts packages describe "$pkg" \
+                   --repository="$GAR_REPO" --location="$GCP_REGION" --project="$GCP_PROJECT" \
+                   >/dev/null 2>&1; then
+              echo "- \`$pkg\` — not found (already gone); skipping" >> "$GITHUB_STEP_SUMMARY"
+              echo "skip(not-found): $pkg"; continue
+            fi
+            # All digests in the package.
+            mapfile -t DIGESTS < <(gcloud artifacts docker images list "$REPO_PATH/$pkg" \
+              --project="$GCP_PROJECT" --format='value(version)' 2>/dev/null | sort -u)
+            COUNT=${#DIGESTS[@]}
+            # Any of them live?
+            LIVE_HITS=0
+            for d in "${DIGESTS[@]}"; do
+              if grep -qxF "$d" /tmp/live-digests.txt; then LIVE_HITS=$((LIVE_HITS+1)); fi
+            done
+            if [ "$LIVE_HITS" -gt 0 ]; then
+              echo "- \`$pkg\` — ❌ BLOCKED: $LIVE_HITS of $COUNT images are referenced by a live Cloud Run Service/Job" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Refusing to retire '$pkg': $LIVE_HITS live reference(s). It is not dead."
+              BLOCKED=1
+            else
+              echo "$pkg" >> /tmp/retire.txt
+              echo "- \`$pkg\` — ✅ dead ($COUNT images, 0 live refs) → will delete" >> "$GITHUB_STEP_SUMMARY"
+              echo "plan-retire: $pkg ($COUNT images)"
+            fi
+          done
+
+          if [ "$BLOCKED" -eq 1 ]; then
+            echo "::error::One or more named packages are still live. Aborting — nothing deleted."
+            exit 1
+          fi
+          echo "count=$(wc -l < /tmp/retire.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Execute retirement
+        id: exec
+        if: inputs.dry_run == false
+        run: |
+          set -uo pipefail
+          RETIRED=0
+          while IFS= read -r pkg; do
+            [ -z "$pkg" ] && continue
+            echo "deleting package: $pkg"
+            if gcloud artifacts packages delete "$pkg" \
+                 --repository="$GAR_REPO" --location="$GCP_REGION" --project="$GCP_PROJECT" --quiet; then
+              RETIRED=$((RETIRED+1)); echo "OK retired $pkg"
+            else
+              echo "::error::Failed to delete package $pkg"; exit 1
+            fi
+          done < /tmp/retire.txt
+          echo "retired=$RETIRED" >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "### Retired: $RETIRED package(s)"
+          } >> "$GITHUB_STEP_SUMMARY"
