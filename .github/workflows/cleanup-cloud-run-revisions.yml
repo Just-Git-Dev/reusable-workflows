@@ -1,0 +1,226 @@
+name: Cleanup Cloud Run revisions (reusable)
+
+# Prunes INACTIVE Cloud Run revisions per service, keeping the traffic-serving
+# revision(s) plus the N most-recent. Idle (0-traffic) revisions cost no compute,
+# but each one pins an Artifact Registry image digest and so blocks the GAR image
+# sweep (cleanup-gar-images.yml) from reclaiming storage — this releases them.
+# Pair the two: schedule this BEFORE the GAR sweep so freed digests are
+# reclaimable on the same cycle.
+#
+# A revision holding ANY traffic (percent split, tagged target, or latestReady)
+# is never a delete candidate. Deletion is best-effort: a revision that is still
+# in use is skipped, not fatal.
+#
+# The caller owns the schedule and the dry_run decision. Run dry_run: true first
+# and read the plan in the job summary.
+#
+# Required IAM on service_account:
+#   roles/run.developer   (list + describe services/revisions AND delete revisions)
+# (roles/run.viewer is read-only and cannot delete; run.developer is the minimum
+#  that both enumerates and deletes. A custom role with run.services.get/list +
+#  run.revisions.list/delete also works.)
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id owning the Cloud Run services.'
+        type: string
+        required: true
+      gcp_region:
+        description: 'Region of the Cloud Run services.'
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Service account email to impersonate via WIF.'
+        type: string
+        required: true
+      keep_last:
+        description: 'Per service, retain this many of the most-recent inactive revisions.'
+        type: string
+        required: false
+        default: '10'
+      services:
+        description: 'Optional comma/space-separated services to limit to; empty = all in region.'
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: 'true = print the plan only, delete nothing.'
+        type: boolean
+        required: false
+        default: true
+    outputs:
+      candidates:
+        description: 'Number of revisions selected for deletion by the plan.'
+        value: ${{ jobs.prune.outputs.candidates }}
+      deleted:
+        description: 'Number of revisions actually deleted (0 on a dry run).'
+        value: ${{ jobs.prune.outputs.deleted }}
+      skipped:
+        description: 'Deletions skipped because the revision was in use or already gone.'
+        value: ${{ jobs.prune.outputs.skipped }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Never let two prunes of the same project/region race on a delete-set
+  # computed before the other run started.
+  group: cleanup-run-revisions-${{ inputs.gcp_project }}-${{ inputs.gcp_region }}
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      GCP_PROJECT: ${{ inputs.gcp_project }}
+      GCP_REGION:  ${{ inputs.gcp_region }}
+      KEEP_LAST:   ${{ inputs.keep_last }}
+      SERVICES_IN: ${{ inputs.services }}
+      DRY_RUN:     ${{ inputs.dry_run }}
+    outputs:
+      candidates: ${{ steps.plan.outputs.candidates }}
+      deleted: ${{ steps.exec.outputs.deleted }}
+      skipped: ${{ steps.exec.outputs.skipped }}
+
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Compute prune plan
+        id: plan
+        run: |
+          python3 <<'PY' | tee /tmp/prune-plan.json
+          import json, os, subprocess
+
+          project = os.environ["GCP_PROJECT"]
+          region  = os.environ["GCP_REGION"]
+          keep_last = int(os.environ["KEEP_LAST"])
+
+          def gcloud(*args):
+              return subprocess.check_output(
+                  ["gcloud", *args, "--project", project, "--region", region, "--format=json"]
+              )
+
+          svc_in = os.environ.get("SERVICES_IN", "")
+          services = [s for s in svc_in.replace(",", " ").split() if s]
+          if not services:
+              services = [s["metadata"]["name"] for s in json.loads(gcloud("run", "services", "list"))]
+
+          plan = {"services": [], "candidates": 0}
+          for svc in sorted(services):
+              desc = json.loads(gcloud("run", "services", "describe", svc))
+              st = desc.get("status", {})
+              # Revisions holding traffic (serving / tagged / latestReady) — never delete.
+              active = set()
+              if st.get("latestReadyRevisionName"):
+                  active.add(st["latestReadyRevisionName"])
+              for blk in (desc.get("spec", {}).get("traffic", []) or []) + (st.get("traffic", []) or []):
+                  if blk.get("revisionName"):
+                      active.add(blk["revisionName"])
+
+              revs = json.loads(gcloud("run", "revisions", "list", "--service", svc))
+              revs.sort(key=lambda r: r["metadata"].get("creationTimestamp", ""), reverse=True)
+              names = [r["metadata"]["name"] for r in revs]
+
+              keep = active | set(names[:keep_last])
+              to_delete = [n for n in names if n not in keep]
+
+              plan["services"].append({
+                  "service": svc,
+                  "total": len(names),
+                  "active": sorted(active),
+                  "keep": len(keep),
+                  "to_delete": to_delete,
+              })
+              plan["candidates"] += len(to_delete)
+
+          print(json.dumps(plan, indent=2))
+          PY
+
+          echo "candidates=$(jq '.candidates' /tmp/prune-plan.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Print prune plan
+        run: |
+          KL="${KEEP_LAST}"
+          {
+            echo "## Cloud Run revision prune — ${GCP_PROJECT}/${GCP_REGION}"
+            echo ""
+            echo "- Keep last: ${KL} most-recent revisions per service (plus any holding traffic)"
+            echo "- Delete candidates: $(jq '.candidates' /tmp/prune-plan.json)"
+            echo "- Dry run: ${DRY_RUN}"
+            echo ""
+            echo "### Per service"
+            echo ""
+            jq -r '.services[] | "- `\(.service)` — delete \(.to_delete|length)/\(.total) (keep \(.keep), serving: \(.active|join(", ")))"' /tmp/prune-plan.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute deletions
+        id: exec
+        if: inputs.dry_run == false
+        run: |
+          set -uo pipefail
+
+          del_one() {
+            local svc="$1" rev="$2" err rc
+            err=$(gcloud run revisions delete "$rev" \
+                    --region="$GCP_REGION" --project="$GCP_PROJECT" --quiet 2>&1); rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "OK deleted $svc/$rev"
+            elif printf '%s' "$err" | grep -qiE "in use|active revision|serving|cannot delete"; then
+              echo "OK skipped(in-use) $svc/$rev"
+            elif printf '%s' "$err" | grep -qiE "not found|does not exist|NOT_FOUND"; then
+              echo "OK skipped(gone) $svc/$rev"
+            else
+              echo "FAIL $svc/$rev :: $(printf '%s' "$err" | tr '\n' ' ')"
+            fi
+            return 0
+          }
+
+          : > /tmp/exec.log
+          # Iterate the plan: (service, revision) pairs.
+          jq -r '.services[] | .service as $s | .to_delete[] | "\($s)\t\(.)"' /tmp/prune-plan.json \
+            | while IFS=$'\t' read -r svc rev; do
+                [ -z "$rev" ] && continue
+                del_one "$svc" "$rev"
+              done | tee -a /tmp/exec.log
+
+          DELETED=$(grep -c '^OK deleted ' /tmp/exec.log || true)
+          SKIPPED=$(grep -c '^OK skipped' /tmp/exec.log || true)
+          FAILED=$(grep -c '^FAIL ' /tmp/exec.log || true)
+          echo "deleted=$DELETED skipped=$SKIPPED failed=$FAILED"
+          {
+            echo "deleted=$DELETED"
+            echo "skipped=$SKIPPED"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "### Execution result"
+            echo ""
+            echo "- Deleted: $DELETED"
+            echo "- Skipped (in use / already gone): $SKIPPED"
+            echo "- Failed: $FAILED"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED revision deletion(s) failed for unexpected reasons:"
+            grep '^FAIL ' /tmp/exec.log || true
+            exit 1
+          fi
