@@ -23,19 +23,23 @@ correct behavior (comma→newline, space→newline as a char set), but shellchec
 flags any multi-char `tr` set as a likely word-replacement mistake, and this repo's CI
 fails on **any** shellcheck finding, info-level included.
 
-**Why it wasn't caught.** The file was merged without running `actionlint` (which bundles
-shellcheck) locally per the repo's CI rule, so the finding first surfaced in CI on `main`.
-No pre-merge required-check gate on `main` meant a red `main` shipped.
+**Why it wasn't caught.** `actionlint + shellcheck` *is* a required, strict status check
+on `main` — but required checks only gate **PR merges**, not direct pushes. Commit
+`4706789` has **no associated PR** (verified via the commits→pulls API): the workflow was
+pushed **straight to `main`**. The required check ran on that push and *did* report
+`failure`, but with `enforce_admins: false` an admin push bypasses both the required
+review and the required-check gate, so the red landed anyway. It was also not linted
+locally first (`actionlint` was available and would have caught it).
 
 **Fix.** Split into two single-char translations — `tr ',' '\n' | tr ' ' '\n'` — which is
 unambiguous, identical in behavior, and does not trip SC2020. `actionlint` now passes
 clean locally. No input-contract change (internal script only) → no version bump; folds
 into the next tag.
 
-**Prevention.** Run `actionlint` locally before pushing (already the documented rule —
-this was a process miss, not a missing tool). Follow-up worth considering: make the
-`actionlint + shellcheck` check a **required** status check on `main` so a red lint can't
-merge. Logged to TODO.
+**Prevention.** Land all changes via PR (the required checks already block a red merge —
+they only failed to help here because this skipped the PR path). Consider setting
+`enforce_admins: true` on `main` so admins can't push past the gate, and run `actionlint`
+locally before pushing. Logged to TODO.
 
 ## 2026-07-15 — `ci-go` secret renamed `github_token` → `go_private_token` (bug fix)
 
