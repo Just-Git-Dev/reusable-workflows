@@ -9,6 +9,41 @@
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-07-24 — actions-group major bumps (#18): Node-24 runner floor is the only breaking change
+
+**Change.** Dependabot #18 bumped six actions (all SHA-pinned): `actions/checkout`
+7.0.0→7.0.1 (patch) plus five **majors** — `setup-go` 6.5.0→**7.0.0**, `setup-node`
+6.4.0→**7.0.0**, `docker/setup-buildx-action` 3.12.0→**4.2.0**, `docker/build-push-action`
+6.19.2→**7.3.0**, `azure/setup-helm` 4.3.1→**5.0.1**. Merged, then release-notes audited
+before cutting a tag.
+
+**Audit result — one load-bearing breaking change: the Node-24 runtime.** Every one of
+the five majors is the same ESM/Node-24 migration wave: `runs.using: node24`, which
+**requires Actions Runner ≥ v2.327.1**. Everything else was verified non-impacting *for
+our usage*:
+- `setup-go`/`setup-node` v7 — confirmed against the pinned `action.yml`s that every input
+  we pass still exists (`go-version`, `go-version-file`, `cache`; `node-version`, `cache`,
+  `cache-dependency-path`). No input renames. We don't set `registry-url`, so the
+  setup-node `NODE_AUTH_TOKEN` change is moot.
+- `setup-buildx` v4 removed deprecated inputs/outputs — we call it **bare** (no `with:`,
+  no `id:`, no outputs referenced), so unaffected.
+- `build-push` v7 removed the `DOCKER_BUILD_NO_SUMMARY` / `DOCKER_BUILD_EXPORT_RETENTION_DAYS`
+  envs — grep confirms we set neither. All inputs we pass (`context`, `file`, `platforms`,
+  `push`, `build-args`, `secrets`, `tags`, `cache-from`, `cache-to`) are unchanged.
+- `setup-helm` v5 — used bare (no `version`), behavior unchanged (installs latest).
+
+**Exposure + fix.** All jobs are `runs-on: ubuntu-latest` (GitHub-hosted, already on
+runner ≥ 2.336) **except** `ci-go`/`ci-node`, whose `runs_on` input is consumer-supplied
+(default `ubuntu-latest`). A consumer pointing those at a **self-hosted runner older than
+v2.327.1** will now fail with a runner-too-old error — the one real behavioral change.
+Documented the floor at both consumer-facing surfaces: the `runs_on` input `description`
+(+ a code comment) in `ci-go.yml`/`ci-node.yml`, and the inputs table in
+`docs/ci-go.md`/`docs/ci-node.md`. No invocation changes were needed.
+
+**Release.** No input-contract change, but a new runtime *requirement* for self-hosted
+`ci-go`/`ci-node` consumers → cut as a **minor** bump with the runner-floor note called out
+in the release notes, not a patch.
+
 ## 2026-07-24 — `retire-gar-packages` shellcheck SC2020 breaking CI on every PR (bug fix)
 
 **Symptom.** The `actionlint + shellcheck` CI check went red on `main` immediately after

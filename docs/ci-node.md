@@ -13,7 +13,7 @@ own jobs/steps in the caller.
 
 | Name | Default | Notes |
 |---|---|---|
-| `runs_on` | `ubuntu-latest` | runner label |
+| `runs_on` | `ubuntu-latest` | runner label. **Self-hosted must be on Actions Runner ≥ v2.327.1** — `setup-node` v7 runs on Node 24. GitHub-hosted runners already satisfy this. |
 | `working_directory` | `.` | package root (monorepo) |
 | `node_version` | `20` | any setup-node spec: `20`, `22`, `lts/*` |
 | `node_cache` | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
