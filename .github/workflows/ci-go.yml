@@ -18,7 +18,9 @@ on:
   workflow_call:
     inputs:
       runs_on:
-        description: 'Runner label.'
+        # setup-go v7 runs on Node 24, which needs Actions Runner >= v2.327.1.
+        # GitHub-hosted runners satisfy this; a self-hosted label must be on >= v2.327.1.
+        description: 'Runner label. Self-hosted runners must be on Actions Runner >= v2.327.1 (Node 24).'
         type: string
         required: false
         default: 'ubuntu-latest'

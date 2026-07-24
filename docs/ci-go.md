@@ -14,7 +14,7 @@ only the universal core so it stays adoptable everywhere.
 
 | Name | Default | Notes |
 |---|---|---|
-| `runs_on` | `ubuntu-latest` | runner label |
+| `runs_on` | `ubuntu-latest` | runner label. **Self-hosted must be on Actions Runner ≥ v2.327.1** — `setup-go` v7 runs on Node 24. GitHub-hosted runners already satisfy this. |
 | `working_directory` | `.` | module root (monorepo) |
 | `go_version` | `''` | explicit version (e.g. `1.25`); empty ⇒ derive from `go_version_file` |
 | `go_version_file` | `go.mod` | repo-root-relative `go.mod` to read the version from |
