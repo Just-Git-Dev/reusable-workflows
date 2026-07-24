@@ -9,6 +9,38 @@
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-07-24 — `retire-gar-packages` shellcheck SC2020 breaking CI on every PR (bug fix)
+
+**Symptom.** The `actionlint + shellcheck` CI check went red on `main` immediately after
+`retire-gar-packages.yml` landed (run 30076527607), and every subsequent PR — including
+the Dependabot actions-group bump (#18) — inherited the same single failure even though
+none of them touch that file:
+`retire-gar-packages.yml:138:9: SC2020:info: tr replaces sets of chars, not words`.
+
+**Root cause.** The "Verify named packages are dead + plan" step split the `packages`
+input with `tr ', ' '\n\n'` — a single `tr` given a *multi-char* SET1 (`, `). That is
+correct behavior (comma→newline, space→newline as a char set), but shellcheck's SC2020
+flags any multi-char `tr` set as a likely word-replacement mistake, and this repo's CI
+fails on **any** shellcheck finding, info-level included.
+
+**Why it wasn't caught.** `actionlint + shellcheck` *is* a required, strict status check
+on `main` — but required checks only gate **PR merges**, not direct pushes. Commit
+`4706789` has **no associated PR** (verified via the commits→pulls API): the workflow was
+pushed **straight to `main`**. The required check ran on that push and *did* report
+`failure`, but with `enforce_admins: false` an admin push bypasses both the required
+review and the required-check gate, so the red landed anyway. It was also not linted
+locally first (`actionlint` was available and would have caught it).
+
+**Fix.** Split into two single-char translations — `tr ',' '\n' | tr ' ' '\n'` — which is
+unambiguous, identical in behavior, and does not trip SC2020. `actionlint` now passes
+clean locally. No input-contract change (internal script only) → no version bump; folds
+into the next tag.
+
+**Prevention.** Land all changes via PR (the required checks already block a red merge —
+they only failed to help here because this skipped the PR path). Consider setting
+`enforce_admins: true` on `main` so admins can't push past the gate, and run `actionlint`
+locally before pushing. Logged to TODO.
+
 ## 2026-07-15 — `ci-go` secret renamed `github_token` → `go_private_token` (bug fix)
 
 **Symptom.** The quizzing-pro migration PR (#2041) pinning `ci-go.yml@v1.7.0` failed

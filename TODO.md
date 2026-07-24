@@ -33,3 +33,4 @@
 - [ ] `.github/workflows/manage-config-secrets.yml` — implement the reserved `eso`
   backend (currently errors "not implemented"): emit an `ExternalSecret` CR
   referencing the GSM secret written by the `gsm` backend.
+- [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
