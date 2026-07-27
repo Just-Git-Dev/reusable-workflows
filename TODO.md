@@ -1,5 +1,26 @@
 # TODO — reusable-workflows
 
+## Convergence — remaining work
+
+The goal (see `docs/convergence-audit.md`, 2026-07-14) is that platform app repos drop the
+external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
+
+- [ ] **Callers not yet migrated:** RevvUp-AI, zop-mannai, and quizzing-pro's other three repos
+      (`engine`, `admin-ui`, `ui` — all still on `zopsmart/workflows@main`, GKE, same pattern as
+      `api`). Realm-ID has only the two `project` ops callers, now repinned. `tally-extension`
+      was never audited and is out of scope until it is.
+- [ ] **Reusables still to build**, each blocking specific left-inline caller workflows:
+      `bootstrap-cf`, `deploy-cloudflare-worker`, `cloud-run-update`, `run-db-job`.
+- [ ] **quizzing-pro/api #2041** (the migration that removes its last `zopsmart` dependency) has
+      been OPEN since 2026-07-14. Note its default branch `development` already carries the
+      migrated `main.yaml` @v1.11.0 — confirm whether #2041 landed by another route and is a
+      stale leftover before spending review time on it.
+- [ ] **Post-migration follow-ups:** WIF onboarding for quizzing-pro (→ `deploy-gke-service`,
+      then drop the `promote-image` stored keys); per-service change-skip (`watch_paths` gate).
+- [ ] Two caller PRs were left red on **pre-existing** caller code debt, not on the reusables:
+      `AutoMahn/api#24` (7 golangci findings) and `Traide-Co/api#17` (3). User declined caller-code
+      fixes; they stay red until the code is fixed or `lint_blocking: false` is set.
+
 - [x] `deploy-cloud-run.yml` / `deploy-gke-service.yml` / `promote-image.yml` —
   **stamp the live commit on every roll** (phase 2; done 2026-07-15, v1.9.0). Cloud
   Run label `jgd_commit=<sha>`, GKE annotation `jgd.dev/commit=<sha>`, opt-in GitHub
