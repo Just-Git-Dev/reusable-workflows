@@ -33,9 +33,17 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       whose commit never built, to see it fail loudly.
 - [ ] Stage environments are **out of scope** (user's call) — no repo has one today. The
       `main` job stays build-only; where a stage later exists, add the deploy step there.
-- [ ] `deploy-cloud-run.yml` — the Summary step's `${DRY_RUN:+ (dry run)}` always expands,
-      because `DRY_RUN` is the *string* `false`, not empty. Every summary says "(dry run)".
-      Cosmetic, pre-existing, spotted while adding `build_only`.
+- [x] `deploy-cloud-run.yml` — Summary step failed an otherwise-successful job whenever there
+      was no service URL (`build_only`, and `dry_run` before it). Fixed in `v1.17.1`; the
+      always-expanding `${DRY_RUN:+ (dry run)}` was fixed in the same block. See the RCA in
+      DECISIONS.md.
+- [ ] **CI cannot execute a workflow *step*.** The new fixture harness reaches embedded Python
+      only, which is why the Summary-step bug above shipped: shellcheck accepts a trailing
+      AND-list, and nothing runs the step. Wanted: a way to exercise a `run:` body against a
+      stubbed env (the RCA reproduced it in ~5 lines of `bash --noprofile --norc -e -o pipefail`,
+      so a small harness is feasible). Rule to encode: **a `{ … } >> $GITHUB_STEP_SUMMARY` group
+      must not end in a bare conditional** — it is the script's last statement, so its status
+      becomes the step's.
 
 ## Convergence — remaining work
 

@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-07-27` — [`deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)](#2026-07-27-deploy-cloud-run-summary-step-fails-a-successful-job-when-there-is-no-service-url-bug-fix)
 - `2026-07-27` — [build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo](#2026-07-27-build-oncepromote-to-prod-build_only-release-relative-gar-retention-and-the-first-tests-in-this-repo)
 - `2026-07-27` — [`DECISIONS.md` restructured: index + age-based archive (no deletions)](#2026-07-27-decisionsmd-restructured-index--age-based-archive-no-deletions)
 - `2026-07-27` — [Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep](#2026-07-27-fleet-wide-caller-repin-to-v1150-driven-by-an-annotation-sweep)
@@ -42,6 +43,53 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-07-27 — `deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)
+
+Ships as **`v1.17.1`**. Found by the first real `build_only` run (`Realm-ID/issuer`), not by CI.
+
+**Symptom.** The `build_only` job built the image, pushed it, and set its `image` output — then
+the job went red. The failing step was `Summary`, after all real work had succeeded. The image
+`api:48cf1c6a…` was in Artifact Registry and correct; only the reporting step failed, so a
+working pipeline looked broken and the dependent `promote` job would not run.
+
+**Root cause.** The step ends with
+
+```bash
+{ …; [ -n "${URL:-}" ] && echo "- Service URL: $URL"; } >> "$GITHUB_STEP_SUMMARY"
+```
+
+The `{ … }` group is the **last statement in the script**, so the script's exit status *is* the
+group's, and the group's status is that of its last command. With `URL` empty the trailing
+AND-list evaluates false and returns 1 → the step exits 1.
+
+This is **not** `set -e`. `set -e` explicitly exempts a command inside an AND-list, and the first
+attempt to reproduce it appeared to pass — because that test had another statement after the
+group, which masked the real mechanism. Same construct, opposite result, purely from position.
+The reproduction only became faithful once the group was genuinely last.
+
+**Why it was not caught.** `actionlint`/shellcheck do not flag a trailing AND-list (it is valid
+and often intentional), and this repo has no way to execute a workflow step — the new fixture
+harness covers the `cleanup-gar-images` plan logic only. More to the point, **the bug needs
+`URL` to be empty, and before `build_only` that only happened under `dry_run: true`** — a path
+nobody had exercised on this workflow. So `build_only` did not introduce the defect, it made a
+latent one reachable on the normal path. `dry_run: true` was already silently broken.
+
+**Fix.** Use `if [ -n "$URL" ]; then … fi` so the group's final command always succeeds.
+Structural, not a `|| true` suppression: `|| true` would have hidden a real failure in the same
+position later.
+
+**Fixed alongside, same block:** `- Mode: \`$MODE\`${DRY_RUN:+ (dry run)}` always printed
+"(dry run)", because `DRY_RUN` holds the *string* `false`, which is non-empty. Every summary this
+workflow has ever written claimed to be a dry run. It was on the TODO as cosmetic; it is in scope
+now because the line was being rewritten anyway.
+
+**Prevention.** The general rule, worth applying beyond this step: **a `{ … } >> $GITHUB_STEP_SUMMARY`
+group must not end in a bare conditional.** Two sibling instances were checked —
+`manage-config-secrets.yml:350` and `sync-bundle-key.yml:136` — and both are safe: each sits
+inside a `while` loop with further statements after it, so neither is the script's last command.
+No change needed there. What is still missing is any ability to execute a step in CI; the fixture
+harness only reaches embedded Python. Logged in TODO.md.
 
 ## 2026-07-27 — build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo
 
