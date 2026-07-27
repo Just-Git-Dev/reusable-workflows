@@ -53,9 +53,12 @@
   across every caller. Nothing detects this. Wanted: a scheduled workflow in this repo that
   walks the platform orgs, greps every `.github/workflows/*` for
   `Just-Git-Dev/reusable-workflows/...@<ref>`, and reports (issue or job summary) any caller
-  more than one minor behind the latest tag — plus any pinned to a mutable ref. Cheap to
-  build (the sweep was ~30 lines of `gh api`); the value is that fixes we ship actually reach
-  the repos that need them.
+  more than one minor behind the latest tag — plus any pinned to a **mutable ref** (the sweep
+  found `Realm-ID/project` on `@v1`, i.e. still running the original `b96d0e3` implementation).
+  Cheap to build (the sweep was ~30 lines of `gh api`); the value is that fixes we ship actually
+  reach the repos that need them. **Derive the org list from an authoritative source** —
+  `infra-provisioning/projects/*` + the CF/GitHub target configs — not a hand-typed list: the
+  first manual pass silently omitted the entire `Realm-ID` org.
 - [ ] **repin `quizzing-pro/api` as part of the `v1.16.0` cut.** Deliberately excluded from
   the 2026-07-27 sweep — its `main.yaml` is concurrently edited by #2045 (badges dogfood,
   `ci-go` pinned to SHA `200b381`) and #2041, and it is a live GKE prod deploy path. Its 4

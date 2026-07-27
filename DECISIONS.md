@@ -12,10 +12,10 @@
 ## 2026-07-27 — Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep
 
 **Change.** Repinned every `Just-Git-Dev/reusable-workflows` caller across the platform to
-`@v1.15.0` — 24 `uses:` lines in 7 repos, pin-only. PRs: `AutoMahn/project#28`,
+`@v1.15.0` — 26 `uses:` lines in 8 repos, pin-only, **all merged**: `AutoMahn/project#28`,
 `AutoMahn/api#27`, `AutoMahn/ui#7`, `AutoMahn/image-service#5`, `AutoMahn/admin-ui#2`,
-`AutoMahn/website#2`, `Traide-Co/project#23`. **`quizzing-pro/api` deliberately excluded —
-see below.**
+`AutoMahn/website#2`, `Traide-Co/project#23`, `Realm-ID/project#3`. **`quizzing-pro/api`
+deliberately excluded — see below.**
 
 **Why.** A sweep of check-run *annotations* (not just conclusions) over the last 3 runs of
 all 25 caller workflows surfaced recurring `Node.js 20 actions are deprecated` warnings on
@@ -57,6 +57,23 @@ one PR. The badges work reaches these callers on the next sweep.
 `200b381` as the badges dogfood) and `#2041`. Repinning that file now would conflict with the
 very PR that unblocks `v1.16.0`, and would move a live GKE prod deploy/promote path in a
 drive-by chore PR. It gets repinned to the tag as part of the `v1.16.0` cut instead.
+
+**A mutable ref was hiding in the fleet.** `Realm-ID/project`'s `cleanup-gar-images.yml` was
+pinned to **`@v1`** — the frozen legacy alias this repo's own consumer rule says never to point
+new callers at. `v1` resolves to `b96d0e3`, the *original* 5-workflow commit, so that caller had
+been running the first-ever version of `cleanup-gar-images` continuously, and would have silently
+changed behaviour the moment anyone moved the alias. Now `@v1.15.0`. This is the exact failure the
+"pin an exact `vX.Y.Z`" rule exists to prevent, and it survived undetected in a live caller —
+further argument for the automated drift report filed in `TODO.md`, which should flag mutable refs
+as well as stale ones.
+
+**Process note — the first sweep was incomplete, and that is the point.** The initial pass
+enumerated `Just-Git-Dev`, `AutoMahn`, `Traide-Co`, `RevvUp-AI`, `quizzing-pro`, `zop-mannai`
+and **missed the `Realm-ID` org entirely**, despite Realm-ID being one of the three projects
+`infra-provisioning` onboards. It was caught only because a human named it. A hand-maintained
+org list is exactly the wrong source of truth for a fleet audit; the drift report should derive
+its org list from something authoritative (e.g. `infra-provisioning/projects/*` plus the CF/GitHub
+target configs) rather than from whatever was typed that day.
 
 **Also found, not fixed here** (logged to `infra-provisioning/TODO.md`): `rotate-cloudflare-token`
 warns that AutoMahn's CF token lacks `Pages -> Edit`, `R2 -> Edit` and `Workers Scripts -> Edit`
