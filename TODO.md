@@ -1,5 +1,26 @@
 # TODO — reusable-workflows
 
+## Convergence — remaining work
+
+The goal (see `docs/convergence-audit.md`, 2026-07-14) is that platform app repos drop the
+external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
+
+- [ ] **Callers not yet migrated:** RevvUp-AI, zop-mannai, and quizzing-pro's other three repos
+      (`engine`, `admin-ui`, `ui` — all still on `zopsmart/workflows@main`, GKE, same pattern as
+      `api`). Realm-ID has only the two `project` ops callers, now repinned. `tally-extension`
+      was never audited and is out of scope until it is.
+- [ ] **Reusables still to build**, each blocking specific left-inline caller workflows:
+      `bootstrap-cf`, `deploy-cloudflare-worker`, `cloud-run-update`, `run-db-job`.
+- [ ] **quizzing-pro/api #2041** (the migration that removes its last `zopsmart` dependency) has
+      been OPEN since 2026-07-14. Note its default branch `development` already carries the
+      migrated `main.yaml` @v1.11.0 — confirm whether #2041 landed by another route and is a
+      stale leftover before spending review time on it.
+- [ ] **Post-migration follow-ups:** WIF onboarding for quizzing-pro (→ `deploy-gke-service`,
+      then drop the `promote-image` stored keys); per-service change-skip (`watch_paths` gate).
+- [ ] Two caller PRs were left red on **pre-existing** caller code debt, not on the reusables:
+      `AutoMahn/api#24` (7 golangci findings) and `Traide-Co/api#17` (3). User declined caller-code
+      fixes; they stay red until the code is fixed or `lint_blocking: false` is set.
+
 - [x] `deploy-cloud-run.yml` / `deploy-gke-service.yml` / `promote-image.yml` —
   **stamp the live commit on every roll** (phase 2; done 2026-07-15, v1.9.0). Cloud
   Run label `jgd_commit=<sha>`, GKE annotation `jgd.dev/commit=<sha>`, opt-in GitHub
@@ -40,11 +61,30 @@
 - [ ] `ci-go.yml` / `ci-node.yml` — **`update_badges` is not yet dogfooded; this gates
   the `v1.16.0` tag.** Nothing about `contents: write`, caller permission-capping, or
   the commit-back push is testable locally. Dogfood is **quizzing-pro/api#2045**
-  (pins the `ci-go` job to SHA `200b381` from reusable-workflows#22; its deploy/promote
+  (pins the `ci-go` job to SHA `3d60a0d` — the squash-merge of reusable-workflows#22 on
+  `main`, **not** the pre-merge branch commit `200b381` this entry previously named; its deploy/promote
   jobs stay at `@v1.11.0`). The badges job only fires on `push` to the default branch,
   so the proof requires **merging** #2045, not just opening it. Confirm on that merge:
   one `chore(ci): update README badges` commit lands on `development`, coverage matches
   the suite, `nolint_count` reads **57** (down from the frozen 78 — the narrower grep,
   measured against the real tree), **and a second push produces no new commit.** Only
   then tag `v1.16.0` and flip #2045's pin to the tag.
+- [ ] **caller pin-drift is invisible — build a drift report.** The 2026-07-27 repin sweep
+  (see DECISIONS.md) found 18 of the fleet's 27 caller lines stranded on `@v1.4.0`/`@v1.5.0`, six-plus
+  releases behind, and only noticed because someone manually read check-run *annotations*
+  across every caller. Nothing detects this. Wanted: a scheduled workflow in this repo that
+  walks the platform orgs, greps every `.github/workflows/*` for
+  `Just-Git-Dev/reusable-workflows/...@<ref>`, and reports (issue or job summary) any caller
+  more than one minor behind the latest tag — plus any pinned to a **mutable ref** (the sweep
+  found `Realm-ID/project` on `@v1`, i.e. still running the original `b96d0e3` implementation).
+  Cheap to build (the sweep was ~30 lines of `gh api`); the value is that fixes we ship actually
+  reach the repos that need them. **Derive the org list from an authoritative source** —
+  `infra-provisioning/projects/*` + the CF/GitHub target configs — not a hand-typed list: the
+  first manual pass silently omitted the entire `Realm-ID` org.
+- [ ] **repin `quizzing-pro/api` as part of the `v1.16.0` cut.** Deliberately excluded from
+  the 2026-07-27 sweep — its `main.yaml` is concurrently edited by #2045 (badges dogfood,
+  `ci-go` pinned to SHA `3d60a0d`) and #2041, and it is a live GKE prod deploy path. Its
+  references to 4 reusables (`ci-go`, `deploy-cluster-keyed`, `manage-config-secrets`,
+  `promote-image`) are still
+  at `@v1.11.0` and still emit the Node-20 `docker/build-push-action` deprecation warning.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
