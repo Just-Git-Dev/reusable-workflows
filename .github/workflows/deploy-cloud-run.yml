@@ -7,6 +7,13 @@
 #   deploy        — `gcloud run deploy`, which can create/configure the service.
 #                 Pass service config through `extra_deploy_flags`.
 #
+# `build_only: true` publishes the image and stops — no Cloud Run mutation, no
+# Deployment record. That is the `main`-side half of build-once/promote-to-prod:
+# merge builds and pushes image:<commit-sha>, and a later `promote-image` run
+# retags that exact digest to vX.Y.Z instead of rebuilding from source. It
+# mirrors `promote-image.yml`'s `deploy_target: none`, so the two reusables are
+# symmetric halves of one flow.
+#
 # App-specific pre-deploy gates (unit tests, version-file cross-checks, migration
 # smokes) stay as their own jobs in the caller and gate this via `needs:`.
 name: deploy-cloud-run
@@ -40,9 +47,19 @@ on:
         type: string
         required: true
       service:
-        description: 'Cloud Run service name.'
+        description: 'Cloud Run service name. Optional only when build_only is true (nothing is rolled).'
         type: string
-        required: true
+        required: false
+        default: ''
+      build_only:
+        description: >-
+          Build and push the image, then stop — no Cloud Run mutation, no
+          GitHub Deployment record. Use on `main` to publish image:<commit-sha>
+          for a later promote-image run to retag. Mirrors promote-image.yml's
+          `deploy_target: none`.
+        type: boolean
+        required: false
+        default: false
       image_tag:
         description: 'Image tag to build/deploy. Empty ⇒ the ref name that triggered the run.'
         type: string
@@ -148,13 +165,15 @@ permissions:
   deployments: write
 
 concurrency:
-  # Never cancel an in-flight deploy of the same service.
-  group: deploy-cloud-run-${{ inputs.gcp_project }}-${{ inputs.service }}
+  # Never cancel an in-flight deploy of the same service. build_only runs mutate
+  # nothing, so they key per-commit instead — a `main` build must not queue
+  # behind (or serialise with) a production roll of the same service.
+  group: deploy-cloud-run-${{ inputs.gcp_project }}-${{ inputs.build_only && format('build-{0}', github.sha) || inputs.service }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: build · push · ${{ inputs.deploy_mode }}
+    name: build · push · ${{ inputs.build_only && 'build-only' || inputs.deploy_mode }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
     outputs:
@@ -175,7 +194,13 @@ jobs:
           GAR_REPO: ${{ inputs.gar_repo }}
           IMAGE_NAME: ${{ inputs.image_name }}
           ALSO_LATEST: ${{ inputs.also_tag_latest }}
+          BUILD_ONLY: ${{ inputs.build_only }}
+          SERVICE: ${{ inputs.service }}
         run: |
+          if [ "$BUILD_ONLY" != "true" ] && [ -z "$SERVICE" ]; then
+            echo "::error::'service' is required unless build_only is true" >&2
+            exit 1
+          fi
           TAG="${IN_TAG:-$FALLBACK_TAG}"
           if [ -z "$TAG" ]; then
             echo "::error::no image tag: pass image_tag or trigger on a tag ref" >&2
@@ -210,7 +235,8 @@ jobs:
       # Forward-only: reject an out-of-order (older) deploy before the build.
       # Uses github.token only (no cloud auth), so it runs early and fails fast.
       - name: Forward-only guard
-        if: ${{ inputs.enforce_forward_only }}
+        # build_only rolls nothing, so there is no environment lineage to protect.
+        if: ${{ inputs.enforce_forward_only && !inputs.build_only }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -280,6 +306,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Deploy to Cloud Run
+        if: ${{ !inputs.build_only }}
         env:
           IMAGE: ${{ steps.ref.outputs.image }}
           SERVICE: ${{ inputs.service }}
@@ -327,7 +354,7 @@ jobs:
           "$@"
 
       - name: Record GitHub Deployment (live-commit marker)
-        if: ${{ inputs.environment != '' && inputs.record_github_deployment && !inputs.dry_run }}
+        if: ${{ inputs.environment != '' && inputs.record_github_deployment && !inputs.dry_run && !inputs.build_only }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -353,7 +380,7 @@ jobs:
 
       - name: Get service URL
         id: url
-        if: ${{ always() && !inputs.dry_run }}
+        if: ${{ always() && !inputs.dry_run && !inputs.build_only }}
         env:
           SERVICE: ${{ inputs.service }}
           PROJECT: ${{ inputs.gcp_project }}
@@ -367,11 +394,12 @@ jobs:
         env:
           IMAGE: ${{ steps.ref.outputs.image }}
           URL: ${{ steps.url.outputs.url }}
-          MODE: ${{ inputs.deploy_mode }}
+          MODE: ${{ inputs.build_only && 'build-only (no Cloud Run mutation)' || inputs.deploy_mode }}
           DRY_RUN: ${{ inputs.dry_run }}
+          TITLE: ${{ inputs.build_only && format('build-only — {0}', inputs.image_name) || format('deploy — {0}', inputs.service) }}
         run: |
           {
-            echo "## Cloud Run deploy — ${{ inputs.service }}"
+            echo "## Cloud Run $TITLE"
             echo ""
             echo "- Mode: \`$MODE\`${DRY_RUN:+ (dry run)}"
             echo "- Image: \`$IMAGE\`"

@@ -1,0 +1,30 @@
+{
+  "name": "T7 \u2014 backport released after a major: sha kept (time, not semver, ordering)",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:major",
+      "tags": [
+        "v3.0.0"
+      ],
+      "days_ago": 100
+    },
+    {
+      "package": "api",
+      "version": "sha256:backport",
+      "tags": [
+        "v2.9.0"
+      ],
+      "days_ago": 5
+    },
+    {
+      "package": "api",
+      "version": "sha256:pending",
+      "tags": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "days_ago": 60
+    }
+  ],
+  "expect_delete": []
+}

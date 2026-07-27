@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-07-27` — [build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo](#2026-07-27-build-oncepromote-to-prod-build_only-release-relative-gar-retention-and-the-first-tests-in-this-repo)
 - `2026-07-27` — [`DECISIONS.md` restructured: index + age-based archive (no deletions)](#2026-07-27-decisionsmd-restructured-index--age-based-archive-no-deletions)
 - `2026-07-27` — [Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep](#2026-07-27-fleet-wide-caller-repin-to-v1150-driven-by-an-annotation-sweep)
 - `2026-07-27` — [`ci-go`/`ci-node`: opt-in README badges close the last test-and-lint parity gap](#2026-07-27-ci-goci-node-opt-in-readme-badges-close-the-last-test-and-lint-parity-gap)
@@ -41,6 +42,92 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-07-27 — build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo
+
+Ships as **`v1.17.0`** (`v1.16.0` is already claimed by the unreleased `ci-go`/`ci-node`
+badges work).
+
+**The defect, restated.** The premise going in was that the container repos double-build —
+once for stage, once at release. They do not. All five (`AutoMahn/api`,
+`AutoMahn/image-service`, `Realm-ID/api`, `Realm-ID/issuer`, `Traide-Co/api`) are a single
+`deploy.yml` triggered only on `push: tags`, and there is no stage. The real problem is worse
+than a wasted build: **the artifact that ships to production is built at release time, from
+source, and has never run anywhere before production.** A re-run or a re-cut tag produces
+different bytes than whatever was reviewed — base-image drift, dependency resolution,
+`GOPROXY=direct` fallbacks. So the fix is not "stop rebuilding", it is "move the build to
+merge-on-`main` and make the release a retag".
+
+**`build_only` on `deploy-cloud-run`.** `deploy_mode` was `update-image | deploy` — both
+deploy — so there was no way for `main` to publish `image:<sha>` using the shared build path.
+`build_only: true` pushes and stops. It deliberately mirrors `promote-image.yml`'s existing
+`deploy_target: none` so the two reusables read as symmetric halves of one flow rather than
+two unrelated escape hatches. `service` became optional (validated at runtime: required unless
+`build_only`), and `build_only` runs key concurrency per-commit instead of per-service — a
+`main` build must not serialise behind a production roll of the same service.
+
+**GAR retention had to change first, and it was the part that could lose data.** Under
+build-once the `:<sha>` image *is* the promotion source, but `cleanup-gar-images` treated it as
+an ordinary tagged image and deleted it on `tagged_max_age_days` alone; nothing in the keep-set
+(live digests + N recent semvers + `keep_tags`) protects an unpromoted build. Shipping
+`build_only` without this would have introduced a silent, cycle-time-dependent failure: a slow
+release destroys the artifact the release is supposed to promote. New rule, per package: keep
+sha images newer than the `sha_retention_releases`-th most recent release.
+
+**Ordered by time, not semver precedence — this is the non-obvious call.** A sha image carries
+no semver, so the boundary comparison is time-based no matter what; the only question is how the
+*releases* are ranked. Semver ranking breaks on backports: `v3.0.0` released 100 days ago plus a
+freshly cut `v2.9.0` would rank `v2.9.0` second and put the boundary at *today*, deleting a
+genuine unpromoted `main` build from 60 days ago. Time ordering keeps it. Encoded as fixture T7
+so the reasoning survives as an executable regression guard, not a comment.
+
+**Implemented as a keep-only pass, and that structure is the point.** The block may only
+`keep.add(...)` — it never appends to `to_delete`, never removes from `keep`, and runs before the
+delete loop. This makes "never deletes more than today" true *by construction* rather than by
+case analysis, which is what let it ship **on by default**: enabling it can only ever delete
+less. Off-by-default would have left silent-destruction as the default behaviour for anyone
+adopting build-once. `sha_retention_releases: 0` reproduces the old delete-set exactly (fixture
+T13). Timestamps are asymmetric on purpose — `newest()` on the sha side, `oldest()` on the
+boundary release — so every ambiguity resolves toward keeping. `buildTime` is excluded because
+reproducible builds report 1970-01-01, which would pin every boundary to the epoch.
+
+**Rejected: making window membership sufficient to delete.** Falling outside the window is *not*
+grounds for deletion; age is still required. The AND is what preserves monotonicity — without it,
+a package that cuts two releases in a day would immediately widen its own delete-set.
+
+**Known asymmetry, documented rather than fixed:** a package with fewer than
+`sha_retention_releases + 1` releases has no boundary, so *every* sha image is kept regardless of
+age. There is nothing to prove such a sha was superseded. A package that never releases will
+accumulate; the doc says to set `sha_retention_releases: 0` there.
+
+**Also fixed while in this code: a latent crash, confirmed by running it.** `semver_imgs.sort()`
+compared `(updateTime, version)` tuples, so a single image missing `updateTime` raised
+`TypeError: '<' not supported between 'NoneType' and 'str'` and aborted the entire sweep — not a
+hypothetical, reproduced against the old code as fixture T18.
+
+**First tests in this repo, and the shape was forced.** The delete-plan algorithm is ~120 lines
+of Python inside a `python3 <<'PY'` heredoc that `actionlint`'s shellcheck does not enter — the
+code deciding what gets permanently deleted from a registry was entirely unlinted and untested.
+It cannot move to `scripts/*.py`: every `actions/checkout` in a reusable workflow checks out the
+**caller's** repo, so a script shipped here would not exist at runtime. (Same trap as the
+local-composite-action finding recorded 2026-07-15.) So `tests/run_plan_tests.py` **extracts the
+heredoc from the workflow file and executes that exact source** against synthetic registries via
+a new `PLAN_FIXTURE` env seam. No duplicated algorithm, therefore no drift — if the workflow
+changes, the tests test the change.
+
+**The suite was mutation-tested, not just written.** Seven deliberate mutations were injected
+into the extracted source (revert the sort fix, rank by semver, disable the pass, flip
+`newest`/`oldest` on either side, off-by-one the boundary, drop the `EFF_SEMVER_COUNT` floor,
+fail-open on a bad regex); the first pass caught only 5 of 7, and fixtures T21 (divergent
+per-field timestamps) and T22 (`keep_semver_count` below the floor) were added specifically to
+close the two gaps. Asserting a green suite without checking it can fail would have proved
+nothing. The runner additionally re-runs *every* fixture with `sha_retention_releases: 0` and
+asserts the window run never deletes anything the legacy run would not — the keep-only invariant
+checked structurally rather than case by case.
+
+**Fail closed on a bad `sha_tag_pattern`** (`::error::` + exit 1) rather than silently disabling
+the window, matching the existing "zero live digests ⇒ abort" stance. A typo'd pattern that
+quietly turned protection off is exactly the failure mode this rule exists to prevent.
 
 ## 2026-07-27 — `DECISIONS.md` restructured: index + age-based archive (no deletions)
 
