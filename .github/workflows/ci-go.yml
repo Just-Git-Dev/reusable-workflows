@@ -12,6 +12,11 @@
 #                        containers on localhost (5432 / 3306 / 6379) for
 #                        integration suites. When on, tests run in the `go-db`
 #                        job; build/vet/lint stay in the `go` job.
+#   update_badges      — commit shields.io Coverage + nolint-count badges back
+#                        into the caller's README on default-branch pushes.
+#                        Default off; the caller must also grant
+#                        `permissions: contents: write` (a reusable workflow's
+#                        permissions are capped by its caller).
 name: ci-go
 
 on:
@@ -146,6 +151,26 @@ on:
         type: string
         required: false
         default: ''
+      update_badges:
+        description: >-
+          Commit shields.io Coverage + nolint-count badges into the caller's
+          README on default-branch pushes. Requires `permissions: contents: write`
+          in the calling job. Off ⇒ nothing below applies and nothing is pushed.
+        type: boolean
+        required: false
+        default: false
+      readme_path:
+        description: 'README to rewrite, REPO-ROOT relative (not working_directory relative).'
+        type: string
+        required: false
+        default: 'README.md'
+      badge_branch:
+        description: >-
+          Branch the badge commit is pushed to. Empty ⇒ the repository default
+          branch. Set to a sandbox branch to trial the feature.
+        type: string
+        required: false
+        default: ''
 
     secrets:
       # NOTE: must NOT be named github_token / GITHUB_TOKEN — GitHub reserves those
@@ -170,6 +195,8 @@ jobs:
     name: build · vet${{ inputs.enable_services && '' || ' · test' }} · lint
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      coverage: ${{ steps.test.outputs.coverage }}
     defaults:
       run:
         shell: bash
@@ -205,20 +232,29 @@ jobs:
         run: go vet ./...
 
       - name: go test
+        id: test
         if: ${{ inputs.run_tests && !inputs.enable_services }}
         env:
           TEST_ARGS: ${{ inputs.test_args }}
           COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
+          UPDATE_BADGES: ${{ inputs.update_badges }}
         run: |
+          # Coverage is MEASURED when a gate is set OR badges are on; it is only
+          # ENFORCED when coverage_threshold != 0.
           # TEST_ARGS is deliberately unquoted — it carries multiple go-test args.
           # shellcheck disable=SC2086
-          if [ "${COVERAGE_THRESHOLD}" != "0" ]; then
+          if [ "${COVERAGE_THRESHOLD}" != "0" ] || [ "${UPDATE_BADGES}" = "true" ]; then
             go test -coverprofile=coverage.out -covermode=atomic ${TEST_ARGS}
             TOTAL=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
-            echo "::notice::total coverage ${TOTAL}% (threshold ${COVERAGE_THRESHOLD}%)"
-            awk -v t="${TOTAL:-0}" -v thr="${COVERAGE_THRESHOLD}" \
-              'BEGIN { if (t+0 < thr+0) { exit 1 } }' \
-              || { echo "::error::coverage ${TOTAL}% is below threshold ${COVERAGE_THRESHOLD}%"; exit 1; }
+            echo "coverage=${TOTAL}" >> "$GITHUB_OUTPUT"
+            if [ "${COVERAGE_THRESHOLD}" != "0" ]; then
+              echo "::notice::total coverage ${TOTAL}% (threshold ${COVERAGE_THRESHOLD}%)"
+              awk -v t="${TOTAL:-0}" -v thr="${COVERAGE_THRESHOLD}" \
+                'BEGIN { if (t+0 < thr+0) { exit 1 } }' \
+                || { echo "::error::coverage ${TOTAL}% is below threshold ${COVERAGE_THRESHOLD}%"; exit 1; }
+            else
+              echo "::notice::total coverage ${TOTAL}%"
+            fi
           else
             go test ${TEST_ARGS}
           fi
@@ -240,6 +276,8 @@ jobs:
     if: ${{ inputs.run_tests && inputs.enable_services }}
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      coverage: ${{ steps.test.outputs.coverage }}
     defaults:
       run:
         shell: bash
@@ -294,19 +332,138 @@ jobs:
           echo "GOPRIVATE=${GO_PRIVATE}" >> "$GITHUB_ENV"
 
       - name: go test (with services)
+        id: test
         env:
           TEST_ARGS: ${{ inputs.test_args }}
           COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
+          UPDATE_BADGES: ${{ inputs.update_badges }}
         run: |
+          # Coverage is MEASURED when a gate is set OR badges are on; it is only
+          # ENFORCED when coverage_threshold != 0.
           # TEST_ARGS is deliberately unquoted — it carries multiple go-test args.
           # shellcheck disable=SC2086
-          if [ "${COVERAGE_THRESHOLD}" != "0" ]; then
+          if [ "${COVERAGE_THRESHOLD}" != "0" ] || [ "${UPDATE_BADGES}" = "true" ]; then
             go test -coverprofile=coverage.out -covermode=atomic ${TEST_ARGS}
             TOTAL=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
-            echo "::notice::total coverage ${TOTAL}% (threshold ${COVERAGE_THRESHOLD}%)"
-            awk -v t="${TOTAL:-0}" -v thr="${COVERAGE_THRESHOLD}" \
-              'BEGIN { if (t+0 < thr+0) { exit 1 } }' \
-              || { echo "::error::coverage ${TOTAL}% is below threshold ${COVERAGE_THRESHOLD}%"; exit 1; }
+            echo "coverage=${TOTAL}" >> "$GITHUB_OUTPUT"
+            if [ "${COVERAGE_THRESHOLD}" != "0" ]; then
+              echo "::notice::total coverage ${TOTAL}% (threshold ${COVERAGE_THRESHOLD}%)"
+              awk -v t="${TOTAL:-0}" -v thr="${COVERAGE_THRESHOLD}" \
+                'BEGIN { if (t+0 < thr+0) { exit 1 } }' \
+                || { echo "::error::coverage ${TOTAL}% is below threshold ${COVERAGE_THRESHOLD}%"; exit 1; }
+            else
+              echo "::notice::total coverage ${TOTAL}%"
+            fi
           else
             go test ${TEST_ARGS}
           fi
+
+  # Commit shields.io badges back into the caller's README. Isolated as its own
+  # job so `contents: write` never touches the build/test jobs, and so the badge
+  # logic exists once instead of being duplicated across the services split.
+  # No `defaults.run.working-directory` here — readme_path is repo-root relative.
+  badges:
+    name: README badges
+    needs: [go, go-db]
+    if: >-
+      ${{ inputs.update_badges
+          && github.event_name == 'push'
+          && !cancelled()
+          && needs.go.result == 'success'
+          && contains(fromJSON('["success","skipped"]'), needs['go-db'].result)
+          && github.ref_name == (inputs.badge_branch != '' && inputs.badge_branch
+                                 || github.event.repository.default_branch) }}
+    permissions:
+      contents: write
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # ref: is required — the default detached-HEAD checkout cannot be pushed from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Rewrite README badges
+        env:
+          README: ${{ inputs.readme_path }}
+          SCAN_DIR: ${{ inputs.working_directory }}
+          COVERAGE: ${{ needs['go-db'].result == 'success' && needs['go-db'].outputs.coverage || needs.go.outputs.coverage }}
+        run: |
+          if [ ! -f "$README" ]; then
+            echo "::error::readme_path '${README}' not found at the repository root"; exit 1
+          fi
+
+          # grep exits 1 on zero matches; that is a valid count, not a failure.
+          # Deliberately narrower than zopsmart/workflows' `grep -r -E '//\s*nolint' .`,
+          # which also counts .git/, vendor/ and binaries. Expect a LOWER number.
+          SUPPRESSIONS=$({ grep -rIE --include='*.go' --exclude-dir=vendor --exclude-dir=.git \
+            -- '//[[:space:]]*nolint' "${SCAN_DIR:-.}" || true; } | wc -l | tr -d ' ')
+
+          # shields.io: '%' must be percent-encoded, and a literal '-' in a label
+          # must be doubled ('--') because '-' separates label/message/colour.
+          ramp() {
+            awk -v p="${1:-0}" 'BEGIN {
+              if (p+0 >= 90)      print "brightgreen";
+              else if (p+0 >= 80) print "green";
+              else if (p+0 >= 70) print "yellowgreen";
+              else if (p+0 >= 60) print "yellow";
+              else if (p+0 >= 50) print "orange";
+              else                print "red";
+            }'
+          }
+
+          PENDING=""
+          upsert() { # $1 = alt text, $2 = full badge markdown
+            if grep -qF "![$1](" "$README"; then
+              # Anchored on the alt text so a pre-existing (incl. legacy zopsmart)
+              # badge is replaced in place rather than duplicated.
+              sed -i "s|!\\[$1\\]([^)]*)|$2|" "$README"
+            else
+              PENDING="${PENDING:+$PENDING }$2"
+            fi
+          }
+
+          if [ -n "${COVERAGE}" ]; then
+            upsert "Coverage" \
+              "![Coverage](https://img.shields.io/badge/Coverage-${COVERAGE}%25-$(ramp "${COVERAGE}"))"
+          else
+            echo "::notice::no coverage value available — skipping the coverage badge"
+          fi
+
+          if [ "${SUPPRESSIONS}" -gt 0 ]; then NOLINT_COLOUR=orange; else NOLINT_COLOUR=brightgreen; fi
+          upsert "nolint count" \
+            "![nolint count](https://img.shields.io/badge/nolint_count-${SUPPRESSIONS}-${NOLINT_COLOUR})"
+
+          if [ -n "${PENDING}" ]; then
+            if grep -q '^# ' "$README"; then
+              awk -v ins="${PENDING}" '
+                { print }
+                !done && /^# / { print ""; print ins; done = 1 }
+              ' "$README" > "$README.badges.tmp"
+            else
+              { printf '%s\n\n' "${PENDING}"; cat "$README"; } > "$README.badges.tmp"
+            fi
+            mv "$README.badges.tmp" "$README"
+          fi
+
+      - name: Commit + push
+        env:
+          README: ${{ inputs.readme_path }}
+          BRANCH: ${{ inputs.badge_branch != '' && inputs.badge_branch || github.event.repository.default_branch }}
+        run: |
+          if git diff --quiet -- "$README"; then
+            echo "::notice::README badges already up to date — nothing to commit"; exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$README"
+          git commit -m 'chore(ci): update README badges'
+          # No [skip ci] needed: pushes authenticated with GITHUB_TOKEN do not
+          # trigger further workflow runs.
+          if git push origin "HEAD:${BRANCH}"; then exit 0; fi
+          echo "::notice::push rejected — rebasing once and retrying"
+          git pull --rebase origin "${BRANCH}"
+          git push origin "HEAD:${BRANCH}"

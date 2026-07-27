@@ -10,6 +10,13 @@
 # redis service containers on localhost (5432 / 3306 / 6379), for DB-backed Node
 # backends — the same capability ci-go offers. Service containers are not
 # language-specific; a Node/Python/Java backend gets them the same way.
+#
+# update_badges commits shields.io Coverage + eslint-disable-count badges back
+# into the caller's README on default-branch pushes (parity with
+# zopsmart/workflows test-and-lint). Default off; the caller must also grant
+# `permissions: contents: write` — a reusable workflow's permissions are capped
+# by its caller. Coverage is read from an Istanbul `json-summary` report, so the
+# caller's test_command must emit one.
 name: ci-node
 
 on:
@@ -87,6 +94,21 @@ on:
         type: string
         required: false
         default: 'npm test'
+      coverage_threshold:
+        description: >-
+          Minimum total line-coverage percent, read from coverage_summary_path.
+          0 disables the gate. Non-zero requires test_command to emit an Istanbul
+          json-summary report.
+        type: number
+        required: false
+        default: 0
+      coverage_summary_path:
+        description: >-
+          Istanbul json-summary report, relative to working_directory. Read when
+          coverage_threshold is non-zero or update_badges is true.
+        type: string
+        required: false
+        default: 'coverage/coverage-summary.json'
       enable_services:
         description: >-
           Run tests in a job with postgres + mysql + redis service containers
@@ -139,6 +161,27 @@ on:
         type: string
         required: false
         default: 'npm run build'
+      update_badges:
+        description: >-
+          Commit shields.io Coverage + eslint-disable-count badges into the
+          caller's README on default-branch pushes. Requires
+          `permissions: contents: write` in the calling job. Off ⇒ nothing below
+          applies and nothing is pushed.
+        type: boolean
+        required: false
+        default: false
+      readme_path:
+        description: 'README to rewrite, REPO-ROOT relative (not working_directory relative).'
+        type: string
+        required: false
+        default: 'README.md'
+      badge_branch:
+        description: >-
+          Branch the badge commit is pushed to. Empty ⇒ the repository default
+          branch. Set to a sandbox branch to trial the feature.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -155,6 +198,8 @@ jobs:
     name: install · lint${{ inputs.enable_services && '' || ' · test' }} · build
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      coverage: ${{ steps.coverage.outputs.coverage }}
     defaults:
       run:
         shell: bash
@@ -185,6 +230,40 @@ jobs:
         if: ${{ inputs.run_tests && !inputs.enable_services }}
         run: ${{ inputs.test_command }}
 
+      # Coverage is MEASURED when a gate is set OR badges are on; it is only
+      # ENFORCED when coverage_threshold != 0. Parsed with node (guaranteed
+      # present here) rather than jq (not guaranteed on every runner label).
+      - name: Coverage
+        id: coverage
+        if: ${{ inputs.run_tests && !inputs.enable_services && (inputs.coverage_threshold != 0 || inputs.update_badges) }}
+        env:
+          SUMMARY: ${{ inputs.coverage_summary_path }}
+          COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
+        run: |
+          # The JS is deliberately single-quoted: it must reach node verbatim,
+          # env vars are read via process.env, not shell expansion.
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("fs");
+            const p = process.env.SUMMARY;
+            if (!fs.existsSync(p)) {
+              console.log(`::error::coverage summary "${p}" not found — test_command must emit an Istanbul json-summary report (jest --coverage --coverageReporters=json-summary, or vitest --coverage --coverage.reporter=json-summary)`);
+              process.exit(1);
+            }
+            const pct = JSON.parse(fs.readFileSync(p, "utf8")).total.lines.pct;
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `coverage=${pct}\n`);
+            const thr = Number(process.env.COVERAGE_THRESHOLD || 0);
+            if (thr > 0) {
+              console.log(`::notice::total coverage ${pct}% (threshold ${thr}%)`);
+              if (pct < thr) {
+                console.log(`::error::coverage ${pct}% is below threshold ${thr}%`);
+                process.exit(1);
+              }
+            } else {
+              console.log(`::notice::total coverage ${pct}%`);
+            }
+          '
+
       - name: Build
         if: ${{ inputs.run_build }}
         run: ${{ inputs.build_command }}
@@ -197,6 +276,8 @@ jobs:
     if: ${{ inputs.run_tests && inputs.enable_services }}
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      coverage: ${{ steps.coverage.outputs.coverage }}
     defaults:
       run:
         shell: bash
@@ -248,3 +329,145 @@ jobs:
 
       - name: Test (with services)
         run: ${{ inputs.test_command }}
+
+      # See the note on the `node` job's Coverage step.
+      - name: Coverage
+        id: coverage
+        if: ${{ inputs.coverage_threshold != 0 || inputs.update_badges }}
+        env:
+          SUMMARY: ${{ inputs.coverage_summary_path }}
+          COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
+        run: |
+          # The JS is deliberately single-quoted: it must reach node verbatim,
+          # env vars are read via process.env, not shell expansion.
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("fs");
+            const p = process.env.SUMMARY;
+            if (!fs.existsSync(p)) {
+              console.log(`::error::coverage summary "${p}" not found — test_command must emit an Istanbul json-summary report (jest --coverage --coverageReporters=json-summary, or vitest --coverage --coverage.reporter=json-summary)`);
+              process.exit(1);
+            }
+            const pct = JSON.parse(fs.readFileSync(p, "utf8")).total.lines.pct;
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `coverage=${pct}\n`);
+            const thr = Number(process.env.COVERAGE_THRESHOLD || 0);
+            if (thr > 0) {
+              console.log(`::notice::total coverage ${pct}% (threshold ${thr}%)`);
+              if (pct < thr) {
+                console.log(`::error::coverage ${pct}% is below threshold ${thr}%`);
+                process.exit(1);
+              }
+            } else {
+              console.log(`::notice::total coverage ${pct}%`);
+            }
+          '
+
+  # Commit shields.io badges back into the caller's README. Isolated as its own
+  # job so `contents: write` never touches the build/test jobs, and so the badge
+  # logic exists once instead of being duplicated across the services split.
+  # No `defaults.run.working-directory` here — readme_path is repo-root relative.
+  badges:
+    name: README badges
+    needs: [node, node-db]
+    if: >-
+      ${{ inputs.update_badges
+          && github.event_name == 'push'
+          && !cancelled()
+          && needs.node.result == 'success'
+          && contains(fromJSON('["success","skipped"]'), needs['node-db'].result)
+          && github.ref_name == (inputs.badge_branch != '' && inputs.badge_branch
+                                 || github.event.repository.default_branch) }}
+    permissions:
+      contents: write
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # ref: is required — the default detached-HEAD checkout cannot be pushed from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Rewrite README badges
+        env:
+          README: ${{ inputs.readme_path }}
+          SCAN_DIR: ${{ inputs.working_directory }}
+          COVERAGE: ${{ needs['node-db'].result == 'success' && needs['node-db'].outputs.coverage || needs.node.outputs.coverage }}
+        run: |
+          if [ ! -f "$README" ]; then
+            echo "::error::readme_path '${README}' not found at the repository root"; exit 1
+          fi
+
+          # grep exits 1 on zero matches; that is a valid count, not a failure.
+          SUPPRESSIONS=$({ grep -rIE --include='*.js' --include='*.jsx' --include='*.ts' \
+            --include='*.tsx' --include='*.vue' --exclude-dir=node_modules --exclude-dir=dist \
+            --exclude-dir=build --exclude-dir=coverage --exclude-dir=.git \
+            -- 'eslint-disable' "${SCAN_DIR:-.}" || true; } | wc -l | tr -d ' ')
+
+          # shields.io: '%' must be percent-encoded, and a literal '-' in a label
+          # must be doubled ('--') because '-' separates label/message/colour.
+          ramp() {
+            awk -v p="${1:-0}" 'BEGIN {
+              if (p+0 >= 90)      print "brightgreen";
+              else if (p+0 >= 80) print "green";
+              else if (p+0 >= 70) print "yellowgreen";
+              else if (p+0 >= 60) print "yellow";
+              else if (p+0 >= 50) print "orange";
+              else                print "red";
+            }'
+          }
+
+          PENDING=""
+          upsert() { # $1 = alt text, $2 = full badge markdown
+            if grep -qF "![$1](" "$README"; then
+              # Anchored on the alt text so a pre-existing (incl. legacy zopsmart)
+              # badge is replaced in place rather than duplicated.
+              sed -i "s|!\\[$1\\]([^)]*)|$2|" "$README"
+            else
+              PENDING="${PENDING:+$PENDING }$2"
+            fi
+          }
+
+          if [ -n "${COVERAGE}" ]; then
+            upsert "Coverage" \
+              "![Coverage](https://img.shields.io/badge/Coverage-${COVERAGE}%25-$(ramp "${COVERAGE}"))"
+          else
+            echo "::notice::no coverage value available — skipping the coverage badge"
+          fi
+
+          if [ "${SUPPRESSIONS}" -gt 0 ]; then LINT_COLOUR=orange; else LINT_COLOUR=brightgreen; fi
+          upsert "eslint-disable count" \
+            "![eslint-disable count](https://img.shields.io/badge/eslint--disable_count-${SUPPRESSIONS}-${LINT_COLOUR})"
+
+          if [ -n "${PENDING}" ]; then
+            if grep -q '^# ' "$README"; then
+              awk -v ins="${PENDING}" '
+                { print }
+                !done && /^# / { print ""; print ins; done = 1 }
+              ' "$README" > "$README.badges.tmp"
+            else
+              { printf '%s\n\n' "${PENDING}"; cat "$README"; } > "$README.badges.tmp"
+            fi
+            mv "$README.badges.tmp" "$README"
+          fi
+
+      - name: Commit + push
+        env:
+          README: ${{ inputs.readme_path }}
+          BRANCH: ${{ inputs.badge_branch != '' && inputs.badge_branch || github.event.repository.default_branch }}
+        run: |
+          if git diff --quiet -- "$README"; then
+            echo "::notice::README badges already up to date — nothing to commit"; exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$README"
+          git commit -m 'chore(ci): update README badges'
+          # No [skip ci] needed: pushes authenticated with GITHUB_TOKEN do not
+          # trigger further workflow runs.
+          if git push origin "HEAD:${BRANCH}"; then exit 0; fi
+          echo "::notice::push rejected — rebasing once and retrying"
+          git pull --rebase origin "${BRANCH}"
+          git push origin "HEAD:${BRANCH}"

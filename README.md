@@ -24,8 +24,8 @@ lands everywhere.
 
 | Workflow | Purpose |
 |---|---|
-| [`ci-go.yml`](docs/ci-go.md) | Go core: build · vet · test · golangci-lint, module/build caching; optional coverage gate + postgres/mysql/redis service containers |
-| [`ci-node.yml`](docs/ci-node.md) | Node/React core: install · lint · test · build, setup-node caching; optional service containers |
+| [`ci-go.yml`](docs/ci-go.md) | Go core: build · vet · test · golangci-lint, module/build caching; optional coverage gate + postgres/mysql/redis service containers + self-updating README badges (coverage / nolint count) |
+| [`ci-node.yml`](docs/ci-node.md) | Node/React core: install · lint · test · build, setup-node caching; optional service containers + coverage gate + self-updating README badges (coverage / eslint-disable count) |
 
 ### Build & deploy
 
