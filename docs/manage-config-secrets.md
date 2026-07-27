@@ -73,6 +73,7 @@ is set.
 | `gsm_mode` | input | `blob` | `blob` \| `individual` (gsm only) |
 | `gsm_locations` | input | `''` | user-managed replication regions; empty ⇒ automatic |
 | `dry_run` | input | `false` | validate + print the plan; write nothing |
+| `min_value_length` | input | `8` | refuse the run if any `payload_json` value is shorter than this; `0` disables |
 | `payload_json` | secret | — | required when `secrets_backend` is not `none` |
 
 ### Outputs

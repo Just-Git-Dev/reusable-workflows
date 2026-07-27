@@ -29,6 +29,7 @@ Re-run after fixing the cause; the disable happens on the next green run.
 | `services_csv` | input (req) | — | comma-separated Cloud Run service names |
 | `title` | input | `secrets` | label for the run summary |
 | `dry_run` | input | `false` | validate + print the plan; write nothing |
+| `min_value_length` | input | `8` | refuse the run if any payload value is shorter than this; `0` disables |
 | `payload_json` | **secret** (req) | — | `{"DEST_KEY": "value", ...}` |
 
 ## Outputs

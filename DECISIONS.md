@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-07-27` — [Secret-distribution workflows refuse values too short to be a credential](#2026-07-27-secret-distribution-workflows-refuse-values-too-short-to-be-a-credential)
 - `2026-07-27` — [build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo](#2026-07-27-build-oncepromote-to-prod-build_only-release-relative-gar-retention-and-the-first-tests-in-this-repo)
 - `2026-07-27` — [`DECISIONS.md` restructured: index + age-based archive (no deletions)](#2026-07-27-decisionsmd-restructured-index--age-based-archive-no-deletions)
 - `2026-07-27` — [Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep](#2026-07-27-fleet-wide-caller-repin-to-v1150-driven-by-an-annotation-sweep)
@@ -43,6 +44,40 @@ archived by age only; nothing is deleted, and both files are greppable.
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-07-27 — Secret-distribution workflows refuse values too short to be a credential
+
+Ships as **`v1.18.0`** (`v1.16.0` is claimed by the unreleased `ci-go`/`ci-node` badges work,
+`v1.17.0` by build-once/promote-to-prod).
+
+`sync-bundle-key.yml` and `manage-config-secrets.yml` both validated `payload_json` as
+"non-empty JSON object" + "every value is a string" and nothing else. Those two checks are
+satisfied by the literal string `-`.
+
+That is not hypothetical. A Traide rotation run in May 2026 **succeeded** while distributing
+exactly that value as the R2 credentials; it sat in the `app-secrets` bundle for two months and
+surfaced only as the 2026-07-26 object-storage outage. Every layer behaved "correctly" — the
+workflow distributed what it was given, Cloud Run mounted it, the app read it. Nothing along the
+path had an opinion about whether the value could possibly be a credential.
+
+**New input `min_value_length`, default `8`**, on both workflows: any payload value shorter than
+the floor fails the run before anything is written or rolled.
+
+- **Default is on, not off.** An opt-in guard protects only the caller who remembers to opt in,
+  which is never the caller who is about to ship a placeholder. Consumers pinned to `v1.15.0` are
+  unaffected until they repin, so nothing breaks silently — the floor arrives as a deliberate
+  version bump, and `min_value_length: 0` is the documented escape hatch for a caller with a
+  legitimately short value.
+- **8 characters**, matching the floor Traide's api already enforces at boot (`mustCredEnv`), so
+  the distribution path and the consumption path agree rather than each inventing a threshold.
+- **The error names the KEY, never the value.** Values are masked secrets; printing a too-short
+  one to the run log to explain the failure would be its own leak.
+- **Length only — no placeholder pattern-matching.** A denylist of `-`, `changeme`, `TODO` is
+  unbounded and gives false confidence. Length is a crude but total check: it cannot be argued
+  with, and every real credential clears it.
+
+This does not make a *wrong-but-plausible* credential detectable — a revoked or mis-scoped key is
+still well-formed and still distributes. That case is covered downstream by the consumer's boot
+probe, not here.
 ## 2026-07-27 — build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo
 
 Ships as **`v1.17.0`** (`v1.16.0` is already claimed by the unreleased `ci-go`/`ci-node`
