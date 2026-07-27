@@ -47,4 +47,18 @@
   the suite, `nolint_count` reads **57** (down from the frozen 78 — the narrower grep,
   measured against the real tree), **and a second push produces no new commit.** Only
   then tag `v1.16.0` and flip #2045's pin to the tag.
+- [ ] **caller pin-drift is invisible — build a drift report.** The 2026-07-27 repin sweep
+  (see DECISIONS.md) found 17 of 25 platform callers stranded on `@v1.4.0`/`@v1.5.0`, six-plus
+  releases behind, and only noticed because someone manually read check-run *annotations*
+  across every caller. Nothing detects this. Wanted: a scheduled workflow in this repo that
+  walks the platform orgs, greps every `.github/workflows/*` for
+  `Just-Git-Dev/reusable-workflows/...@<ref>`, and reports (issue or job summary) any caller
+  more than one minor behind the latest tag — plus any pinned to a mutable ref. Cheap to
+  build (the sweep was ~30 lines of `gh api`); the value is that fixes we ship actually reach
+  the repos that need them.
+- [ ] **repin `quizzing-pro/api` as part of the `v1.16.0` cut.** Deliberately excluded from
+  the 2026-07-27 sweep — its `main.yaml` is concurrently edited by #2045 (badges dogfood,
+  `ci-go` pinned to SHA `200b381`) and #2041, and it is a live GKE prod deploy path. Its 4
+  refs (`ci-go`, `deploy-cluster-keyed`, `manage-config-secrets`, `promote-image`) are still
+  at `@v1.11.0` and still emit the Node-20 `docker/build-push-action` deprecation warning.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)

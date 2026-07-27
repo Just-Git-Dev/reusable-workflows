@@ -9,6 +9,60 @@
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-07-27 — Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep
+
+**Change.** Repinned every `Just-Git-Dev/reusable-workflows` caller across the platform to
+`@v1.15.0` — 24 `uses:` lines in 7 repos, pin-only. PRs: `AutoMahn/project#28`,
+`AutoMahn/api#27`, `AutoMahn/ui#7`, `AutoMahn/image-service#5`, `AutoMahn/admin-ui#2`,
+`AutoMahn/website#2`, `Traide-Co/project#23`. **`quizzing-pro/api` deliberately excluded —
+see below.**
+
+**Why.** A sweep of check-run *annotations* (not just conclusions) over the last 3 runs of
+all 25 caller workflows surfaced recurring `Node.js 20 actions are deprecated` warnings on
+`ci-go`, `neon-backup`, `deploy-cloud-run`, `deploy-cloudflare-pages` and
+`deploy-cluster-keyed` jobs. Every instance traced to a **stale caller pin, not a defect in
+the reusable**: `main`/`v1.15.0` already carries the Node-24-era versions
+(`checkout@v7.0.1`, `setup-go@v7.0.0`, `setup-node@v7.0.0`, `upload-artifact@v7.0.1`,
+`build-push-action@v7.3.0`, `wrangler-action@v4.0.0`) from the Dependabot group bump in #18.
+17 of 25 callers were still on `@v1.4.0`/`@v1.5.0`. GitHub forces Node 24 on 2026-06-16 and
+removes the Node 20 runtime on 2026-09-16, so this had a deadline attached.
+
+**The deeper problem this exposes: pin drift is invisible.** Nothing in this repo or the
+caller repos notices that a caller is six releases behind — the annotation sweep was manual
+and ad hoc. Callers silently miss fixes for months; `bootstrap-alerts`' failure-isolation fix
+and `deploy-cloud-run`'s unquoted-`extra_deploy_flags` word-splitting fix were both shipped
+and both unconsumed by repos that needed them. Filed in `TODO.md` as a candidate for a
+scheduled cross-org pin-drift report.
+
+**Compatibility was proven, not assumed.** Before touching anything, the
+`on.workflow_call` `inputs`/`secrets` block of each reusable was parsed at the caller's
+current pin and at `v1.15.0` and diffed: no removed inputs, no removed secrets, no newly
+required inputs, for all 20 (workflow, old-pin) pairs. This mattered concretely — `ci-go`'s
+`github_token`→`go_private_token` secret rename (v1.11.0) is a real breaking change for any
+caller in the `v1.6.0`–`v1.10.0` window; the check confirmed our callers sit at `v1.5.0` and
+`v1.11.0`, i.e. either side of it, so none are affected. Guessing here would have broken
+`AutoMahn/api`.
+
+**What is *not* proven:** contract compatibility is static. Runtime behaviour on `v1.15.0` is
+only exercised by each workflow's next real run. This is stated in every PR body rather than
+implied. Several of these are rotation workflows that run rarely or (see below) never.
+
+**Chose `v1.15.0`, not "wait for `v1.16.0`".** `v1.16.0` is gated on the README-badges
+dogfood landing in `quizzing-pro/api#2045`, which is itself gated on human merge. Coupling a
+deadline-bearing Node-20 fix to an unrelated release gate would have held 24 files hostage to
+one PR. The badges work reaches these callers on the next sweep.
+
+**`quizzing-pro/api` held back on purpose.** Its 4 refs are at `@v1.11.0`, but its
+`main.yaml` is concurrently edited by the open `#2045` (which pins the `ci-go` job to SHA
+`200b381` as the badges dogfood) and `#2041`. Repinning that file now would conflict with the
+very PR that unblocks `v1.16.0`, and would move a live GKE prod deploy/promote path in a
+drive-by chore PR. It gets repinned to the tag as part of the `v1.16.0` cut instead.
+
+**Also found, not fixed here** (logged to `infra-provisioning/TODO.md`): `rotate-cloudflare-token`
+warns that AutoMahn's CF token lacks `Pages -> Edit`, `R2 -> Edit` and `Workers Scripts -> Edit`
+(three HTTP 403s) while the job still reports success; and four rotation workflows have **never
+been run at all**, so their IAM paths are unproven in either direction.
+
 ## 2026-07-27 — `ci-go`/`ci-node`: opt-in README badges close the last test-and-lint parity gap
 
 **Change.** Both `ci-*` workflows gained a default-off `update_badges` path (plus
