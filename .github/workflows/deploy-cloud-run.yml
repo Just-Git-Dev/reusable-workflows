@@ -398,10 +398,19 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           TITLE: ${{ inputs.build_only && format('build-only — {0}', inputs.image_name) || format('deploy — {0}', inputs.service) }}
         run: |
+          # `if`, not `[ -n … ] && echo`: this group is the LAST statement in the
+          # step, so the group's status is the script's status. A trailing
+          # AND-list that evaluates false returns 1 and fails an otherwise
+          # successful job — which is exactly what build_only (URL always empty)
+          # and dry_run did.
+          SUFFIX=""
+          [ "$DRY_RUN" = "true" ] && SUFFIX=" (dry run)"
           {
             echo "## Cloud Run $TITLE"
             echo ""
-            echo "- Mode: \`$MODE\`${DRY_RUN:+ (dry run)}"
+            echo "- Mode: \`$MODE\`$SUFFIX"
             echo "- Image: \`$IMAGE\`"
-            [ -n "${URL:-}" ] && echo "- Service URL: $URL"
+            if [ -n "${URL:-}" ]; then
+              echo "- Service URL: $URL"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
