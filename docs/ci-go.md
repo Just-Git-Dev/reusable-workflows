@@ -22,7 +22,7 @@ only the universal core so it stays adoptable everywhere.
 | `run_build` / `build_packages` | `true` / `./...` | `go build` |
 | `run_vet` | `true` | `go vet ./...` |
 | `run_tests` / `test_args` | `true` / `-race -count=1 ./...` | `go test`; set `run_tests: false` when the suite needs a DB/stack the caller stands up itself |
-| `coverage_threshold` | `0` | when non-zero, tests run with `-coverprofile` and the job **fails** below this total statement-coverage percent |
+| `coverage_threshold` | `0` | when non-zero, tests run with `-coverprofile` and the job **fails** below this total statement-coverage percent. Measuring is decoupled from gating: `update_badges: true` also turns `-coverprofile` on, with no gate |
 | `enable_services` | `false` | run tests in a `go-db` job with postgres + mysql + redis service containers on localhost (`5432`/`3306`/`6379`) |
 | `postgres_image` / `postgres_db` / `postgres_password` | `postgres:16` / `test` / `postgres` | postgres service (`enable_services` only) |
 | `mysql_image` / `mysql_database` / `mysql_root_password` | `mysql:8` / `test` / `root` | mysql service (`enable_services` only) |
@@ -32,6 +32,9 @@ only the universal core so it stays adoptable everywhere.
 | `golangci_args` | `--timeout=5m` | passed to golangci-lint |
 | `lint_blocking` | `true` | `false` = report lint failures without failing the job (paydown mode) |
 | `go_private` | `''` | GOPRIVATE glob (e.g. `github.com/zopsmart/*`); when set, git fetches private modules over HTTPS using the `go_private_token` **secret** (required then) |
+| `update_badges` | `false` | commit Coverage + nolint-count badges into the README on default-branch pushes — see [README badges](#readme-badges). Requires `permissions: contents: write` **in the caller** |
+| `readme_path` | `README.md` | README the badges are written into — **repo-root relative**, *not* `working_directory` relative |
+| `badge_branch` | `''` | branch the badge commit is pushed to; empty ⇒ the repository default branch. Point it at a sandbox branch to trial the feature |
 
 **Secrets:** only `go_private_token` — a PAT/token for fetching private Go modules,
 required when `go_private` is set (otherwise none; public CI needs no secrets). It is
@@ -104,6 +107,67 @@ Monorepo module:
       working_directory: services/api
       go_version_file: services/api/go.mod
 ```
+
+## README badges
+
+`zopsmart/workflows` test-and-lint kept two shields.io badges *baked into the
+committed README* — a coverage percentage and a `nolint` count — by rewriting the
+file and pushing the change back on every `main` build. `update_badges: true`
+reproduces that, so a repo migrating off the legacy workflow keeps a
+self-updating README:
+
+```markdown
+![Coverage](https://img.shields.io/badge/Coverage-90.8%25-brightgreen) ![nolint count](https://img.shields.io/badge/nolint_count-7-orange)
+```
+
+A third `badges` job runs **only** when all of these hold: `update_badges: true`,
+the event is a `push`, the test job succeeded, and `github.ref_name` equals
+`badge_branch` (or the repository default branch when it is empty). It is the only
+job that gets `contents: write`; build/test/lint stay `contents: read`.
+
+An existing badge is matched on its alt text (`![Coverage](…)`,
+`![nolint count](…)`) and **replaced in place**, so a legacy zopsmart badge line
+is updated rather than duplicated; if neither is present the badges are inserted
+after the first `# ` heading. When nothing changes, no commit is made — re-running
+is a no-op.
+
+The coverage colour ramp is ≥90 `brightgreen`, ≥80 `green`, ≥70 `yellowgreen`,
+≥60 `yellow`, ≥50 `orange`, else `red`. The suppression badge is `brightgreen` at
+zero and `orange` otherwise.
+
+**Two caller-side requirements — both are easy to miss:**
+
+```yaml
+jobs:
+  ci:
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.16.0
+    permissions:
+      contents: write        # REQUIRED — a reusable workflow's permissions are
+                             # capped by the caller; without this the push fails
+    with:
+      update_badges: true
+      # badge_branch: badges-trial   # trial it off the default branch first
+```
+
+1. **`permissions: contents: write` on the calling job.** A called workflow can
+   never hold a permission the caller did not grant, so the `badges` job's own
+   `contents: write` is not enough on its own. This is why the feature is
+   default-off — every other caller keeps a read-only token.
+2. **Branch protection on the default branch will reject the push.** This is the
+   honest limitation of commit-back: if `main` requires PRs or status checks, the
+   `badges` job fails at `git push`. The two escapes are to exempt the GitHub
+   Actions app from the protection rule, or to leave `update_badges: false` and
+   read the coverage number off the `::notice::total coverage …%` annotation that
+   is emitted regardless.
+
+**Deliberate differences from the legacy implementation.** The nolint count is
+taken with `grep -rIE --include='*.go' --exclude-dir=vendor` over
+`working_directory`; legacy ran `grep -r -E '//\s*nolint' .`, which also counted
+`.git/`, `vendor/` and binary files. **Expect a lower number than legacy reported
+for the same repo — that is the bug being fixed, not a regression.** Legacy also
+shelled out to `gobadge@latest` and `ad-m/github-push-action`; this uses inline
+`sed` and a plain `git push`, adding no unpinned third-party dependency to a job
+that holds a write token. See `DECISIONS.md` (2026-07-27).
 
 ## Concurrency
 

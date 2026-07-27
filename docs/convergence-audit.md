@@ -131,6 +131,15 @@ Ordered by reach × safety; each new reusable ships with `docs/<name>.md`, passe
 
 1. `ci-go.yml`, `ci-node.yml` — cleanest contract, highest reach, first step to
    dropping `zopsmart/workflows` test-and-lint.
+   **Parity closed 2026-07-27 (v1.16.0): README badges.** The original audit
+   missed one legacy capability — `_test-go.yaml` rewrote the caller's README
+   with shields.io Coverage + `nolint`-count badges and pushed the change back on
+   every `main` build (verified in `zopsmart/hiring-portal-api`, whose README
+   line 3 carries exactly those two badges). Nothing here did that, so a migrating
+   caller would have silently lost a visible feature. Both `ci-*` workflows now
+   have an opt-in, default-off `update_badges` path. It also retires two pieces of
+   the legacy debt listed above in one step: `gobadge@latest` (unpinned) and
+   `ad-m/github-push-action` are both gone, replaced by inline `sed` + `git push`.
 2. `deploy-cloud-run.yml` — Cloud-Run build+deploy with layer/module caching.
 3. `deploy-gke-service.yml` — replaces `zopsmart/workflows` deploy for GKE apps.
 4. Fix `bootstrap-alerts` (real adoption, failing).

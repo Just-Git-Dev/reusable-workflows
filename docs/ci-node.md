@@ -24,11 +24,16 @@ own jobs/steps in the caller.
 | `run_lint` / `lint_command` | `true` / `npm run lint` | lint |
 | `lint_blocking` | `true` | `false` = report lint failures without failing the job |
 | `run_tests` / `test_command` | `true` / `npm test` | test |
+| `coverage_threshold` | `0` | when non-zero, total **line** coverage is read from `coverage_summary_path` and the job **fails** below this percent. Measuring is decoupled from gating: `update_badges: true` also reads coverage, with no gate |
+| `coverage_summary_path` | `coverage/coverage-summary.json` | Istanbul `json-summary` report, relative to `working_directory`. Read only when a threshold is set or `update_badges` is on — `test_command` must emit it |
 | `enable_services` | `false` | run tests in a `node-db` job with postgres + mysql + redis service containers on localhost (`5432`/`3306`/`6379`) — for DB-backed Node backends |
 | `postgres_image` / `postgres_db` / `postgres_password` | `postgres:16` / `test` / `postgres` | postgres service (`enable_services` only) |
 | `mysql_image` / `mysql_database` / `mysql_root_password` | `mysql:8` / `test` / `root` | mysql service (`enable_services` only) |
 | `redis_image` | `redis:7` | redis service (`enable_services` only) |
 | `run_build` / `build_command` | `true` / `npm run build` | build |
+| `update_badges` | `false` | commit Coverage + eslint-disable-count badges into the README on default-branch pushes — see [README badges](#readme-badges). Requires `permissions: contents: write` **in the caller** |
+| `readme_path` | `README.md` | README the badges are written into — **repo-root relative**, *not* `working_directory` relative |
+| `badge_branch` | `''` | branch the badge commit is pushed to; empty ⇒ the repository default branch. Point it at a sandbox branch to trial the feature |
 
 No secrets — public/read-only CI. (Need a private sibling repo for specs? Do that
 checkout in a caller job; this workflow takes no secrets by design.)
@@ -83,6 +88,48 @@ Monorepo package:
     with:
       working_directory: frontend/web
       node_version: '22'
+```
+
+## README badges
+
+The `ci-go` counterpart of this feature is documented at length in
+[`ci-go.md`](ci-go.md#readme-badges) — same inputs, same `badges` job, same
+`permissions: contents: write` and branch-protection caveats. Two things differ
+for Node.
+
+**1. Coverage must be produced by your `test_command`.** `ci-go` gets coverage
+for free from `go test -coverprofile`; there is no equivalent here, so this
+workflow reads an **Istanbul `json-summary` report** and takes `total.lines.pct`.
+Add the reporter:
+
+```jsonc
+// jest
+"test": "jest --coverage --coverageReporters=json-summary --coverageReporters=text"
+// vitest
+"test": "vitest run --coverage --coverage.reporter=json-summary --coverage.reporter=text"
+```
+
+If the file is missing while `coverage_threshold` or `update_badges` is on, the
+job fails with a `::error::` naming the reporter flag to add. `coverage_summary_path`
+is relative to `working_directory` (unlike `readme_path`, which is repo-root
+relative).
+
+**2. The suppression badge counts `eslint-disable`,** via
+`grep -rIE --include='*.{js,jsx,ts,tsx,vue}' --exclude-dir=node_modules` (also
+skipping `dist`, `build`, `coverage`) — the ESLint analogue of `ci-go`'s `nolint`
+count. It renders as `![eslint-disable count](…)`; the literal `-` is doubled to
+`eslint--disable_count` in the shields.io URL because `-` is that API's field
+separator.
+
+```yaml
+jobs:
+  ci:
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.16.0
+    permissions:
+      contents: write        # REQUIRED — caller permissions cap the called workflow
+    with:
+      update_badges: true
+      test_command: 'vitest run --coverage --coverage.reporter=json-summary'
 ```
 
 ## Concurrency

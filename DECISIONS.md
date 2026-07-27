@@ -9,6 +9,88 @@
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-07-27 — `ci-go`/`ci-node`: opt-in README badges close the last test-and-lint parity gap
+
+**Change.** Both `ci-*` workflows gained a default-off `update_badges` path (plus
+`readme_path`, `badge_branch`; `ci-node` also gained `coverage_threshold` +
+`coverage_summary_path`, which it had no coverage plumbing for at all). When on, a
+third `badges` job rewrites shields.io Coverage + suppression-count badges into the
+caller's README and commits the change back on default-branch pushes.
+
+**Why.** `ci-go.yml`'s own header claims it "match[es] zopsmart/workflows test-and-lint
+so callers lose nothing on migration". Reading the legacy source rather than a summary
+of it showed that was not true: `zopsmart/workflows/.github/workflows/_test-go.yaml`
+lines 264-318 install `gobadge`, rewrite the README, count `nolint`s, commit and push —
+and `zopsmart/hiring-portal-api`'s README line 3 is exactly those two badges, baked into
+the committed markdown. A case-insensitive grep for `badge`/`nolint` across this repo
+returned zero hits. A caller migrating off legacy would have silently lost a visible
+feature; that blocks the stated goal (`docs/convergence-audit.md`) of dropping
+`zopsmart/workflows` entirely.
+
+**This is not hypothetical — a caller has already regressed.** `quizzing-pro/api` was
+migrated onto `ci-go.yml@v1.11.0` (its `main.yaml` now mentions `zopsmart/workflows` only
+in comments), and its README still carries `Coverage-90.3%` and `nolint_count-78` —
+numbers **frozen at the moment of migration**, because nothing has updated them since.
+By contrast `quizzing-pro/engine`, still on `zopsmart/workflows/test-and-lint.yaml@main`,
+has a badge that is still live. The gap is already costing us on the exact repos the
+convergence effort has touched, and it worsens silently with every further migration.
+`quizzing-pro/api` is therefore the dogfood target: it is already on our `ci-go`, it has
+both badge shapes present (exercising the replace-in-place path against genuine legacy
+markup), and its `nolint` count will visibly drop from 78 under the narrower grep —
+making deviation 3 below observable rather than merely asserted.
+
+**Options weighed.** (a) A **status/pass-fail lint badge** — cheaper, but not what
+legacy produced; a repo migrating would see its `nolint_count-7` badge become something
+else. Rejected for parity. (b) A **gist/endpoint badge** (dynamic JSON in a gist,
+shields.io `endpoint` URL) — no write access to the caller's repo needed, so branch
+protection is a non-issue. Rejected because it changes the README contents on migration
+(the URL is different), needs a gist + a PAT with `gist` scope per org, and puts the
+badge's availability behind a second service. (c) **Commit-back**, chosen: identical
+end state to legacy, no new credential, no external dependency.
+
+**Tradeoffs.** Commit-back is the honest weak point and it is documented as such in
+both docs: **branch protection on the default branch will reject the push**, and the
+calling job must itself grant `permissions: contents: write` because a reusable
+workflow's permissions are capped by its caller. Both are why the feature is
+**default-off** — every existing caller keeps a read-only token and is completely
+unaffected. Write is scoped to the `badges` job alone; `go`/`go-db`/`node`/`node-db`
+stay `contents: read`.
+
+**Four deliberate deviations from the legacy implementation, each a fix:**
+
+1. `go install …/gobadge@latest` → **inline `sed`**. This repo SHA-pins third-party
+   actions precisely because these workflows mint creds; an `@latest` tool that
+   rewrites a file which is then committed with a write token is the same class of
+   supply-chain exposure. The badge is a URL string — it does not need a Go program.
+2. `ad-m/github-push-action@v0.8.0` → **plain `git push`**. `convergence-audit.md`
+   already lists legacy's `github-push-action@master` as debt to retire; this avoids
+   inheriting it. A rebase-once retry covers two callers landing on `main` back to back.
+3. `grep -r -E '//\s*nolint' .` → **`grep -rIE --include='*.go' --exclude-dir=vendor`**.
+   Legacy counted `.git/`, `vendor/` and binary files, and `\s` is a GNU extension.
+   **Our count will be lower than legacy's for the same repo — that is the bug being
+   fixed, not a regression**, and it is called out in `docs/ci-go.md` so a migrating
+   caller is not surprised by the number dropping.
+4. Coverage **measuring is decoupled from gating**. Previously `-coverprofile` only ran
+   when `coverage_threshold != 0`; a badge needs the number with no gate. The threshold
+   comparison is still applied only when the threshold is non-zero, so existing
+   behaviour is byte-for-byte unchanged.
+
+**Correctness.** Badges are matched on alt text and replaced in place, so an existing
+legacy badge line is updated rather than duplicated, and a run that changes nothing
+makes no commit. That idempotency is the property most likely to break, so the extracted
+`run:` bodies were exercised in a GNU-userland container against a README with (a) no
+badges, (b) legacy zopsmart badges, (c) already-current badges, plus no-`# `-heading,
+zero-suppressions, absent-coverage and missing-README cases — and end-to-end against a
+local bare remote, asserting two consecutive passes yield exactly one commit.
+
+**Not yet verified: the push itself.** Nothing about `contents: write`, caller
+permission capping, or the push can be exercised locally. Logged in `TODO.md` as a
+release gate — `v1.16.0` is not to be tagged until `update_badges` has run on a real
+caller against a sandbox `badge_branch`.
+
+**Release.** All new inputs are optional with defaults that preserve current behaviour
+exactly → **minor** bump, `v1.16.0`.
+
 ## 2026-07-24 — actions-group major bumps (#18): Node-24 runner floor is the only breaking change
 
 **Change.** Dependabot #18 bumped six actions (all SHA-pinned): `actions/checkout`

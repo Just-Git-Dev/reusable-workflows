@@ -33,4 +33,13 @@
 - [ ] `.github/workflows/manage-config-secrets.yml` — implement the reserved `eso`
   backend (currently errors "not implemented"): emit an `ExternalSecret` CR
   referencing the GSM secret written by the `gsm` backend.
+- [ ] `docs/ci-go.md` / `docs/ci-node.md` — every `Example caller` block still pins
+  `@v1.4.0` while the repo is at `v1.15.0`; the new README-badges examples pin
+  `@v1.16.0`, so the two docs now contradict themselves. Sweep all example pins to
+  the current tag (and check the other `docs/*.md` for the same staleness).
+- [ ] `ci-go.yml` / `ci-node.yml` — `update_badges` is **not yet dogfooded on a real
+  caller.** Nothing about `contents: write` or the commit-back push can be verified
+  locally. Before tagging `v1.16.0`: enable it on one Go caller with
+  `badge_branch: <sandbox>`, confirm one badge commit lands with the right numbers
+  and that a second push produces none.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
