@@ -7,7 +7,18 @@ name: Cleanup GAR images (reusable)
 #     (cron/migration containers commonly live on Jobs, not Services)
 #   - the most-recent N semver (vX.Y.Z) tags per image
 #   - any tag in keep_tags, or matching a prefix in keep_tag_prefixes
+#   - commit-sha-tagged images inside the release-relative retention window
+#     (see "sha retention" below) — the build-once/promote-to-prod source
 # Everything else is deleted once older than the untagged/tagged age limits.
+#
+# sha retention (build-once, promote-to-prod):
+#   Under build-once, `main` publishes image:<commit-sha> and a release only
+#   RETAGS that digest — so an age sweep that deletes :<sha> destroys the
+#   promotion source. Per package this workflow keeps every sha-tagged image
+#   newer than the (sha_retention_releases)-th most recent release, i.e. the
+#   unreleased-but-pending builds plus one release worth of rollback window.
+#   The pass is keep-ONLY: it can never select anything extra for deletion, so
+#   enabling it can only ever delete less than before.
 #
 # The caller owns the schedule and the dry_run decision. This workflow performs
 # exactly what dry_run says. Run with dry_run: true first and read the plan.
@@ -65,6 +76,21 @@ on:
         type: string
         required: false
         default: 'hotfix-,rc-,debug-'
+      sha_tag_pattern:
+        description: >-
+          Regex (Python re.search) identifying commit-sha tags published by a
+          build-once `main` pipeline. Empty ⇒ sha retention off entirely.
+        type: string
+        required: false
+        default: '^[0-9a-f]{40}$'
+      sha_retention_releases:
+        description: >-
+          Keep sha-tagged images newer than the Nth-most-recent release of that
+          package (releases ordered by TIME, not semver precedence). 1 = keep
+          unreleased builds plus one release of rollback window. 0 ⇒ off.
+        type: string
+        required: false
+        default: '1'
       dry_run:
         description: 'true = print the plan only, delete nothing.'
         type: boolean
@@ -108,6 +134,8 @@ jobs:
       TAGGED_MAX_AGE_DAYS:   ${{ inputs.tagged_max_age_days }}
       KEEP_TAGS:             ${{ inputs.keep_tags }}
       KEEP_TAG_PREFIXES:     ${{ inputs.keep_tag_prefixes }}
+      SHA_TAG_PATTERN:        ${{ inputs.sha_tag_pattern }}
+      SHA_RETENTION_RELEASES: ${{ inputs.sha_retention_releases }}
       DRY_RUN:               ${{ inputs.dry_run }}
     outputs:
       candidates: ${{ steps.plan.outputs.candidates }}
@@ -182,13 +210,33 @@ jobs:
         id: plan
         run: |
           python3 <<'PY' | tee /tmp/delete-plan.json
-          import json, os, subprocess, re
+          import json, os, subprocess, re, sys
           from datetime import datetime, timezone
 
           REPO_PATH = os.environ["REPO_PATH"]
           KEEP_SEMVER_COUNT = int(os.environ["KEEP_SEMVER_COUNT"])
           UNTAGGED_MAX_AGE_DAYS = int(os.environ["UNTAGGED_MAX_AGE_DAYS"])
           TAGGED_MAX_AGE_DAYS = int(os.environ["TAGGED_MAX_AGE_DAYS"])
+          SHA_TAG_PATTERN = os.environ.get("SHA_TAG_PATTERN", "").strip()
+          SHA_RETENTION_RELEASES = int(os.environ.get("SHA_RETENTION_RELEASES", "0") or 0)
+
+          # Fail closed on a bad pattern. Silently disabling the window would let the
+          # sweep delete the promotion source — the exact failure this rule prevents.
+          # Same stance as "zero live digests ⇒ abort" in the previous step.
+          sha_re = None
+          if SHA_TAG_PATTERN:
+              try:
+                  sha_re = re.compile(SHA_TAG_PATTERN)
+              except re.error as exc:
+                  print("::error::sha_tag_pattern is not a valid regex: %s" % exc, file=sys.stderr)
+                  raise SystemExit(1)
+
+          window_on = sha_re is not None and SHA_RETENTION_RELEASES > 0
+          # The releases that DEFINE the window must not age out of the semver keep-set
+          # between sweeps, or the boundary would drift and take the window with it.
+          EFF_SEMVER_COUNT = (
+              max(KEEP_SEMVER_COUNT, SHA_RETENTION_RELEASES + 1) if window_on else KEEP_SEMVER_COUNT
+          )
 
           def csv(name):
               return tuple(p for p in (s.strip() for s in os.environ.get(name, "").split(",")) if p)
@@ -196,20 +244,59 @@ jobs:
           keep_tags = frozenset(csv("KEEP_TAGS"))
           keep_prefixes = csv("KEEP_TAG_PREFIXES")
 
-          with open("/tmp/live-digests.txt") as fh:
+          with open(os.environ.get("LIVE_DIGESTS_FILE", "/tmp/live-digests.txt")) as fh:
               live_digests = {ln.strip() for ln in fh if ln.strip()}
 
-          raw = subprocess.check_output([
-              "gcloud", "artifacts", "docker", "images", "list",
-              REPO_PATH, "--include-tags", "--format=json",
-          ])
-          images = json.loads(raw)
+          # PLAN_FIXTURE is the CI self-test seam: read the image list from a file
+          # instead of GAR, so ci.yml exercises THIS code (not a copy) against
+          # synthetic registries. Unset in every real run.
+          fixture = os.environ.get("PLAN_FIXTURE", "")
+          if fixture:
+              with open(fixture) as fh:
+                  images = json.load(fh)
+          else:
+              raw = subprocess.check_output([
+                  "gcloud", "artifacts", "docker", "images", "list",
+                  REPO_PATH, "--include-tags", "--format=json",
+              ])
+              images = json.loads(raw)
 
           now = datetime.now(timezone.utc)
           semver_re = re.compile(r"^v\d+\.\d+\.\d+$")
 
+          # buildTime is deliberately excluded: reproducible builds report 1970-01-01,
+          # which would pin every boundary to the epoch and disable the window.
+          TIME_FIELDS = ("createTime", "uploadTime", "updateTime")
+
+          def _times(img):
+              out = []
+              for f in TIME_FIELDS:
+                  v = img.get(f)
+                  if not v:
+                      continue
+                  try:
+                      out.append(datetime.fromisoformat(str(v).replace("Z", "+00:00")))
+                  except Exception:
+                      continue
+              return out
+
+          # Asymmetric on purpose: newest() on the sha side, oldest() on the boundary
+          # release. Every timestamp ambiguity then resolves toward KEEPING the image.
+          def newest(img):
+              ts = _times(img)
+              return max(ts) if ts else None
+
+          def oldest(img):
+              ts = _times(img)
+              return min(ts) if ts else None
+
           def protected(tag):
               return tag in keep_tags or (bool(keep_prefixes) and tag.startswith(keep_prefixes))
+
+          def is_sha_tagged(img):
+              return sha_re is not None and any(
+                  sha_re.search(t) for t in (img.get("tags", []) or [])
+              )
 
           by_pkg = {}
           for img in images:
@@ -227,9 +314,50 @@ jobs:
                       if semver_re.match(t):
                           semver_imgs.append((img.get("updateTime"), img.get("version")))
                           break
-              semver_imgs.sort(reverse=True)
-              for _, digest in semver_imgs[:KEEP_SEMVER_COUNT]:
+              # Sort on coalesced strings: a single image missing updateTime used to
+              # raise TypeError (NoneType vs str) and abort the whole sweep.
+              semver_imgs.sort(key=lambda kv: (kv[0] or "", kv[1] or ""), reverse=True)
+              for _, digest in semver_imgs[:EFF_SEMVER_COUNT]:
                   keep.add(digest)
+
+          # ---- sha retention window (KEEP-ONLY pass; runs before the delete loop) ----
+          # Invariant: this block may only `keep.add(...)`. It never appends to
+          # to_delete and never removes from keep, so enabling it can only ever delete
+          # LESS than before — "never deletes more than today" is true by construction.
+          sha_retention = {}
+          if window_on:
+              for pkg, imgs in by_pkg.items():
+                  releases = [
+                      (oldest(img), img)
+                      for img in imgs
+                      if any(semver_re.match(t) for t in (img.get("tags", []) or []))
+                  ]
+                  # Order releases by TIME, not semver precedence: a sha image carries no
+                  # semver, so the comparison is time-based regardless, and semver order
+                  # breaks on backports (v3.0.0 released long before a fresh v2.9.0 would
+                  # put the boundary at the backport and delete genuine pending builds).
+                  ranked = sorted(
+                      (r for r in releases if r[0] is not None), key=lambda r: r[0], reverse=True
+                  )
+                  boundary = ranked[SHA_RETENTION_RELEASES] if len(ranked) > SHA_RETENTION_RELEASES else None
+                  boundary_ts = boundary[0] if boundary else None
+
+                  sha_imgs = [img for img in imgs if is_sha_tagged(img)]
+                  kept_here = 0
+                  for img in sha_imgs:
+                      ts = newest(img)
+                      # No boundary (too few releases) or unreadable timestamp ⇒ keep.
+                      if boundary_ts is None or ts is None or ts > boundary_ts:
+                          keep.add(img.get("version"))
+                          kept_here += 1
+                  sha_retention[pkg] = {
+                      "releases": len(ranked),
+                      "releases_undated": len(releases) - len(ranked),
+                      "boundary_time": boundary_ts.isoformat() if boundary_ts else None,
+                      "boundary_tags": (boundary[1].get("tags", []) or []) if boundary else [],
+                      "sha_images": len(sha_imgs),
+                      "sha_kept": kept_here,
+                  }
 
           to_delete = []
           per_pkg = {}
@@ -267,6 +395,8 @@ jobs:
               "total_images": len(images),
               "live_digests": len(live_digests),
               "kept": len(keep),
+              "sha_retention_releases": SHA_RETENTION_RELEASES if window_on else 0,
+              "sha_retention": sha_retention,
               "to_delete": to_delete,
               "per_package": per_pkg,
           }, indent=2))
@@ -295,6 +425,12 @@ jobs:
             echo "### Per image (candidates)"
             echo ""
             jq -r '.per_package | to_entries[] | "- `\(.key)` — \(.value.delete)/\(.value.total) candidates"' /tmp/delete-plan.json
+            echo ""
+            echo "### sha retention window (build-once promotion sources)"
+            echo ""
+            echo "- sha_retention_releases: $(jq -r '.sha_retention_releases' /tmp/delete-plan.json) (0 = off)"
+            echo ""
+            jq -r '.sha_retention | to_entries[] | "- `\(.key)` — kept \(.value.sha_kept)/\(.value.sha_images) sha image(s); \(.value.releases) release(s); boundary: \(.value.boundary_time // "none (unbounded — every sha kept)") \(.value.boundary_tags | join(","))"' /tmp/delete-plan.json
             echo ""
             echo "### Candidates"
             echo ""

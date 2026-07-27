@@ -1,0 +1,33 @@
+{
+  "name": "T21 — divergent timestamps: newest() on shas, oldest() on the boundary",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": ["v2.0.0"],
+      "days_ago": 5
+    },
+    {
+      "_comment": "boundary release; oldest() = 60d ago, newest() would be 50d ago",
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": ["v1.0.0"],
+      "days_ago_fields": {"createTime": 60, "uploadTime": 60, "updateTime": 50}
+    },
+    {
+      "_comment": "straddles the boundary: newest() = 55d ago (inside), oldest() = 70d ago (outside). Ambiguity must resolve toward KEEP.",
+      "package": "api",
+      "version": "sha256:straddle",
+      "tags": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      "days_ago_fields": {"createTime": 70, "uploadTime": 70, "updateTime": 55}
+    },
+    {
+      "_comment": "unambiguously outside the window and over the age limit",
+      "package": "api",
+      "version": "sha256:ancient",
+      "tags": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      "days_ago": 200
+    }
+  ],
+  "expect_delete": ["api@sha256:ancient"]
+}

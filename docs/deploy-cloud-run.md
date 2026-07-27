@@ -15,6 +15,60 @@ App-specific pre-deploy gates (unit tests, `pyproject`/`go.mod` version
 cross-checks, migration smokes) stay as their own caller jobs and gate this with
 `needs:`.
 
+## `build_only` — build-once, promote-to-prod
+
+`build_only: true` builds and pushes the image, then **stops**: no
+`gcloud run` call, no GitHub Deployment record, no forward-only guard (there is
+no environment lineage to protect). It mirrors `promote-image.yml`'s
+`deploy_target: none`, so the two reusables are symmetric halves of one flow.
+
+The problem it solves: with a single tag-triggered `deploy.yml`, the artifact
+that ships to production is **built at release time, from source, and has never
+run anywhere**. Re-running the release, or re-cutting the tag, produces different
+bytes than whatever was reviewed — base-image drift, dependency resolution,
+`GOPROXY=direct` fallbacks. Build-once moves the build earlier:
+
+```
+push → main        deploy-cloud-run  build_only: true   → pushes image:<commit-sha>
+                   caller's own jobs validate THAT image (migrations, smoke)
+push → tag vX.Y.Z  promote-image     source_tag: <sha>  → server-side retag to :vX.Y.Z
+                                     deploy_target: cloud-run → rolls prod
+```
+
+Production then runs bytes that were built and validated *before* the release was
+cut. Nothing is rebuilt at release time.
+
+```yaml
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.17.0
+    with:
+      build_only: true
+      image_tag: ${{ github.sha }}   # the promotion source
+      require_semver: false          # a commit sha is not vX.Y.Z
+      also_tag_latest: false         # :latest should track releases, not main
+      gcp_project: my-project
+      gar_repo: backend
+      image_name: api
+      wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
+      service_account: ${{ vars.GCP_RELEASER_SA }}
+```
+
+Two things this depends on, both worth confirming per repo before converting:
+
+- **Config must be runtime-resolved**, not baked at build time (`APP_ENV=prod` as
+  a `--set-env-vars`, not a build arg). That is what makes one image legitimately
+  serve two environments.
+- **GAR retention must not delete `:<sha>` before the release retags it.**
+  `cleanup-gar-images` protects these via its
+  [sha retention window](cleanup-gar-images.md#sha-retention-build-once-promote-to-prod),
+  on by default. If you sweep GAR some other way, teach it the same rule first —
+  otherwise a slow release cycle silently destroys the promotion source.
+
 ## Inputs / secrets
 
 | Name | Kind | Default | Notes |
@@ -25,7 +79,7 @@ cross-checks, migration smokes) stay as their own caller jobs and gate this with
 | `service_account` | input (req) | — | releaser SA email (not a secret) |
 | `gar_repo` | input (req) | — | Artifact Registry repo (e.g. `backend`) |
 | `image_name` | input (req) | — | image name in the repo (may differ from service) |
-| `service` | input (req) | — | Cloud Run service name |
+| `service` | input | `''` | Cloud Run service name. **Required unless `build_only: true`** |
 | `image_tag` | input | `''` | tag to build/deploy; empty ⇒ triggering ref name |
 | `checkout_ref` | input | `''` | git ref to build from; empty ⇒ the resolved image tag. Set it when the image tag isn't a git ref (e.g. app-version `0.1.8` vs git tag `v0.1.8`) |
 | `require_semver` | input | `true` | reject a non-`vX.Y.Z` tag |
@@ -36,14 +90,15 @@ cross-checks, migration smokes) stay as their own caller jobs and gate this with
 | `deploy_mode` | input | `update-image` | see table above |
 | `deploy_flags` | input | `''` | flags for `deploy_mode=deploy`, **one per line** — spaces within a line are preserved (safe for values containing spaces or commas). Prefer this |
 | `extra_deploy_flags` | input | `''` | legacy: flags as one space-separated string — word-split, so a space inside any value breaks argv. Prefer `deploy_flags` |
-| `dry_run` | input | `false` | build only — no push, no Cloud Run mutation |
+| `build_only` | input | `false` | build **and push**, then stop — no Cloud Run mutation, no Deployment record. See below |
+| `dry_run` | input | `false` | build only — **no push**, no Cloud Run mutation |
 
 No secrets: WIF is keyless. `id-token: write` is set by the reusable.
 
 ## Outputs
 
-`image` — the fully-qualified image reference built.
-`service_url` — the Cloud Run URL after the deploy.
+`image` — the fully-qualified image reference built. Set for `build_only` runs too — it is the whole point of them.
+`service_url` — the Cloud Run URL after the deploy. Empty for `build_only` / `dry_run`.
 
 ## Example — strict image flip (config owned by a provision workflow)
 

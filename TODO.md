@@ -1,5 +1,42 @@
 # TODO — reusable-workflows
 
+## Build-once, promote-to-prod
+
+Reusable-side work is **done** (`v1.17.0`): `deploy-cloud-run` gained `build_only`,
+`cleanup-gar-images` gained the release-relative sha retention window (keep-only, default on)
+plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
+
+- [x] **GAR retention is release-relative.** `cleanup-gar-images` no longer age-deletes the
+      `:<sha>` promotion source: per package it keeps sha images newer than the
+      `sha_retention_releases`-th most recent release (ordered by time, not semver). Keep-only,
+      so it can only ever delete less. Latent `TypeError` on a missing `updateTime` fixed in the
+      same pass.
+- [ ] **Pilot `Realm-ID/issuer` end-to-end** (lowest blast radius of the five). In its
+      `deploy.yml`: add a `main`-triggered `deploy-cloud-run` job with `build_only: true` →
+      `:<sha>`; move the migrate-smoke validation to run against that pushed image; rewrite the
+      tag path to call `promote-image` with `source_tag: ${{ github.sha }}`,
+      `deploy_target: cloud-run`, `environment: production`, `enforce_forward_only: true` (the
+      guard needs `environment` to build its baseline). Run `dry_run: true` first and read the
+      plan before one real promote.
+- [ ] **Roll to the remaining four**, in this order: `Realm-ID/api`, `Traide-Co/api`,
+      `AutoMahn/image-service`, then **`AutoMahn/api` last** — it drives three Cloud Run services
+      off one image and has the largest env-var surface.
+      **Precondition to confirm per repo before converting:** config is runtime-resolved
+      (`APP_ENV=prod` a `--set-env-vars`, not a build arg). That is what makes one image
+      legitimately serve two environments. It held on all five at plan time — re-verify, don't
+      assume.
+- [ ] **Post-pilot proof, on the real repos:** run `cleanup-gar-images` with `dry_run: true`
+      against each of the 5 GAR repos, read the new `sha_retention` boundaries, and confirm
+      `candidates` **drops** (keep-only ⇒ it can never rise). Then assert the prod digest equals
+      the `:<sha>` digest — `gcloud artifacts docker images list --include-tags` — since that
+      identity is the entire point. Also exercise `promote-image`'s existing preflight on a tag
+      whose commit never built, to see it fail loudly.
+- [ ] Stage environments are **out of scope** (user's call) — no repo has one today. The
+      `main` job stays build-only; where a stage later exists, add the deploy step there.
+- [ ] `deploy-cloud-run.yml` — the Summary step's `${DRY_RUN:+ (dry run)}` always expands,
+      because `DRY_RUN` is the *string* `false`, not empty. Every summary says "(dry run)".
+      Cosmetic, pre-existing, spotted while adding `build_only`.
+
 ## Convergence — remaining work
 
 The goal (see `docs/convergence-audit.md`, 2026-07-14) is that platform app repos drop the
