@@ -37,9 +37,14 @@
   `@v1.4.0` while the repo is at `v1.15.0`; the new README-badges examples pin
   `@v1.16.0`, so the two docs now contradict themselves. Sweep all example pins to
   the current tag (and check the other `docs/*.md` for the same staleness).
-- [ ] `ci-go.yml` / `ci-node.yml` — `update_badges` is **not yet dogfooded on a real
-  caller.** Nothing about `contents: write` or the commit-back push can be verified
-  locally. Before tagging `v1.16.0`: enable it on one Go caller with
-  `badge_branch: <sandbox>`, confirm one badge commit lands with the right numbers
-  and that a second push produces none.
+- [ ] `ci-go.yml` / `ci-node.yml` — **`update_badges` is not yet dogfooded; this gates
+  the `v1.16.0` tag.** Nothing about `contents: write`, caller permission-capping, or
+  the commit-back push is testable locally. Dogfood is **quizzing-pro/api#2045**
+  (pins the `ci-go` job to SHA `200b381` from reusable-workflows#22; its deploy/promote
+  jobs stay at `@v1.11.0`). The badges job only fires on `push` to the default branch,
+  so the proof requires **merging** #2045, not just opening it. Confirm on that merge:
+  one `chore(ci): update README badges` commit lands on `development`, coverage matches
+  the suite, `nolint_count` reads **57** (down from the frozen 78 — the narrower grep,
+  measured against the real tree), **and a second push produces no new commit.** Only
+  then tag `v1.16.0` and flip #2045's pin to the tag.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
