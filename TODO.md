@@ -40,7 +40,8 @@
 - [ ] `ci-go.yml` / `ci-node.yml` — **`update_badges` is not yet dogfooded; this gates
   the `v1.16.0` tag.** Nothing about `contents: write`, caller permission-capping, or
   the commit-back push is testable locally. Dogfood is **quizzing-pro/api#2045**
-  (pins the `ci-go` job to SHA `200b381` from reusable-workflows#22; its deploy/promote
+  (pins the `ci-go` job to SHA `3d60a0d` — the squash-merge of reusable-workflows#22 on
+  `main`, **not** the pre-merge branch commit `200b381` this entry previously named; its deploy/promote
   jobs stay at `@v1.11.0`). The badges job only fires on `push` to the default branch,
   so the proof requires **merging** #2045, not just opening it. Confirm on that merge:
   one `chore(ci): update README badges` commit lands on `development`, coverage matches
@@ -48,7 +49,7 @@
   measured against the real tree), **and a second push produces no new commit.** Only
   then tag `v1.16.0` and flip #2045's pin to the tag.
 - [ ] **caller pin-drift is invisible — build a drift report.** The 2026-07-27 repin sweep
-  (see DECISIONS.md) found 17 of 25 platform callers stranded on `@v1.4.0`/`@v1.5.0`, six-plus
+  (see DECISIONS.md) found 18 of the fleet's 27 caller lines stranded on `@v1.4.0`/`@v1.5.0`, six-plus
   releases behind, and only noticed because someone manually read check-run *annotations*
   across every caller. Nothing detects this. Wanted: a scheduled workflow in this repo that
   walks the platform orgs, greps every `.github/workflows/*` for
@@ -61,7 +62,8 @@
   first manual pass silently omitted the entire `Realm-ID` org.
 - [ ] **repin `quizzing-pro/api` as part of the `v1.16.0` cut.** Deliberately excluded from
   the 2026-07-27 sweep — its `main.yaml` is concurrently edited by #2045 (badges dogfood,
-  `ci-go` pinned to SHA `200b381`) and #2041, and it is a live GKE prod deploy path. Its 4
-  refs (`ci-go`, `deploy-cluster-keyed`, `manage-config-secrets`, `promote-image`) are still
+  `ci-go` pinned to SHA `3d60a0d`) and #2041, and it is a live GKE prod deploy path. Its
+  references to 4 reusables (`ci-go`, `deploy-cluster-keyed`, `manage-config-secrets`,
+  `promote-image`) are still
   at `@v1.11.0` and still emit the Node-20 `docker/build-push-action` deprecation warning.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)

@@ -18,14 +18,18 @@
 deliberately excluded — see below.**
 
 **Why.** A sweep of check-run *annotations* (not just conclusions) over the last 3 runs of
-all 25 caller workflows surfaced recurring `Node.js 20 actions are deprecated` warnings on
+every caller workflow surfaced recurring `Node.js 20 actions are deprecated` warnings on
 `ci-go`, `neon-backup`, `deploy-cloud-run`, `deploy-cloudflare-pages` and
 `deploy-cluster-keyed` jobs. Every instance traced to a **stale caller pin, not a defect in
 the reusable**: `main`/`v1.15.0` already carries the Node-24-era versions
 (`checkout@v7.0.1`, `setup-go@v7.0.0`, `setup-node@v7.0.0`, `upload-artifact@v7.0.1`,
-`build-push-action@v7.3.0`, `wrangler-action@v4.0.0`) from the Dependabot group bump in #18.
-17 of 25 callers were still on `@v1.4.0`/`@v1.5.0`. GitHub forces Node 24 on 2026-06-16 and
-removes the Node 20 runtime on 2026-09-16, so this had a deadline attached.
+`build-push-action@v7.3.0`, `wrangler-action@v4.0.0`). Four of those six arrived in the
+Dependabot group bump #18; `upload-artifact@v7.0.1` came in #4 (`3358d35`) and
+`wrangler-action@v4.0.0` in #3 (`818c957`) — all six are present at the `v1.15.0` tag.
+**18 of the fleet's 27 caller `uses:` lines** were still on `@v1.4.0`/`@v1.5.0`. GitHub
+forces Node 24 as the default on 2026-06-16 (already in effect — the annotations say
+"being forced to run on Node.js 24"); removal of the Node 20 runtime is announced only as
+"later in the fall of 2026", with no firm date. Either way this had a deadline attached.
 
 **The deeper problem this exposes: pin drift is invisible.** Nothing in this repo or the
 caller repos notices that a caller is six releases behind — the annotation sweep was manual
@@ -37,7 +41,9 @@ scheduled cross-org pin-drift report.
 **Compatibility was proven, not assumed.** Before touching anything, the
 `on.workflow_call` `inputs`/`secrets` block of each reusable was parsed at the caller's
 current pin and at `v1.15.0` and diffed: no removed inputs, no removed secrets, no newly
-required inputs, for all 20 (workflow, old-pin) pairs. This mattered concretely — `ci-go`'s
+required inputs, for all 22 (workflow, old-pin) pairs checked — the 17 distinct pairs actually
+repinned, plus `quizzing-pro`'s 4 held-back pairs and the Realm-ID `@v1` pair. This mattered
+concretely — `ci-go`'s
 `github_token`→`go_private_token` secret rename (v1.11.0) is a real breaking change for any
 caller in the `v1.6.0`–`v1.10.0` window; the check confirmed our callers sit at `v1.5.0` and
 `v1.11.0`, i.e. either side of it, so none are affected. Guessing here would have broken
@@ -49,12 +55,14 @@ implied. Several of these are rotation workflows that run rarely or (see below) 
 
 **Chose `v1.15.0`, not "wait for `v1.16.0`".** `v1.16.0` is gated on the README-badges
 dogfood landing in `quizzing-pro/api#2045`, which is itself gated on human merge. Coupling a
-deadline-bearing Node-20 fix to an unrelated release gate would have held 24 files hostage to
+deadline-bearing Node-20 fix to an unrelated release gate would have held 26 pin lines hostage to
 one PR. The badges work reaches these callers on the next sweep.
 
-**`quizzing-pro/api` held back on purpose.** Its 4 refs are at `@v1.11.0`, but its
-`main.yaml` is concurrently edited by the open `#2045` (which pins the `ci-go` job to SHA
-`200b381` as the badges dogfood) and `#2041`. Repinning that file now would conflict with the
+**`quizzing-pro/api` held back on purpose.** Its references to 4 distinct reusables
+(`ci-go`, `deploy-cluster-keyed`, `manage-config-secrets`, `promote-image`) are at
+`@v1.11.0`, but its `main.yaml` is concurrently edited by the open `#2045` (which pins the
+`ci-go` job to SHA `3d60a0d`, the squash-merge of #22 on `main`, as the badges dogfood) and
+`#2041`. Repinning that file now would conflict with the
 very PR that unblocks `v1.16.0`, and would move a live GKE prod deploy/promote path in a
 drive-by chore PR. It gets repinned to the tag as part of the `v1.16.0` cut instead.
 
