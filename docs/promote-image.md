@@ -42,7 +42,38 @@ For the build-and-deploy step itself, use `deploy-cloud-run` / `deploy-gke-servi
 | `environment` | `''` | when set, also record a GitHub Deployment marking this env's live commit |
 | `record_github_deployment` | `true` | record the Deployment (needs `environment` + `deployments: write`) |
 | `enforce_forward_only` | `false` | reject an out-of-order (older) release — see below. Requires `environment` |
+| `source_wait_seconds` | `0` | wait up to N seconds for `:source_tag` to appear in GAR before failing — see "Racing the build" below. Must be `< timeout_minutes * 60` |
+| `timeout_minutes` | `15` | job timeout; must exceed `source_wait_seconds` |
 | `dry_run` | `false` | print the retag + roll commands without executing |
+
+## Racing the build (CI → CD handoff)
+
+The run that builds `:<sha>` and the run that promotes it are **separate workflow
+runs** — different triggers, no `needs:` edge between them. Cut a release tag in
+the same breath as the merge to `main` and the promote can reach the registry
+first, failing with `source image not found` even though the build is healthy and
+seconds from finishing.
+
+`source_wait_seconds` closes that window: the promote polls
+`gcloud container images describe` on `:source_tag` — 10s, 20s, then every 30s —
+until the image appears or the budget is spent.
+
+```yaml
+    with:
+      source_tag: ${{ github.sha }}
+      source_wait_seconds: 900     # build takes ~6min; give it 15
+      timeout_minutes: 20          # must exceed the wait, else the job is cancelled
+```
+
+- **`0` (default) keeps the old behaviour** — one probe, immediate failure.
+- Size it at your build's p99 **plus** queue time, and keep `timeout_minutes`
+  above it; the workflow rejects a wait its own timeout can't accommodate.
+- It waits on the **artifact**, not on a workflow run, so it is agnostic to which
+  workflow, trigger, or repo pushed the image.
+- A build that *fails* still costs the full budget before the release errors —
+  the timeout message points at the build run for this SHA. If that wait is too
+  expensive for you, gate the tag on the build instead (`workflow_run`).
+- Skipped under `dry_run`: a plan answers "is it there now?", it doesn't block.
 
 ## Auth — WIF (preferred) or key-based
 

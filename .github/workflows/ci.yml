@@ -47,6 +47,25 @@ jobs:
       - name: Run delete-plan fixtures
         run: python3 tests/run_plan_tests.py
 
+  step-bodies:
+    name: step bodies (stubbed commands)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # shellcheck lints these bodies but never runs them — which is how the
+      # deploy-cloud-run Summary bug shipped (TODO.md). This extracts a step's
+      # `run:` script from the workflow and executes it against stubbed commands
+      # and a fake clock, so retry/backoff logic is asserted, not assumed.
+      - name: Run step-body tests
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tests/run_step_tests.py
+
   pinned-actions:
     name: third-party actions are SHA-pinned
     runs-on: ubuntu-latest

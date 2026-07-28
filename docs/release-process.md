@@ -63,6 +63,25 @@ built *from `main`'s own tip*, stage tests the **exact** prod artifact even when
 squash mints a brand-new commit. Prod is always a retag of a stage-green digest,
 never a rebuild.
 
+## The CI→CD handoff is a race, and must be treated as one
+
+Build-once means the build and the promote are **separate workflow runs** with no
+`needs:` edge between them — that is inherent to the model, not an accident of
+wiring. So a release tag can, and routinely does, reach `promote-image` before the
+build for `main`'s tip has pushed `:<sha>`. The promote then fails on a perfectly
+healthy build, and re-running it minutes later succeeds.
+
+Close the window explicitly with **`source_wait_seconds`** on `promote-image` (see
+[promote-image.md](promote-image.md#racing-the-build-ci--cd-handoff)): it polls GAR
+for the source image with backoff instead of probing once. Size it at your build's
+p99 plus queue time and keep `timeout_minutes` above it.
+
+**Status: opt-in, default `0` (fail immediately).** Any caller cutting tags from
+automation, or by hand right after a merge, should set it. It waits on the
+*artifact*, so it holds whichever workflow or trigger built the image. A caller
+that prefers no waiting can instead trigger its promote from `workflow_run` on the
+build, which removes the race structurally at the cost of per-repo boilerplate.
+
 ## Forward-only — every environment
 
 > **Reject a deploy if the candidate commit is an ancestor of (already fully
