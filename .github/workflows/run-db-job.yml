@@ -1,0 +1,284 @@
+# Reusable Cloud Run **Job** runner: converge a Job definition from an
+# already-built image, then execute it and wait.
+#
+# The batch counterpart to deploy-cloud-run.yml — same image, same WIF/gcloud
+# plumbing, but the resource runs to completion and exits instead of serving.
+# There is no build here: `image` must already exist in Artifact Registry
+# (typically the `image` output of a deploy-cloud-run build).
+#
+# The definition is converged idempotently (describe → create or update), so a
+# fresh project and the two-hundredth run behave identically with no bootstrap
+# step. Execution uses --wait, and a non-zero task exit FAILS this workflow —
+# that is what lets a caller gate a service roll on `needs:` and never let a new
+# revision reach a schema it predates.
+#
+# No jgd_commit label and no GitHub Deployment record: forward-only is defined
+# per environment over what its SERVICES are serving, and a one-shot Job is not
+# "live". See docs/run-db-job.md.
+name: run-db-job
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id owning the Cloud Run Job.'
+        type: string
+        required: true
+      gcp_region:
+        description: 'Region of the Cloud Run Job.'
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Releaser service account email to impersonate via WIF (the deployer).'
+        type: string
+        required: true
+      job:
+        description: 'Cloud Run Job name.'
+        type: string
+        required: true
+      image:
+        description: 'Fully-qualified image reference to run. Must already exist in GAR.'
+        type: string
+        required: true
+      args:
+        description: >-
+          Container args as gcloud''s comma-delimited list (e.g. `migrate`).
+          Empty ⇒ --args is omitted and the image entrypoint decides.
+        type: string
+        required: false
+        default: ''
+      runtime_service_account:
+        description: >-
+          Service account the TASK runs as — distinct from `service_account`,
+          which is the deployer. Empty ⇒ the project default compute SA.
+        type: string
+        required: false
+        default: ''
+      env_vars:
+        description: >-
+          Passed verbatim to --set-env-vars. For values containing commas use
+          gcloud''s custom-delimiter form: ^|^KEY=a,b|OTHER=c
+        type: string
+        required: false
+        default: ''
+      set_secrets:
+        description: 'Passed verbatim to --set-secrets (e.g. /app/configs/.prod.env=app-secrets:latest).'
+        type: string
+        required: false
+        default: ''
+      cpu:
+        description: 'Task CPU.'
+        type: string
+        required: false
+        default: '1'
+      memory:
+        description: 'Task memory.'
+        type: string
+        required: false
+        default: '512Mi'
+      max_retries:
+        description: 'Retries before the task is marked failed.'
+        type: number
+        required: false
+        default: 1
+      task_timeout:
+        description: 'Per-task timeout (e.g. 600s).'
+        type: string
+        required: false
+        default: '600s'
+      job_flags:
+        description: >-
+          Extra `gcloud run jobs create/update` flags, ONE PER LINE. Spaces
+          within a line are preserved, so a value containing a space is safe.
+        type: string
+        required: false
+        default: ''
+      execute:
+        description: >-
+          Execute the Job after converging it. false ⇒ definition only, for Jobs
+          triggered by Cloud Scheduler or Eventarc.
+        type: boolean
+        required: false
+        default: true
+      dry_run:
+        description: 'Print the gcloud commands without executing them.'
+        type: boolean
+        required: false
+        default: false
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 20
+    outputs:
+      execution:
+        description: 'Name of the execution that ran (empty when execute is false or dry_run).'
+        value: ${{ jobs.run.outputs.execution }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Two releases racing the same migration Job must serialize, not interleave —
+  # Cloud Run would otherwise start a second execution mid-migration.
+  group: run-db-job-${{ inputs.gcp_project }}-${{ inputs.gcp_region }}-${{ inputs.job }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: ${{ inputs.execute && 'converge · execute' || 'converge only' }} · ${{ inputs.job }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      execution: ${{ steps.exec.outputs.execution }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Converge Job definition (create or update)
+        env:
+          JOB: ${{ inputs.job }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+          IMAGE: ${{ inputs.image }}
+          ARGS: ${{ inputs.args }}
+          RUNTIME_SA: ${{ inputs.runtime_service_account }}
+          ENV_VARS: ${{ inputs.env_vars }}
+          SET_SECRETS: ${{ inputs.set_secrets }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          MAX_RETRIES: ${{ inputs.max_retries }}
+          TASK_TIMEOUT: ${{ inputs.task_timeout }}
+          JOB_FLAGS: ${{ inputs.job_flags }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # describe decides create-vs-update, so this is idempotent: a fresh
+          # project needs no bootstrap and a re-run is not an error.
+          VERB=create
+          if gcloud run jobs describe "$JOB" --project="$PROJECT" --region="$REGION" >/dev/null 2>&1; then
+            VERB=update
+          fi
+          echo "::notice::Job '$JOB' will be ${VERB}d in $PROJECT/$REGION"
+
+          args=(gcloud run jobs "$VERB" "$JOB"
+            --project="$PROJECT" --region="$REGION" --image="$IMAGE"
+            --cpu="$CPU" --memory="$MEMORY"
+            --max-retries="$MAX_RETRIES" --task-timeout="$TASK_TIMEOUT")
+
+          # Each of these is omitted rather than passed empty: `--args=` would
+          # clear the container args, and an empty --service-account is rejected.
+          # Spelled as `if` blocks, not `[ … ] && …`: under `set -e` a bare
+          # AND-list takes its own exit status, so a false test as the last
+          # statement of a block silently fails the step (see TODO.md).
+          if [ -n "$ARGS" ]; then        args+=(--args="$ARGS"); fi
+          if [ -n "$RUNTIME_SA" ]; then  args+=(--service-account="$RUNTIME_SA"); fi
+          if [ -n "$ENV_VARS" ]; then    args+=(--set-env-vars="$ENV_VARS"); fi
+          if [ -n "$SET_SECRETS" ]; then args+=(--set-secrets="$SET_SECRETS"); fi
+
+          # One flag per line — spaces within a line are preserved.
+          if [ -n "$JOB_FLAGS" ]; then
+            while IFS= read -r flag; do
+              [ -z "$flag" ] && continue
+              args+=("$flag")
+            done <<< "$JOB_FLAGS"
+          fi
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN — would execute:"
+            printf ' %q' "${args[@]}"; echo
+            exit 0
+          fi
+          "${args[@]}"
+
+      - name: Execute Job and wait
+        id: exec
+        if: ${{ inputs.execute && !inputs.dry_run }}
+        env:
+          JOB: ${{ inputs.job }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+        run: |
+          set -euo pipefail
+          # --wait makes a non-zero task exit fail this step, which is what lets
+          # a caller gate a service roll on `needs:`.
+          EXECUTION=$(gcloud run jobs execute "$JOB" \
+            --project="$PROJECT" --region="$REGION" --wait \
+            --format='value(metadata.name)')
+          echo "execution=$EXECUTION" >> "$GITHUB_OUTPUT"
+          echo "::notice::execution '$EXECUTION' completed successfully"
+
+      - name: Surface execution failure
+        # `gcloud run jobs execute` reports THAT the execution failed, never why.
+        # Without this the caller sees a bare non-zero exit and has to go digging
+        # in the console — so print the status and a direct Logs Explorer link.
+        if: ${{ failure() && inputs.execute && !inputs.dry_run }}
+        env:
+          JOB: ${{ inputs.job }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+        run: |
+          # Best-effort diagnostics on an already-failed step: never mask the
+          # original failure with an error from this one.
+          LATEST=$(gcloud run jobs executions list \
+            --project="$PROJECT" --region="$REGION" --job="$JOB" \
+            --sort-by='~metadata.creationTimestamp' --limit=1 \
+            --format='value(metadata.name)' 2>/dev/null || true)
+          if [ -n "$LATEST" ]; then
+            echo "Last execution: $LATEST"
+            gcloud run jobs executions describe "$LATEST" \
+              --project="$PROJECT" --region="$REGION" \
+              --format='yaml(status.conditions)' 2>/dev/null || true
+          fi
+          QUERY="resource.type=\"cloud_run_job\" resource.labels.job_name=\"${JOB}\""
+          ENCODED=$(printf '%s' "$QUERY" | jq -sRr @uri)
+          {
+            echo "### ❌ Cloud Run Job \`${JOB}\` failed"
+            echo ""
+            echo "- Execution: \`${LATEST:-<none resolved>}\`"
+            echo "- [Logs Explorer](https://console.cloud.google.com/logs/query;query=${ENCODED}?project=${PROJECT})"
+            echo ""
+            echo "If the logs are empty, check the task actually writes to stdout/stderr —"
+            echo "a discarded logger looks identical to a silent crash."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        if: ${{ success() }}
+        env:
+          JOB: ${{ inputs.job }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+          IMAGE: ${{ inputs.image }}
+          EXECUTION: ${{ steps.exec.outputs.execution }}
+          EXECUTED: ${{ inputs.execute }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            MODE="dry run — nothing created, updated or executed"
+          elif [ "$EXECUTED" = "true" ]; then
+            MODE="converged + executed"
+          else
+            MODE="converged (definition only)"
+          fi
+          {
+            echo "## Cloud Run Job — \`${JOB}\`"
+            echo ""
+            echo "- Mode: ${MODE}"
+            echo "- Image: \`${IMAGE}\`"
+            echo "- Execution: \`${EXECUTION:-—}\`"
+            echo "- Console: [${JOB}](https://console.cloud.google.com/run/jobs/details/${REGION}/${JOB}?project=${PROJECT})"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -85,6 +85,7 @@ Two things this depends on, both worth confirming per repo before converting:
 | `require_semver` | input | `true` | reject a non-`vX.Y.Z` tag |
 | `also_tag_latest` | input | `true` | also push `:latest` |
 | `context` / `dockerfile` | input | `.` / `Dockerfile` | build context + Dockerfile |
+| `docker_target` | input | `''` | multi-stage build stage (`docker build --target`); empty ⇒ last stage. For a Dockerfile with several leaves — e.g. a hermetic self-compiling stage for local work plus a slimmer CI stage |
 | `platforms` | input | `linux/amd64` | build platform(s) |
 | `build_args` | input | `''` | newline-separated docker build args |
 | `deploy_mode` | input | `update-image` | see table above |

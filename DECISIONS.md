@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-07-28` — [`run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out](#2026-07-28-run-db-job-built-docker_target-added-the-runner-side-prebuild-hook-deliberately-left-out)
 - `2026-07-27` — [`deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)](#2026-07-27-deploy-cloud-run-summary-step-fails-a-successful-job-when-there-is-no-service-url-bug-fix)
 - `2026-07-27` — [Secret-distribution workflows refuse values too short to be a credential](#2026-07-27-secret-distribution-workflows-refuse-values-too-short-to-be-a-credential)
 - `2026-07-27` — [build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo](#2026-07-27-build-oncepromote-to-prod-build_only-release-relative-gar-retention-and-the-first-tests-in-this-repo)
@@ -44,6 +45,79 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-07-28 — `run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out
+
+**Context.** Driven by the `AutoMahn/api` conversion — the last of the five in the
+build-once rollout and, per `TODO.md`, the hardest: it drives three Cloud Run resources
+off one image. Auditing what that caller actually needs turned up **fewer** gaps than
+expected, and one input we chose not to add.
+
+**Two of the four apparent gaps needed no change here.**
+
+- *Three resources off one image.* `deploy-cloud-run` already exposes `service_url` as a
+  workflow output, so a caller chains eventworker → api with
+  `needs.<job>.outputs.service_url`. Multi-service orchestration is caller-side
+  composition, not a missing feature.
+- *Post-deploy health assertion* (poll `/…/health` until it reports the deployed tag).
+  Caller-side. The library has no business knowing an app's health-check shape.
+
+**Built: `run-db-job`.** Converge a Cloud Run **Job** from an already-built image, then
+execute with `--wait`. Already on `TODO.md` under "Reusables still to build". Design
+notes worth keeping:
+
+- **Create-or-update, not create-then-ignore.** `describe` picks the verb, so a fresh
+  project needs no bootstrap and re-runs are not errors.
+- **A non-zero task exit fails the workflow.** That is the entire value — it lets a
+  caller gate the service roll on `needs:` so a new revision never meets a schema it
+  predates.
+- **Failure diagnostics are part of the contract.** `gcloud run jobs execute` reports
+  *that* an execution failed, never why, so the workflow prints the execution status and
+  a Logs Explorer link. It also names the empty-log case explicitly — a batch binary
+  wired to a discarded logger is indistinguishable from a silent crash (cost a caller
+  ~1h on `AutoMahn/api` v0.0.7).
+- **No `jgd_commit` stamp, no GitHub Deployment record** — deliberately unlike
+  `deploy-cloud-run`/`promote-image`/`rollback-service`. Forward-only reads an
+  environment's live commit from what its *services* serve; a one-shot Job is not "live",
+  so stamping one would write a second, conflicting answer into that baseline.
+- Ordering (migrate → service) stays in the caller via `needs:`, consistent with how
+  pre-deploy gates are already expressed.
+
+**Added: `docker_target`** on `deploy-cloud-run` — a passthrough to
+`build-push-action`'s `target:`, default `''`, which is what the action already assumes
+(last stage). For Dockerfiles carrying several leaves.
+
+**Not added: a runner-side prebuild hook — and this is the substantive call.**
+`AutoMahn/api` compiles Go on the runner and `COPY`s the binary into a `app-prebuilt`
+stage, because BuildKit cache mounts are not exported by `cache-to: type=gha`, so an
+in-image `go build` starts cold every run. A reusable workflow is a separate job that
+does its own checkout, so that binary cannot cross the boundary — supporting it means
+either a Go toolchain step in this workflow (`prebuild_run:` can't reach
+`actions/setup-go`'s cache, which is the whole point, so it degrades to a typed
+language input) or an artifact-transport pair of inputs.
+
+Rejected for now on three grounds. **(1)** Language creep: `deploy-cloud-run` is
+deliberately language-agnostic, and `ci-go`/`ci-node` are where language knowledge
+lives. **(2)** Correctness moves out of reach: with caller-supplied shell this workflow
+cannot verify the artifact matches the Dockerfile's target platform, and a `GOARCH`
+mismatch builds clean and dies on Cloud Run with `exec format error`. **(3)** The premise
+is unmeasured — the caller's on-runner build currently takes 111–116s, not the ~27s it
+was designed around, because `actions/setup-go` reports an exact cache hit and therefore
+never re-saves, freezing a build cache compiled with different flags. Under build-once
+that compile also moves off the release path onto `main` pushes.
+
+So: fix the cache on the caller side, measure, and only then decide. If runner-side
+compilation proves worth preserving, the shape to add is **artifact transport**
+(`prebuilt_artifact` + `prebuilt_path`) — the one that doesn't teach a cloud-deploy
+workflow about programming languages. Adding an input to a shared library on a
+projection is how the caller got here in the first place.
+
+**Compatibility.** Both changes are additive with defaults that reproduce current
+behaviour, and every caller pins a tag, so nothing moves until a caller repins.
+*Caveat:* the consumer list was **not** fully enumerated — `gh search code` returns
+nothing for the private orgs, and only two callers were confirmed directly
+(`Realm-ID/issuer` @v1.17.1, `AutoMahn/image-service` @v1.15.0). Additive-only is what
+makes that acceptable rather than verified.
 
 ## 2026-07-27 — `deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)
 

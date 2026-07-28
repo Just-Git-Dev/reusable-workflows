@@ -90,6 +90,15 @@ on:
         type: string
         required: false
         default: 'Dockerfile'
+      docker_target:
+        description: >-
+          Multi-stage Dockerfile stage to build (docker build --target). Empty ⇒
+          the last stage, i.e. today''s behaviour. Use when one Dockerfile carries
+          several leaves (e.g. a hermetic self-compiling stage for local work and a
+          slimmer CI stage).
+        type: string
+        required: false
+        default: ''
       platforms:
         description: 'Target build platform(s).'
         type: string
@@ -298,6 +307,9 @@ jobs:
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          # Empty string ⇒ build-push-action falls through to the last stage,
+          # so existing callers are unaffected.
+          target: ${{ inputs.docker_target }}
           platforms: ${{ inputs.platforms }}
           push: ${{ !inputs.dry_run }}
           build-args: ${{ inputs.build_args }}
