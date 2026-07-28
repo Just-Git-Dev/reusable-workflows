@@ -18,6 +18,10 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       `deploy_target: cloud-run`, `environment: production`, `enforce_forward_only: true` (the
       guard needs `environment` to build its baseline). Run `dry_run: true` first and read the
       plan before one real promote.
+      **Also set `source_wait_seconds`** (build p99 + queue; e.g. 900) and raise
+      `timeout_minutes` above it — the tag run and the `main` build run are independent, so
+      without it a release cut alongside the merge fails on a healthy build. See the
+      2026-07-28 race RCA in DECISIONS.md.
 - [ ] **Roll to the remaining four**, in this order: `Realm-ID/api`, `Traide-Co/api`,
       `AutoMahn/image-service`, then **`AutoMahn/api` last** — it drives three Cloud Run services
       off one image and has the largest env-var surface.
@@ -37,13 +41,17 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       was no service URL (`build_only`, and `dry_run` before it). Fixed in `v1.17.1`; the
       always-expanding `${DRY_RUN:+ (dry run)}` was fixed in the same block. See the RCA in
       DECISIONS.md.
-- [ ] **CI cannot execute a workflow *step*.** The new fixture harness reaches embedded Python
-      only, which is why the Summary-step bug above shipped: shellcheck accepts a trailing
-      AND-list, and nothing runs the step. Wanted: a way to exercise a `run:` body against a
-      stubbed env (the RCA reproduced it in ~5 lines of `bash --noprofile --norc -e -o pipefail`,
-      so a small harness is feasible). Rule to encode: **a `{ … } >> $GITHUB_STEP_SUMMARY` group
-      must not end in a bare conditional** — it is the script's last statement, so its status
-      becomes the step's.
+- [x] **CI cannot execute a workflow *step*** — **built 2026-07-28** as
+      `tests/run_step_tests.py` + the `step-bodies` CI job, driven by the `promote-image`
+      race fix (DECISIONS.md). It extracts a named step's `run:` body from the shipped YAML
+      and runs it under `bash --noprofile --norc -eo pipefail` against stubbed commands, with
+      `date`/`sleep` faked so timing logic is asserted instantly. Covers `promote-image`'s
+      "Wait for source image" today; add steps to it as they earn coverage.
+- [ ] **Encode the Summary-step rule in the new harness.** Still unwritten: **a
+      `{ … } >> $GITHUB_STEP_SUMMARY` group must not end in a bare conditional** — it is the
+      script's last statement, so its status becomes the step's. Either a shellcheck-style
+      grep in CI, or a `run_step_tests.py` case per Summary step asserting rc=0 with an empty
+      env. The grep is cheaper and catches all of them at once.
 
 ## Convergence — remaining work
 

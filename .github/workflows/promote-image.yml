@@ -196,8 +196,19 @@ on:
         type: boolean
         required: false
         default: false
+      source_wait_seconds:
+        description: >-
+          Seconds to wait for `image_name:source_tag` to appear in GAR before
+          failing. The release run and the run that builds `:<sha>` are separate
+          workflow runs with no `needs:` edge between them, so a tag cut moments
+          after the merge can reach the retag first. 0 (default) = probe once and
+          fail immediately, the historical behaviour. Must be less than
+          `timeout_minutes * 60`. Ignored under `dry_run`.
+        type: number
+        required: false
+        default: 0
       timeout_minutes:
-        description: 'Job timeout.'
+        description: 'Job timeout. Must exceed source_wait_seconds when that is set.'
         type: number
         required: false
         default: 15
@@ -259,6 +270,8 @@ jobs:
           SOURCE_TAG: ${{ inputs.source_tag }}
           IN_TARGET: ${{ inputs.target_tag }}
           REQUIRE_SEMVER: ${{ inputs.require_semver }}
+          WAIT_SECONDS: ${{ inputs.source_wait_seconds }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         run: |
           HOST="${IN_REGISTRY:-${REGION}-docker.pkg.dev}"
           BASE="${HOST}/${GAR_PROJECT}/${GAR_REPO}/${IMAGE_NAME}"
@@ -274,6 +287,13 @@ jobs:
           fi
           if [ "$REQUIRE_SEMVER" = "true" ] && ! printf '%s' "$TARGET" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::target_tag '$TARGET' is not vX.Y.Z (set require_semver: false to allow)." >&2
+            exit 1
+          fi
+          # A wait budget the job timeout can't accommodate would be silently
+          # truncated into a cancelled job, which reads as an infra flake rather
+          # than a misconfiguration. Reject it up front.
+          if [ "${WAIT_SECONDS:-0}" -gt 0 ] && [ "$WAIT_SECONDS" -ge "$(( TIMEOUT_MINUTES * 60 ))" ]; then
+            echo "::error::source_wait_seconds (${WAIT_SECONDS}s) must be less than timeout_minutes (${TIMEOUT_MINUTES}m = $(( TIMEOUT_MINUTES * 60 ))s) — raise timeout_minutes." >&2
             exit 1
           fi
 
@@ -368,6 +388,48 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
+      # CI→CD handoff. The build that pushes `:<sha>` and the release that promotes
+      # it are independent workflow runs (different triggers, no `needs:` edge), so
+      # a tag cut in the same breath as the merge routinely arrives first. Poll for
+      # the artifact instead of failing the release on a timing accident. Skipped
+      # under dry_run — a plan should answer "is it there now?", not block on it.
+      - name: Wait for source image
+        if: ${{ inputs.source_wait_seconds > 0 && !inputs.dry_run }}
+        env:
+          SOURCE: ${{ steps.ref.outputs.source }}
+          WAIT_SECONDS: ${{ inputs.source_wait_seconds }}
+        run: |
+          DEADLINE=$(( $(date +%s) + WAIT_SECONDS ))
+          DELAY=10
+          ATTEMPT=0
+          while :; do
+            ATTEMPT=$(( ATTEMPT + 1 ))
+            # Probe first, deadline second, so the budget always buys a final check.
+            if gcloud container images describe "$SOURCE" >/dev/null 2>&1; then
+              echo "::notice::source image present after ${ATTEMPT} attempt(s): $SOURCE"
+              exit 0
+            fi
+            REMAIN=$(( DEADLINE - $(date +%s) ))
+            if [ "$REMAIN" -le 0 ]; then
+              break
+            fi
+            if [ "$DELAY" -gt "$REMAIN" ]; then
+              DELAY="$REMAIN"
+            fi
+            echo "attempt ${ATTEMPT}: ${SOURCE} not in GAR yet — retrying in ${DELAY}s (${REMAIN}s of budget left)"
+            sleep "$DELAY"
+            DELAY=$(( DELAY * 2 ))
+            if [ "$DELAY" -gt 30 ]; then
+              DELAY=30
+            fi
+          done
+          {
+            echo "::error::source image never appeared within ${WAIT_SECONDS}s: ${SOURCE}"
+            echo "::error::The build for this commit likely failed, was skipped, or pushed a different tag."
+            echo "::error::Check the build run for this SHA, then re-run this release once :<sha> is in GAR."
+          } >&2
+          exit 1
+
       - name: Retag (server-side, no rebuild)
         env:
           BASE: ${{ steps.ref.outputs.base }}
@@ -376,9 +438,12 @@ jobs:
           ALSO_LATEST: ${{ inputs.also_tag_latest }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          # Verify the source image exists before promoting.
+          # Verify the source image exists before promoting. When source_wait_seconds
+          # is set this has already been satisfied by the wait step; it still runs so
+          # the wait=0 and dry_run paths keep their fail-fast behaviour.
           if ! gcloud container images describe "$SOURCE" >/dev/null 2>&1; then
             echo "::error::source image not found: $SOURCE" >&2
+            echo "::error::If the build for this commit is still running, set source_wait_seconds to let the release wait for it." >&2
             exit 1
           fi
 

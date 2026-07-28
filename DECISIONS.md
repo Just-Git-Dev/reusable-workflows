@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-07-28` — [`promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)](#2026-07-28-promote-image-races-the-build-it-promotes-from-bounded-source_wait_seconds-plus-the-first-executable-run-body-tests-bug-fix)
 - `2026-07-28` — [`run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out](#2026-07-28-run-db-job-built-docker_target-added-the-runner-side-prebuild-hook-deliberately-left-out)
 - `2026-07-27` — [`deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)](#2026-07-27-deploy-cloud-run-summary-step-fails-a-successful-job-when-there-is-no-service-url-bug-fix)
 - `2026-07-27` — [Secret-distribution workflows refuse values too short to be a credential](#2026-07-27-secret-distribution-workflows-refuse-values-too-short-to-be-a-credential)
@@ -45,6 +46,73 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-07-28 — `promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)
+
+**Context.** The build-once model (see the 2026-07-27 entry) splits what used to be one
+job into two independent workflow *runs*: a push to `main` builds `:<sha>`, and a release
+tag promotes it. Nothing connects them — `needs:` cannot span runs — so the handoff is
+ordered only by wall-clock luck. Cutting the release in the same breath as the merge (the
+normal human motion, and what a release-on-merge automation does by construction) lands
+the promote first, and it fails on a healthy build.
+
+### RCA
+
+**Symptom** — a release tag cut right after a merge fails in `promote-image` with
+`source image not found: …:<sha>`. Re-running the same release minutes later succeeds
+with no code change, which is the signature of a race rather than a config error.
+
+**Root cause** — the source-image preflight was a *single* `gcloud container images
+describe` (`promote-image.yml`, "Retag" step). It encodes an assumption the architecture
+does not provide: that the build for this commit has already pushed by the time the
+promote starts. Splitting build from promote into separate runs removed the ordering
+guarantee that the old single-job build-and-deploy had, and the preflight was never
+revisited — a contract mismatch introduced by the build-once split, not a bad line.
+
+**Why it wasn't caught** — three gaps compounded. (1) The build-once rollout is still
+pre-pilot (`TODO.md`: no repo converted yet), so the two-run handoff had never run
+against a real registry. (2) A race only reproduces under a specific interleaving; the
+happy path is indistinguishable. (3) Nothing in CI could *execute* a `run:` body —
+actionlint/shellcheck lint the script but never run it, the gap `TODO.md` already
+recorded after the `deploy-cloud-run` Summary bug shipped the same way.
+
+**Fix** — a new `source_wait_seconds` input (default `0` = probe once and fail, the
+historical behaviour). When set, a "Wait for source image" step polls for `:source_tag`
+with 10s → 20s → 30s-capped backoff, clamped so the last sleep cannot overshoot the
+budget, and probes once more *after* the deadline. Exhausting the budget fails with a
+message naming the image, the budget, and the build run to go look at — the actual
+diagnosis, since after the wait a missing image means the build failed, not that it was
+slow. `timeout_minutes` is validated against the wait up front: a budget the job timeout
+cannot accommodate is a config error, not a mysterious cancellation. The wait is skipped
+under `dry_run` (a plan should report presence, not block on it), and the immediate
+failure path now names `source_wait_seconds` in its error.
+
+**Prevention** — `tests/run_step_tests.py` plus a `step-bodies` CI job: it extracts a
+named step's `run:` script from the shipped YAML and executes it under `bash -eo
+pipefail` against stubbed `gcloud`/`date`/`sleep`, with time faked so the backoff
+schedule is asserted exactly and the suite is instant. Mutation-checked — removing the
+30s cap or the budget clamp each turn the suite red. This closes the `TODO.md` item
+"CI cannot execute a workflow *step*" for any body worth covering, not just this one.
+
+**Why wait on the artifact, not on the build run.** The alternative was polling the
+GitHub API for the workflow run on the same SHA, which fails fast (seconds) when the
+build *failed* instead of burning the whole budget. Rejected: it couples `promote-image`
+to a caller-supplied workflow filename and job naming, and it asserts the wrong thing —
+the retag needs the image to exist, and "a run succeeded" is a proxy for that, not the
+thing itself. Waiting on the artifact stays correct no matter which workflow, trigger, or
+repo produced it, which is what "callers own their trigger" demands. The cost is bounded
+and paid only on the failure path.
+
+**Not fixed here (caller-side).** A caller that would rather not wait at all can gate the
+tag on the build with `workflow_run` instead of `push: tags` — documented in
+`docs/promote-image.md` as the alternative, not adopted as the default because it is
+per-repo boilerplate across all five repos and re-derives the tag from the run payload.
+
+Ships as **`v1.19.0`**, together with the `run-db-job`/`docker_target` entry below —
+one tag, both additive, defaults preserve today's behaviour. (`v1.18.0` is already cut
+against the `min_value_length` secrets work; `v1.16.0` remains claimed by the badges
+work.) The two are unrelated in subject but land on `main` in the same merge, and semver
+here tracks the input contract, not the topic.
 
 ## 2026-07-28 — `run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out
 
@@ -118,6 +186,8 @@ behaviour, and every caller pins a tag, so nothing moves until a caller repins.
 nothing for the private orgs, and only two callers were confirmed directly
 (`Realm-ID/issuer` @v1.17.1, `AutoMahn/image-service` @v1.15.0). Additive-only is what
 makes that acceptable rather than verified.
+
+Ships as **`v1.19.0`**, in the same tag as the `promote-image` race fix above.
 
 ## 2026-07-27 — `deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)
 
