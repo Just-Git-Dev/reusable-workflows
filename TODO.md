@@ -55,7 +55,11 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
       `api`). Realm-ID has only the two `project` ops callers, now repinned. `tally-extension`
       was never audited and is out of scope until it is.
 - [ ] **Reusables still to build**, each blocking specific left-inline caller workflows:
-      `bootstrap-cf`, `deploy-cloudflare-worker`, `cloud-run-update`, `run-db-job`.
+      `bootstrap-cf`, `deploy-cloudflare-worker`, `cloud-run-update`. ~~`run-db-job`~~ —
+      **built 2026-07-28** (Cloud Run Job converge + execute/wait), alongside a
+      `docker_target` input on `deploy-cloud-run`. Both additive. Driven by the
+      `AutoMahn/api` conversion; see DECISIONS.md 2026-07-28, which also records why the
+      runner-side prebuild hook that conversion seems to need was **not** added.
 - [ ] **quizzing-pro/api #2041** (the migration that removes its last `zopsmart` dependency) has
       been OPEN since 2026-07-14. Note its default branch `development` already carries the
       migrated `main.yaml` @v1.11.0 — confirm whether #2041 landed by another route and is a

@@ -36,6 +36,7 @@ lands everywhere.
 | [`promote-image.yml`](docs/promote-image.md) | Retag an existing image (**no rebuild**) → roll GKE or Cloud Run — stage→prod promotion, keyless WIF |
 | [`rollback-service.yml`](docs/rollback-service.md) | Roll a service **back** onto a prior image (by tag/digest, **no rebuild/retag**) — out-of-band incident bridge, stamps the live commit |
 | [`deploy-cluster-keyed.yml`](docs/deploy-cluster-keyed.md) | **Key-based** deploy: **multi-cloud** (GKE/EKS/AKS/kubeconfig) + **multi-registry** (GAR/ECR/ACR/GHCR/DockerHub/…) build → push → roll |
+| [`run-db-job.yml`](docs/run-db-job.md) | Converge a **Cloud Run Job** from an already-built image → execute + wait — schema migrations that gate a service roll, backfills, one-shot tasks |
 
 ### Secrets & rotation
 

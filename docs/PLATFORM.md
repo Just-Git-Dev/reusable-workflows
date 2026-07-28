@@ -65,6 +65,7 @@ out-of-band): **[release-process.md](release-process.md)**.
 | Read **another private repo's** code in my CI (>1 library) | Cross-repo reader-key ([§4](#4-access-youre-granted-prerequisites)) |
 | Run Go / Node CI | [`ci-go`](ci-go.md) / [`ci-node`](ci-node.md) |
 | Ship an image to Cloud Run / GKE | [`deploy-cloud-run`](deploy-cloud-run.md) / [`deploy-gke-service`](deploy-gke-service.md) |
+| Run schema migrations (or any one-shot task) before a service goes live | [`run-db-job`](run-db-job.md) |
 | Promote a stage image to prod without rebuilding | [`promote-image`](promote-image.md) |
 | Get a bad release off prod **fast** | [`rollback-service`](rollback-service.md) |
 | Change a service's config / secret **values** | [`manage-config-secrets`](manage-config-secrets.md) (GKE) / [`sync-bundle-key`](sync-bundle-key.md) (Cloud Run) |
