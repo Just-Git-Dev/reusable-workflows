@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [`cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends](#2026-08-11--cleanup-gar-images-unlocks-and-relocks-immutable-tags-and-fails-closed-on-both-ends)
 - `2026-08-11` — [Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest](#2026-08-11--onboarding-retrospective-a-generated-contract-file-an-agent-guide-and-ci-that-keeps-both-honest)
 - `2026-08-11` — [The `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
 - `2026-08-11` — [Default-on badges must not fail CI for callers without a coverage report (bug fix)](#2026-08-11--default-on-badges-must-not-fail-ci-for-callers-without-a-coverage-report-bug-fix)
@@ -51,6 +52,50 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — `cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends
+
+**Context.** GAR repositories can enforce **immutable tags**, which is how a `:v1.2.3` tag
+stays a trustworthy deploy target — nothing can move it to a different digest. Verified
+from `gcloud artifacts repositories update --help`: *"Tags cannot be deleted or moved to a
+different image digest, and tagged images cannot be deleted."* Untagged versions remain
+deletable. So on such a repository this sweep would **half-succeed**: untagged versions
+deleted, every aged-out tagged image failing. For a destructive job that is the worst shape
+— partial, and repeated weekly.
+
+**Decision.** Detect immutability, unlock, sweep, relock. Automatic: no input turns the
+*handling* on, because the sweep either can do its job or cannot, and a flag to half-do it
+is not useful. The relock is opt-out (`relock_immutable_tags`, default `true`).
+
+**The unlock window is the whole risk, so the design is built around closing it.**
+
+- **Detect first.** A repository without immutability never has its settings touched.
+- **Pre-flight the permission before deleting anything**, via `:testIamPermissions` on
+  `artifactregistry.repositories.update` (there is no `gcloud artifacts repositories
+  test-iam-permissions` subcommand). Missing ⇒ fail with **nothing deleted**. Discovering
+  it mid-sweep is the bad outcome: partial deletions *and* an unlocked repository.
+- **Relock under `if: always()`** — the deletion step exits 1 on unexpected failures, and a
+  repo left unlocked by a *failed* sweep is a silent loss of the guarantee.
+- **Verify by readback, not exit code**, and **fail the job** if the repository is still
+  unlocked, printing the exact `gcloud` command. An unlocked repo must never be a quiet
+  outcome.
+- **`dry_run` never toggles.** Concurrency was already keyed per project+repo, so two runs
+  cannot interleave and have one relock while the other is mid-delete.
+
+**Why IAM is the real gate.** Rather than an input deciding whether this workflow may
+change repository settings, the service account's permissions decide. A repo whose settings
+should not be touched simply does not grant `artifactregistry.repositories.update`, and the
+workflow fails with an actionable message. That is harder to get wrong than a boolean, and
+it cannot be flipped by editing a caller.
+
+**Opt-out is documented as dangerous, not neutral.** `relock_immutable_tags: false` warns
+loudly and prints the re-enable command; the docs say plainly it must not be used in a
+scheduled sweep.
+
+**Tested.** `run_step_tests.py` executes the shipped relock body against a stubbed gcloud:
+happy path, **update reports success but readback says unlocked** (must fail), update fails
+while readback says protected (must pass — trust the readback), genuine failure, and the
+opt-out path (warns, touches nothing, exits 0).
 
 ## 2026-08-11 — Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest
 

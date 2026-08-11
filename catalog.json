@@ -637,6 +637,12 @@
           "required": false,
           "type": "string"
         },
+        "relock_immutable_tags": {
+          "default": true,
+          "description": "Re-enable immutable tags after the sweep. DEFAULT TRUE \u2014 leave it alone unless you deliberately want the repository left unlocked (a maintenance window, or debugging a failed sweep). Setting it false removes the protection that stops a tag being moved to a different digest, and the run will say so loudly.",
+          "required": false,
+          "type": "boolean"
+        },
         "service_account": {
           "default": null,
           "description": "Service account email to impersonate via WIF.",

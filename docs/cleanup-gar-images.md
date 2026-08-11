@@ -42,9 +42,56 @@ widening the delete-set.
 | `keep_tag_prefixes` | no | `hotfix-,rc-,debug-` | tag prefixes never deleted |
 | `sha_tag_pattern` | no | `^[0-9a-f]{40}$` | regex (Python `re.search`) matching commit-sha tags; empty ⇒ sha retention off |
 | `sha_retention_releases` | no | `1` | keep sha images newer than the Nth-most-recent release; `0` ⇒ off |
+| `relock_immutable_tags` | `true` | re-enable immutable tags after the sweep — **on by default**; see [Immutable tags](#immutable-tags) |
 | `dry_run` | no | `true` | `true` prints the plan and deletes nothing |
 
 The repo path is derived as `<gcp_region>-docker.pkg.dev/<gcp_project>/<gar_repo>`.
+
+
+## Immutable tags
+
+If the Artifact Registry repository has **immutable tags** enabled, tagged images
+**cannot be deleted at all** — per `gcloud artifacts repositories update --help`:
+*"Tags cannot be deleted or moved to a different image digest, and tagged images
+cannot be deleted."* Untagged versions can still be deleted, so without handling this
+a sweep half-succeeds: untagged versions gone, every aged-out tagged image failing.
+
+This workflow handles it automatically, in this order:
+
+1. **Detect.** `describe` the repository. If immutability is off, nothing below runs —
+   no repository setting is ever touched on a repo that does not need it.
+2. **Pre-flight the permission**, *before deleting anything*. It POSTs to
+   `:testIamPermissions` for `artifactregistry.repositories.update` (there is no
+   `gcloud artifacts repositories test-iam-permissions` subcommand). Missing ⇒ the run
+   **fails with nothing deleted**, naming the permission and the role that grants it.
+   Discovering this halfway through would leave the repo unlocked and the sweep partial.
+3. **Unlock**, emitting a `::warning::` that protection is off for the duration.
+4. **Sweep.**
+5. **Relock — always.** The step runs under `if: always()`, so it fires even when the
+   deletion step fails or the job is cancelled mid-sweep. It then **verifies by reading
+   the setting back** rather than trusting the exit code, and **fails the job** if the
+   repository is still unlocked, printing the exact `gcloud` command to fix it. A repo
+   left unlocked by a failed sweep is a silent loss of the guarantee.
+
+**`dry_run: true` never toggles anything.** The plan is printed and the repository is
+left exactly as found.
+
+### Opting out of the relock
+
+`relock_immutable_tags: false` leaves the repository unlocked after the sweep. The only
+legitimate uses are a maintenance window or debugging a failed sweep. The run warns
+loudly and prints the command to re-enable protection.
+
+> **Leaving it unlocked means any actor can move a tag to a different digest** — which is
+> precisely what immutable tags exist to prevent, and what makes a `:v1.2.3` tag a
+> trustworthy deploy target. Do not set this in a scheduled sweep.
+
+### What the service account needs
+
+`artifactregistry.repositories.update`, i.e. `roles/artifactregistry.admin` on the
+repository, **only if** immutability is enabled. Repos without it need nothing extra —
+which also means IAM, not a workflow input, is the real gate on whether this workflow can
+change a repository's settings at all.
 
 ## sha retention (build-once, promote-to-prod)
 

@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PROMOTE = ROOT / ".github" / "workflows" / "promote-image.yml"
 CI_NODE = ROOT / ".github" / "workflows" / "ci-node.yml"
 CI_GO = ROOT / ".github" / "workflows" / "ci-go.yml"
+GAR = ROOT / ".github" / "workflows" / "cleanup-gar-images.yml"
 
 FAILURES = []
 
@@ -183,6 +184,39 @@ def run_coverage_step(body: str, *, summary_pct=None, threshold=0):
                 "output": out.read_text()}
 
 
+def run_relock_step(body: str, *, relock="true", update_ok=True, readback="true"):
+    """Execute the GAR relock body against a stubbed gcloud.
+
+    update_ok: does `repositories update --immutable-tags` succeed
+    readback:  what `describe` reports afterwards ("true" = protected again)
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        calls = tmp / "calls"
+        calls.write_text("")
+        gcloud = stub / "gcloud"
+        gcloud.write_text(f"""#!/usr/bin/env bash
+echo "$@" >> {calls}
+case "$*" in
+  *"--immutable-tags"*) exit {0 if update_ok else 1} ;;
+  *describe*)           echo "{readback}" ; exit 0 ;;
+esac
+exit 0
+""")
+        gcloud.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(RELOCK=relock, GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo")
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "calls": calls.read_text()}
+
+
 def check(name, cond, detail=""):
     if cond:
         print(f"  ok   {name}")
@@ -312,6 +346,34 @@ def main():
     check("clean fleet renders a clean report",
           "are current" in fd.render_md([{"repo": "o/a", "file": "c", "workflow": "w",
                                           "ref": "v1.21.1", "status": "OK", "detail": ""}], "v1.21.1"))
+    # ---- GAR relock: the repo must end the run as protected as it started ----
+    relock = extract_step(GAR, "cleanup", "Relock immutable tags")
+    print("\ncleanup-gar-images · Relock immutable tags")
+
+    r = run_relock_step(relock)
+    check("happy path exits 0", r["rc"] == 0, r["out"])
+    check("happy path re-enables", "--immutable-tags" in r["calls"], r["calls"])
+    check("happy path verifies by readback", "describe" in r["calls"], r["calls"])
+
+    # The dangerous case: gcloud says OK but the repo is still unlocked.
+    r = run_relock_step(relock, update_ok=True, readback="false")
+    check("unlocked-after-relock FAILS the job", r["rc"] == 1, r["out"])
+    check("unlocked-after-relock says UNLOCKED", "UNLOCKED" in r["out"], r["out"])
+    check("unlocked-after-relock gives the fix command",
+          "--immutable-tags" in r["out"], r["out"])
+
+    # Trust the readback, not the exit code: update fails but repo is protected.
+    r = run_relock_step(relock, update_ok=False, readback="true")
+    check("readback wins over a failed update", r["rc"] == 0, r["out"])
+
+    r = run_relock_step(relock, update_ok=False, readback="false")
+    check("genuine relock failure exits 1", r["rc"] == 1, r["out"])
+
+    # Opt-out: warn loudly, change nothing, do not fail.
+    r = run_relock_step(relock, relock="false")
+    check("opt-out exits 0", r["rc"] == 0, r["out"])
+    check("opt-out warns it is left unlocked", "LEFT UNLOCKED" in r["out"], r["out"])
+    check("opt-out touches nothing", r["calls"].strip() == "", r["calls"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")
