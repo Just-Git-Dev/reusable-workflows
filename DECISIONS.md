@@ -5,6 +5,8 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)](#2026-08-11--the-gar-105-vs-103-delta-is-a-wall-clock-boundary-crossing-not-a-logic-change-root-cause-corrects-the-earlier-correction)
+- `2026-08-11` — [Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`](#2026-08-11--opt-in-node_modules-caching-on-ci-node-and-deploy-cloudflare-pages-pages-gains-a-separate-install_command)
 - `2026-08-11` — [Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice](#2026-08-11--release-version-sweep-automated-doc-pins--a-workflow_version-stamp-enforced-twice)
 - `2026-08-11` — [`deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check](#2026-08-11--deploy-cloudflare-pages-gains-an-opt-in-blocking-post-deploy-smoke-check)
 - `2026-08-11` — [`cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends](#2026-08-11--cleanup-gar-images-unlocks-and-relocks-immutable-tags-and-fails-closed-on-both-ends)
@@ -54,6 +56,95 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)
+
+**Closes the open question** left by the "keep-only invariant is not true" entry below.
+
+**What the evidence is.** Both dry-run plans were recovered from the actual runs
+(`Realm-ID/project` run `31492420279` at 12:41 on `v1.15.0`, run `31492618604` at 12:43 on
+`v1.21.1`) and diffed digest by digest. The two extra entries are:
+
+```
+api@sha256:01ce4ed…  tags: []  age_days: 15  reason: untagged>=15d
+api@sha256:67a9d23…  tags: []  age_days: 15  reason: untagged>=15d
+```
+
+`untagged_max_age_days` is **15**, and the test is `age_days >= 15`. Both images sit
+*exactly* on the boundary.
+
+**Why that is a proof, not a hypothesis.** In the earlier run those digests were untagged,
+not in the keep-set (the keep-set only ever grew — see below) and not selected, which is
+possible only if `age_days < 15` at 12:42. In the later run `age_days == 15`. The threshold is
+evaluated against `now` at plan time, and the two plans printed 2m27s apart. They aged past
+the cut-off *between the two runs*. Two crossing together is what a single CI build produces:
+it pushes both digests within a couple of minutes, so they cross a day-boundary together.
+
+**So the keep-only invariant does hold — for the same input.** Independently checked three
+ways: the delete loop and the live-digest collection step are **byte-identical** across the
+two tags (`git diff v1.15.0 v1.21.1` touches neither); the keep-set can only grow
+(`EFF_SEMVER_COUNT = max(KEEP_SEMVER_COUNT, N+1)`, the sha pass only calls `keep.add`);
+and running **both tags' plan code over the same 13 fixtures** gives a delete-set that is a
+strict subset at HEAD on every one. The earlier entry's claim — that the invariant is false —
+was itself an inference from two numbers, and it was wrong. The measurement it rested on was
+sound; the *comparison* was confounded, because the independent variable was not the only
+thing that changed between the two runs.
+
+**What this means for a repin proof.** A plan diff across two pins is only meaningful if
+nothing else moved, and wall-clock time always moves. Any image within a day of a threshold
+can flip between two runs minutes apart. So: a repin dry-run diff that shows only untagged
+images at exactly the threshold age is **noise**, not evidence of a behaviour change. A diff
+showing tagged images, live digests, or ages away from the boundary is real.
+
+**What shipped.** `tests/fixtures/t23-untagged-age-boundary.json` pins the `>=` semantics at
+14.99 / 15.01 days, so the boundary is now asserted rather than remembered. The per-fixture
+monotonicity probe already in `run_plan_tests.py` (re-runs each fixture with
+`SHA_RETENTION_RELEASES=0` and fails if the window run deletes anything extra) is what
+executably guards the keep-only property — it passed throughout, including on the day the
+invariant was declared broken. That signal was there and was not consulted.
+
+**Lesson, refined.** "Measure, don't reason" was applied — and still produced a wrong
+conclusion, because the measurement did not control its variable. The full form is: measure,
+**and hold everything else fixed**, or you have measured the wrong difference.
+
+## 2026-08-11 — Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`
+
+**What changed.** New `cache_node_modules` input (default `false`) on both workflows: caches
+`<working_directory>/node_modules` and **skips the install** on an exact lockfile hit.
+`deploy-cloudflare-pages` also gains `install_command` (default `''`, i.e. today's behaviour).
+
+**Why.** `node_cache` is `setup-node`'s cache of `~/.npm` only — npm still unpacks and links
+the tree every run, which for a large app is most of the install. `eazyupdates-ui`'s outgoing
+GKE workflow caches the tree itself and puts it at ~1.2 GB, so migrating it onto these
+reusables as-is would have been a measurable build-time regression.
+
+**Why the skip is mandatory, not an extra.** `npm ci` removes `node_modules` before
+installing, so caching the tree while still running the install buys exactly nothing. The
+value is entirely in not running the install — which is also the entire risk, because
+lifecycle scripts (`postinstall`, `prisma generate`, `husky`, `playwright install`) then never
+run. That is why it is opt-in, documented at length, and prints a `::notice::` when it skips:
+a silently-skipped install is a miserable thing to debug from a build failure downstream.
+
+**Why Pages needed a second input.** Its default `build_command` is `npm ci && npm run build`
+— one string that installs *and* builds — so there was no install step to skip. Rather than
+change that default (a behaviour change for every existing caller), `install_command` is
+opt-in and empty by default. `cache_node_modules` without it is a **hard error at the top of
+the job**: the alternative is deploying a build that quietly never used the cache the caller
+asked for, and a wrong "this is cached" belief costs more than a failed run.
+
+**Key design, deliberately strict:**
+
+- **No `restore-keys`.** A prefix fallback restores a tree built from a *different* lockfile
+  and then skips the install that would have reconciled it. A lockfile change must be a clean
+  miss. (`eazyupdates-ui`'s own version had no fallback either — for the same reason.)
+- **Keyed on the version `setup-node` resolved**, not the requested spec, so `lts/*` sliding
+  to a new major misses rather than restoring native modules built against the old ABI.
+- **Top-level `node_modules` only** — nested monorepo trees are explicitly not covered, and
+  the docs say so rather than leaving a caller to discover a half-restored workspace.
+
+**Not tested executably.** `tests/run_step_tests.py` runs `run:` bodies; this change is
+`uses:`/`if:` expressions with no shell to exercise. Coverage is actionlint + the doc-example
+lint. The behaviour worth asserting — a hit skips the install — needs a real runner.
 
 ## 2026-08-11 — Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice
 
@@ -220,6 +311,12 @@ describes.
 every problem above was found by a human noticing, not by a system.
 
 ## 2026-08-11 — the `cleanup-gar-images` "keep-only" invariant is not true (correction)
+
+> **Superseded the same day — this entry's conclusion is wrong.** The invariant does hold for
+> identical input; the two runs compared here were 2m27s apart and both extra digests had
+> aged past the untagged threshold in between. See *"The GAR 105-vs-103 delta is a wall-clock
+> boundary crossing"* above for the recovered plans and the proof. Kept unedited below,
+> because how the wrong conclusion was reached is the useful part.
 
 **What we claimed.** The 2026-07-27 build-once entry, and `TODO.md` after it, described the
 release-relative sha retention added in `v1.17.0` as **keep-only — "so it can only ever

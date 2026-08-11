@@ -334,6 +334,12 @@
           "required": false,
           "type": "string"
         },
+        "cache_node_modules": {
+          "default": false,
+          "description": "Cache the installed node_modules tree and SKIP the install step on an exact lockfile hit. Off by default. node_cache (above) only caches the npm download cache \u2014 npm still unpacks and links the tree every run, which for a large app is most of the install time. Opt in only if you understand the trade: on a hit, install_command never runs, so package lifecycle scripts (postinstall, prisma generate, husky, playwright install) never run either. Only the node_modules directly under working_directory is cached \u2014 a monorepo with nested node_modules is not fully covered.",
+          "required": false,
+          "type": "boolean"
+        },
         "coverage_summary_path": {
           "default": "coverage/coverage-summary.json",
           "description": "Istanbul json-summary report, relative to working_directory. Read when coverage_threshold is non-zero or update_badges is true.",
@@ -893,6 +899,18 @@
         "cache_dependency_path": {
           "default": "",
           "description": "Lockfile setup-node keys its cache on. Defaults to package-lock.json in working_directory.",
+          "required": false,
+          "type": "string"
+        },
+        "cache_node_modules": {
+          "default": false,
+          "description": "Cache the installed node_modules tree and SKIP install_command on an exact lockfile hit. Off by default, and REQUIRES install_command (the run fails fast otherwise, rather than caching a tree nothing reuses). node_cache above only caches the npm download cache \u2014 npm still unpacks and links the tree every run. On a hit install_command never runs, so package lifecycle scripts (postinstall, prisma generate, husky) never run either. Only the node_modules directly under working_directory is cached.",
+          "required": false,
+          "type": "boolean"
+        },
+        "install_command": {
+          "default": "",
+          "description": "Optional install step, run before build_command. Empty (the default) keeps today's behaviour exactly \u2014 build_command installs as well as builds. Splitting the install out is what makes cache_node_modules possible: a build_command that still runs `npm ci` would delete the restored tree, since npm ci removes node_modules before installing. Set this to `npm ci` and reduce build_command to `npm run build`.",
           "required": false,
           "type": "string"
         },
