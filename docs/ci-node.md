@@ -15,7 +15,7 @@ own jobs/steps in the caller.
 |---|---|---|
 | `runs_on` | `ubuntu-latest` | runner label. **Self-hosted must be on Actions Runner ≥ v2.327.1** — `setup-node` v7 runs on Node 24. GitHub-hosted runners already satisfy this. |
 | `working_directory` | `.` | package root (monorepo) |
-| `node_version` | `20` | any setup-node spec: `20`, `22`, `lts/*` |
+| `node_version` | `24` | any setup-node spec: `24`, `22`, `lts/*`. Defaults to the **active LTS**; Node 20 is EOL (2026-04-30) |
 | `node_cache` | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
 | `cache_dependency_path` | `<working_directory>/package-lock.json` | lockfile the cache keys on |
 | `enable_corepack` | `false` | run `corepack enable` before setup-node (pnpm / modern yarn) |
@@ -105,7 +105,7 @@ jobs:
   ci:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
     with:
-      node_version: '22'
+      node_version: '24'
       test_command: 'npm test -- --run'
 ```
 
@@ -133,7 +133,7 @@ Monorepo package:
 ```yaml
     with:
       working_directory: frontend/web
-      node_version: '22'
+      node_version: '24'
 ```
 
 ## README badges

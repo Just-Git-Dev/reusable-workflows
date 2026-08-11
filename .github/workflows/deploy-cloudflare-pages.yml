@@ -38,10 +38,13 @@ on:
         required: false
         default: 'dist'
       node_version:
-        description: 'Node.js version for the build. Accepts any setup-node spec (20, 20.x, lts/*).'
+        description: >-
+          Node.js version for the build (any setup-node spec: 24, 22, lts/*).
+          Defaults to the active LTS. Node 20 reached end-of-life on 2026-04-30 and
+          receives no security patches — pin it explicitly only if you must.
         type: string
         required: false
-        default: '20'
+        default: '24'
       node_cache:
         description: 'setup-node cache backend (npm | yarn | pnpm). Empty string disables caching.'
         type: string

@@ -89,6 +89,20 @@ install step — its `build_command` defaults to `npm ci && npm run build` — s
 goes on the build step. Narrower is better: a token on a step that never installs is
 exposure without purpose.
 
+**Also in this tag: the default `node_version` moves `20` → `24`.** Node 20 reached
+**end-of-life on 2026-04-30** (verified against `nodejs/Release`'s `schedule.json`, not from
+memory), so the default was handing every caller that omits the input a runtime with no
+security patches — and the docs were teaching it, with `'20'` in four examples. 24 is the
+active LTS (EOL 2028-04-30); 22 remains supported until 2027-04-30 for anyone who wants a
+smaller jump.
+
+Strictly, changing a default is behaviour-affecting rather than a contract change, which
+argues for a major. It ships in a minor because the blast radius was measured, not assumed:
+of the migrated callers, **only `AutoMahn/website` omits `node_version`, and its
+`build_command` is `'true'` — it never executes Node.** Every other Pages/CI caller pins
+`'22'` explicitly and is unaffected. Callers who genuinely need the old runtime can pin
+`node_version: '20'`, though they should not. Called out in the release notes.
+
 **Shipped alongside, in the same tag:** a copy-paste **CI + stage + prod** example in
 `docs/deploy-cloudflare-pages.md`, and a sweep of **every** example pin in `docs/` and
 `README.md` to `v1.20.0`. The sweep is the more consequential of the two: all 39

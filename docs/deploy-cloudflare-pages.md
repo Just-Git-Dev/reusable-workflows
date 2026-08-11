@@ -17,7 +17,7 @@ cannot hold deploy credentials, so those runs would only fail noisily.
 | `working_directory` | input | `.` | build and deploy from here |
 | `build_command` | input | `npm ci && npm run build` | run in `working_directory` |
 | `output_dir` | input | `dist` | static assets, relative to `working_directory` |
-| `node_version` | input | `20` | any setup-node spec: `20`, `20.x`, `lts/*` |
+| `node_version` | input | `24` | any setup-node spec: `24`, `22`, `lts/*`. Defaults to the **active LTS**; Node 20 is EOL (2026-04-30) |
 | `node_cache` | input | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
 | `cache_dependency_path` | input | `<working_directory>/package-lock.json` | lockfile the cache keys on |
 | `npm_registry_url` | input | `''` | private npm registry the build authenticates against. Empty ⇒ untouched — see [Private registries](#private-registries) |
@@ -88,7 +88,7 @@ jobs:
   ci:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
     with:
-      node_version: '20'
+      node_version: '24'
       # Chain extra gates with && — each is a plain shell command.
       lint_command: npm run lint && npm run prettier:check
       test_command: npm test
@@ -105,7 +105,7 @@ jobs:
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       build_command: npm ci && npm run build
       output_dir: dist
-      node_version: '20'
+      node_version: '24'
     secrets:
       cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
@@ -118,7 +118,7 @@ jobs:
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       build_command: npm ci && npm run build
       output_dir: dist
-      node_version: '20'
+      node_version: '24'
       # Deploy the tag itself, not whatever the default branch points at.
       ref: ${{ github.ref_name }}
     secrets:
@@ -166,7 +166,7 @@ jobs:
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       build_command: npm ci && npm run build
       output_dir: dist
-      node_version: '20'
+      node_version: '24'
     secrets:
       cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
