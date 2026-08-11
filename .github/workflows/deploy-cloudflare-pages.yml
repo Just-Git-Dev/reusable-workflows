@@ -32,6 +32,29 @@ on:
         type: string
         required: false
         default: 'npm ci && npm run build'
+      install_command:
+        description: >-
+          Optional install step, run before build_command. Empty (the default) keeps
+          today's behaviour exactly — build_command installs as well as builds.
+          Splitting the install out is what makes cache_node_modules possible: a
+          build_command that still runs `npm ci` would delete the restored tree,
+          since npm ci removes node_modules before installing. Set this to
+          `npm ci` and reduce build_command to `npm run build`.
+        type: string
+        required: false
+        default: ''
+      cache_node_modules:
+        description: >-
+          Cache the installed node_modules tree and SKIP install_command on an exact
+          lockfile hit. Off by default, and REQUIRES install_command (the run fails
+          fast otherwise, rather than caching a tree nothing reuses). node_cache
+          above only caches the npm download cache — npm still unpacks and links the
+          tree every run. On a hit install_command never runs, so package lifecycle
+          scripts (postinstall, prisma generate, husky) never run either. Only the
+          node_modules directly under working_directory is cached.
+        type: boolean
+        required: false
+        default: false
       output_dir:
         description: 'Built static-assets directory to deploy, relative to working_directory.'
         type: string
@@ -179,7 +202,18 @@ jobs:
           # Empty ⇒ checkout's default (the triggering ref); set to re-deploy a tag.
           ref: ${{ inputs.ref }}
 
+      # Fail fast rather than deploy a build that silently never used the cache the
+      # caller asked for: with no separate install_command, build_command still runs
+      # `npm ci`, which deletes the restored tree.
+      - name: Reject cache_node_modules without install_command
+        if: ${{ inputs.cache_node_modules && inputs.install_command == '' }}
+        run: |
+          echo "::error::cache_node_modules requires install_command. Set install_command to your"
+          echo "::error::install (e.g. 'npm ci') and reduce build_command to the build alone."
+          exit 1
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        id: setup
         with:
           node-version: ${{ inputs.node_version }}
           cache: ${{ inputs.node_cache }}
@@ -188,6 +222,36 @@ jobs:
           # so callers without a private registry keep exactly today's behaviour.
           registry-url: ${{ inputs.npm_registry_url }}
           scope: ${{ inputs.npm_registry_scope }}
+
+      # Exact-match key only — no restore-keys. A prefix fallback would restore a
+      # tree built from a DIFFERENT lockfile and then skip the install that would
+      # have reconciled it. Keyed on the version setup-node actually resolved, so
+      # `lts/*` sliding to a new major misses rather than restoring native modules
+      # built against the old ABI.
+      - name: Restore node_modules
+        id: node_modules_cache
+        if: ${{ inputs.cache_node_modules }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ inputs.working_directory }}/node_modules
+          key: node-modules-${{ runner.os }}-${{ steps.setup.outputs.node-version || inputs.node_version }}-${{ hashFiles(inputs.cache_dependency_path != '' && inputs.cache_dependency_path || format('{0}/package-lock.json', inputs.working_directory)) }}
+
+      - name: Install
+        if: ${{ inputs.install_command != '' && steps.node_modules_cache.outputs.cache-hit != 'true' }}
+        env:
+          # setup-node writes `_authToken=${NODE_AUTH_TOKEN}` into $RUNNER_TEMP/.npmrc;
+          # npm expands it here, at install time. Empty when no registry is configured.
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token }}
+          # Via the environment, never spliced into the body: a caller-supplied
+          # string interpolated into `run:` is a script-injection seam.
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+        run: eval "$INSTALL_COMMAND"
+
+      - name: Note the skipped install
+        if: ${{ steps.node_modules_cache.outputs.cache-hit == 'true' }}
+        env:
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+        run: echo "::notice::node_modules restored from cache — '$INSTALL_COMMAND' was skipped, so package lifecycle scripts did not run."
 
       - name: Build
         env:

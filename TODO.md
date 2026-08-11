@@ -210,7 +210,14 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   every PR and agreement **with the tag** on `v*.*.*` pushes. The originally-proposed check
   ("fail when the newest pin is older than the latest release") was rejected — it fails
   unrelated PRs in the window between a release and its sweep. See DECISIONS.md.
-- [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.** Both
+- [x] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching —
+  BUILT 2026-08-11.** `cache_node_modules` (default `false`) on both; Pages also gained
+  `install_command` because its `build_command` bundled the install and `npm ci` deletes the
+  restored tree. Exact-match key (no `restore-keys`), keyed on the resolved Node version;
+  install skipped on a hit, with a `::notice::` because lifecycle scripts then don't run.
+  **Unverified on a real runner** — no measurement yet of the saving on a large tree; do that
+  when `eazyupdates-ui` or another big caller adopts it. Original entry:
+- [ ] ~~`ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.**~~ Both
   rely on `setup-node`'s cache, which covers only `~/.npm`; npm still unpacks and links the tree
   on every run. `eazyupdates-ui`'s outgoing GKE workflow caches `node_modules` itself, keyed on
   `hashFiles('package-lock.json')` with no `restore-keys` (a prefix fallback would restore a tree

@@ -18,6 +18,7 @@ own jobs/steps in the caller.
 | `node_version` | `24` | any setup-node spec: `24`, `22`, `lts/*`. Defaults to the **active LTS**; Node 20 is EOL (2026-04-30) |
 | `node_cache` | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
 | `cache_dependency_path` | `<working_directory>/package-lock.json` | lockfile the cache keys on |
+| `cache_node_modules` | `false` | cache the installed tree and **skip the install** on an exact lockfile hit — see [Caching node_modules](#caching-node_modules) before enabling |
 | `enable_corepack` | `false` | run `corepack enable` before setup-node (pnpm / modern yarn) |
 | `npm_registry_url` | `''` | private npm registry to authenticate against, e.g. `https://npm.pkg.github.com`. Empty ⇒ registry auth is untouched — see [Private registries](#private-registries) |
 | `npm_registry_scope` | `''` | package scope routed to `npm_registry_url`, e.g. `@acme`. Optional for GitHub Packages, which falls back to the repository owner |
@@ -45,6 +46,40 @@ own jobs/steps in the caller.
 
 Nothing else — otherwise this is public/read-only CI. (Need a private sibling repo
 for specs? Do that checkout in a caller job.)
+
+## Caching node_modules
+
+`node_cache` (on by default) is `setup-node`'s cache: it stores the **npm download
+cache** (`~/.npm`), so a run skips the network but npm still unpacks and links the
+whole tree every time. For a large app that unpack is most of the install —
+`eazyupdates-ui`'s tree is around 1.2 GB.
+
+`cache_node_modules: true` caches `<working_directory>/node_modules` itself and
+**skips `install_command` entirely** on an exact hit. That skip is the whole point
+(`npm ci` deletes `node_modules` before installing, so caching without skipping buys
+nothing) and it is also the whole risk:
+
+- **Lifecycle scripts do not run.** No `postinstall`, no `prisma generate`, no
+  `husky install`, no `playwright install`. If your build depends on an artefact one
+  of those produces, either leave this off or generate the artefact in its own step.
+  A skipped install prints a `::notice::` so this is findable in the log.
+- **The key is exact-match only** — no `restore-keys`. A prefix fallback would
+  restore a tree built from a *different* lockfile and then skip the install that
+  would have reconciled it. A lockfile change is a clean miss, by design.
+- **The key includes the Node version `setup-node` resolved**, not the one you asked
+  for, so `lts/*` sliding to a new major misses rather than restoring native modules
+  built against the old ABI.
+- **Only the top-level `node_modules` under `working_directory` is cached.** A
+  monorepo with nested `node_modules` (npm workspaces hoisting partially, or
+  per-package installs) is not fully covered.
+
+```yaml
+    with:
+      cache_node_modules: true
+```
+
+Measure before and after on your own repo. If the install is already short, the
+cache upload/download can cost more than it saves.
 
 ## Private registries
 

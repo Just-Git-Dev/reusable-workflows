@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`](#2026-08-11--opt-in-node_modules-caching-on-ci-node-and-deploy-cloudflare-pages-pages-gains-a-separate-install_command)
 - `2026-08-11` — [Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice](#2026-08-11--release-version-sweep-automated-doc-pins--a-workflow_version-stamp-enforced-twice)
 - `2026-08-11` — [`deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check](#2026-08-11--deploy-cloudflare-pages-gains-an-opt-in-blocking-post-deploy-smoke-check)
 - `2026-08-11` — [`cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends](#2026-08-11--cleanup-gar-images-unlocks-and-relocks-immutable-tags-and-fails-closed-on-both-ends)
@@ -54,6 +55,45 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`
+
+**What changed.** New `cache_node_modules` input (default `false`) on both workflows: caches
+`<working_directory>/node_modules` and **skips the install** on an exact lockfile hit.
+`deploy-cloudflare-pages` also gains `install_command` (default `''`, i.e. today's behaviour).
+
+**Why.** `node_cache` is `setup-node`'s cache of `~/.npm` only — npm still unpacks and links
+the tree every run, which for a large app is most of the install. `eazyupdates-ui`'s outgoing
+GKE workflow caches the tree itself and puts it at ~1.2 GB, so migrating it onto these
+reusables as-is would have been a measurable build-time regression.
+
+**Why the skip is mandatory, not an extra.** `npm ci` removes `node_modules` before
+installing, so caching the tree while still running the install buys exactly nothing. The
+value is entirely in not running the install — which is also the entire risk, because
+lifecycle scripts (`postinstall`, `prisma generate`, `husky`, `playwright install`) then never
+run. That is why it is opt-in, documented at length, and prints a `::notice::` when it skips:
+a silently-skipped install is a miserable thing to debug from a build failure downstream.
+
+**Why Pages needed a second input.** Its default `build_command` is `npm ci && npm run build`
+— one string that installs *and* builds — so there was no install step to skip. Rather than
+change that default (a behaviour change for every existing caller), `install_command` is
+opt-in and empty by default. `cache_node_modules` without it is a **hard error at the top of
+the job**: the alternative is deploying a build that quietly never used the cache the caller
+asked for, and a wrong "this is cached" belief costs more than a failed run.
+
+**Key design, deliberately strict:**
+
+- **No `restore-keys`.** A prefix fallback restores a tree built from a *different* lockfile
+  and then skips the install that would have reconciled it. A lockfile change must be a clean
+  miss. (`eazyupdates-ui`'s own version had no fallback either — for the same reason.)
+- **Keyed on the version `setup-node` resolved**, not the requested spec, so `lts/*` sliding
+  to a new major misses rather than restoring native modules built against the old ABI.
+- **Top-level `node_modules` only** — nested monorepo trees are explicitly not covered, and
+  the docs say so rather than leaving a caller to discover a half-restored workspace.
+
+**Not tested executably.** `tests/run_step_tests.py` runs `run:` bodies; this change is
+`uses:`/`if:` expressions with no shell to exercise. Coverage is actionlint + the doc-example
+lint. The behaviour worth asserting — a hit skips the install — needs a real runner.
 
 ## 2026-08-11 — Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice
 
