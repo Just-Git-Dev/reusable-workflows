@@ -45,7 +45,7 @@ on:
 
 jobs:
   build:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.24.0
     with:
       build_only: true
       image_tag: ${{ github.sha }}   # the promotion source
@@ -118,7 +118,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.24.0
     with:
       gcp_project: realm-id
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

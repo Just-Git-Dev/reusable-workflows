@@ -97,7 +97,7 @@ jobs:
     # deploy jobs stay read-only.
     permissions:
       contents: write
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.24.0
     with:
       node_version: '24'
       # Chain extra gates with && — each is a plain shell command.
@@ -110,7 +110,7 @@ jobs:
   stage:
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'   # CHANGE ME
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.24.0
     with:
       project_name: myapp-stage                       # CHANGE ME
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -123,7 +123,7 @@ jobs:
   prod:
     needs: ci
     if: startsWith(github.ref, 'refs/tags/v')
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.24.0
     with:
       project_name: myapp-prod                        # CHANGE ME
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -171,7 +171,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.24.0
     with:
       project_name: my-website
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -202,7 +202,7 @@ on:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.24.0
     with:
       project_name: my-app
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -236,7 +236,7 @@ differing in the project and whatever selects the environment's config:
 # .github/workflows/deploy-pages-stage.yaml   → push to `development`
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.24.0
     with:
       project_name: myapp-stage
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

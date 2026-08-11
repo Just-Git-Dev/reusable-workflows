@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice](#2026-08-11--release-version-sweep-automated-doc-pins--a-workflow_version-stamp-enforced-twice)
 - `2026-08-11` — [`deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check](#2026-08-11--deploy-cloudflare-pages-gains-an-opt-in-blocking-post-deploy-smoke-check)
 - `2026-08-11` — [`cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends](#2026-08-11--cleanup-gar-images-unlocks-and-relocks-immutable-tags-and-fails-closed-on-both-ends)
 - `2026-08-11` — [Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest](#2026-08-11--onboarding-retrospective-a-generated-contract-file-an-agent-guide-and-ci-that-keeps-both-honest)
@@ -53,6 +54,40 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice
+
+**What changed.** `scripts/stamp_version.py` sweeps the release version into both places
+it appears: the `@vX.Y.Z` example pins across `docs/` + `README.md` (36 of them), and a new
+`WORKFLOW_VERSION` key in each of the 21 reusables' top-level `env:`. CI gains a
+`version-sweep` job, and `ci.yml` now also triggers on `v*.*.*` tags. `tests/run_stamp_tests.py`
+covers the rewrites. Repo swept to `v1.24.0` — the tag this ships in.
+
+**Why.** Every release since `v1.20.0` needed a manual `perl -pi` over the docs; skipping it
+is how 39 pins once sat on twelve different tags. A chore that only a human remembers is a
+chore that eventually doesn't happen.
+
+**Why a stamp at all.** A called workflow cannot discover which version of *itself* is
+running — a probe on 2026-08-11 established that `GITHUB_WORKFLOW_REF`/`_SHA` describe the
+**caller**, and the `github` context carries no `job_workflow_sha` key (actionlint's model
+doesn't know it either, and actionlint gates CI). Baking the version in at release time is
+the only mechanism left, and it is the prerequisite for telling a caller it is out of date.
+
+**Why two different checks rather than "is the newest pin older than the latest release".**
+That phrasing was the obvious one and is wrong: it fails every unrelated PR opened in the
+window between a release and its sweep, punishing people who touched nothing. Instead:
+
+- **on PR/push** — `--check` asserts only that the tree agrees with *itself*. No network, no
+  release ordering, no false failure.
+- **on tag push** — `--check --expect <tag>` additionally asserts the tree agrees with the
+  tag being cut. A skipped sweep fails the release, at the one moment it is actually wrong.
+
+The sweep therefore belongs in the PR **before** the tag. Between merge and tag, `main`
+advertises a version that isn't released yet; that window is inherent to stamping and is
+bounded by the tag guard.
+
+**Deliberately not swept:** the `v1` alias. It is a frozen legacy pointer, so a doc that
+names it means it — the regex requires a full `vX.Y.Z` and leaves `@v1` alone (tested).
 
 ## 2026-08-11 — `deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check
 
