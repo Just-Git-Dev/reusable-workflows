@@ -8,8 +8,16 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
 
 - [x] **GAR retention is release-relative.** `cleanup-gar-images` no longer age-deletes the
       `:<sha>` promotion source: per package it keeps sha images newer than the
-      `sha_retention_releases`-th most recent release (ordered by time, not semver). Keep-only,
-      so it can only ever delete less. Latent `TypeError` on a missing `updateTime` fixed in the
+      `sha_retention_releases`-th most recent release (ordered by time, not semver).
+      ⚠️ **The "keep-only, so it can only ever delete less" claim is FALSE — measured
+      2026-08-11.** A dry-run comparison on `Realm-ID/project`'s `backend` repo (310 images,
+      2 live) put `v1.15.0` at 103 delete candidates and `v1.21.1` at 105: a strict superset,
+      +2 **untagged** `api` digests, 0 newly protected. `kept` did rise 20 → 24, so the
+      keep-set genuinely grew — but the delete-set grew too, which the invariant said was
+      impossible. **Do not repin a `cleanup-gar-images` caller on the strength of that claim;
+      dry-run and diff the plans.** Root cause not yet established: the likely candidate is
+      that classifying sha-tagged images against the new window shifts which *untagged*
+      digests fall outside the protected set, but that is a hypothesis, not a finding. Latent `TypeError` on a missing `updateTime` fixed in the
       same pass.
 - [ ] **Pilot `Realm-ID/issuer` end-to-end** (lowest blast radius of the five). In its
       `deploy.yml`: add a `main`-triggered `deploy-cloud-run` job with `build_only: true` →
