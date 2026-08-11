@@ -201,7 +201,7 @@ jobs:
 
   cleanup:
     needs: resolve
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v1.21.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v1.22.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

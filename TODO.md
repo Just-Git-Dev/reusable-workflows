@@ -187,6 +187,12 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   job *inserts* badges after the first `# ` heading when none exist, so every caller's README
   gets an unsolicited commit on first upgrade. Decide whether default-on should insert or only
   update badges that already exist.
+- [ ] **Automate the doc example pin sweep at release time.** Every release since `v1.20.0`
+  has needed a manual `perl -pi` pass over `docs/` + `README.md`, and it is exactly the kind of
+  chore that gets skipped — which is how 39 pins ended up spread over twelve tags in the first
+  place. Either a `scripts/bump_pins.py <tag>` invoked from a release checklist, or a CI check
+  that fails when the newest example pin is older than the latest release. The check is better:
+  it cannot be forgotten.
 - [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.** Both
   rely on `setup-node`'s cache, which covers only `~/.npm`; npm still unpacks and links the tree
   on every run. `eazyupdates-ui`'s outgoing GKE workflow caches `node_modules` itself, keyed on
