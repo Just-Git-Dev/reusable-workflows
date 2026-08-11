@@ -13,6 +13,11 @@ lands everywhere.
 - **Safe to run in production.** Third-party actions are SHA-pinned, every `run:`
   is `shell: bash` (pipefail), and destructive workflows have a `dry_run` plan mode.
 
+> **Wiring up a repo (or an agent doing it)? Start with [AGENTS.md](AGENTS.md)** — how to
+> pick a workflow, the caller shape, the traps that cost real debugging time, and what to
+> check before upgrading a pin. The authoritative input contract for every workflow is
+> [`catalog.json`](catalog.json), generated from the shipped YAML and verified in CI.
+>
 > **New here? Read the [platform handbook](docs/PLATFORM.md)** — the connected guide to
 > using these workflows end-to-end: the access your repo is granted, an "I want to… → use
 > this" index, the full lifecycle (CI → deploy → promote → operate → rollback), and a
