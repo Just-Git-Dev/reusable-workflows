@@ -131,6 +131,11 @@ is updated rather than duplicated; if neither is present the badges are inserted
 after the first `# ` heading. When nothing changes, no commit is made — re-running
 is a no-op.
 
+**No badge failure can fail your run.** A rejected push, a failed rebase, a missing
+`readme_path` — all warn and exit 0. The feature is cosmetic and on by default, so it
+runs for callers that never asked for it and must never gate their build. Set
+`update_badges: false` to turn it off entirely.
+
 The coverage colour ramp is ≥90 `brightgreen`, ≥80 `green`, ≥70 `yellowgreen`,
 ≥60 `yellow`, ≥50 `orange`, else `red`. The suppression badge is `brightgreen` at
 zero and `orange` otherwise.

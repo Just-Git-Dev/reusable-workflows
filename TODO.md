@@ -192,13 +192,18 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   path into a default one.** Both surviving `::error::` exits in that job needed re-triaging
   against "is this fair to a caller who never asked for the feature?" — the missing-README one
   was caught during design, the missing-coverage one only by running it against a real repo.
-  Worth a sweep of the other reusables' hard failures before any future default flip. — opt-out rather than
-  opt-in. Blocked on the permission fix above, and needs two behaviour changes first, because
-  default-on means it runs against repos that never asked for it: a missing `readme_path` is
-  currently a **hard error** (`::error::` + exit 1) and must become a warning-and-skip; and the
-  job *inserts* badges after the first `# ` heading when none exist, so every caller's README
-  gets an unsolicited commit on first upgrade. Decide whether default-on should insert or only
-  update badges that already exist.
+  ✅ **Sweep DONE 2026-08-11** — all 133 `::error::` emissions across the 21 reusables
+  classified by guard chain. One real finding, now fixed: the badge job's push failure path
+  could fail a caller's CI (see DECISIONS.md). No other fatal path is reachable without opting
+  in. The `readme_path` hard error described here was **already** warning-and-skip — that half
+  of this entry was stale.
+  ☐ **Still open, needs your decision (live behaviour, not a bug):** the badge job *inserts*
+  badges after the first `# ` heading when none exist, so the first default-branch build after
+  upgrading commits `chore(ci): update README badges` into a repo that never asked for badges.
+  That is happening today for every caller with `contents: write`. Options: (a) leave it —
+  discoverability is the point of default-on; (b) update-only, never insert — no caller ever
+  gets badges without seeding one by hand; (c) a `badge_insert` input, default `true`, so the
+  behaviour is at least nameable. Changing it is a behaviour change for existing callers.
 - [ ] **Tell callers, in their own run, when they are on an old version.** *Unblocked
   2026-08-11* — `WORKFLOW_VERSION` now ships in every reusable's `env:` (see the sweep entry
   below), which was the missing half: a called workflow cannot discover its own ref at runtime
