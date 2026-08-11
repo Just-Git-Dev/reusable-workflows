@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [`badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice](#2026-08-11--badge_insert-default-on-badges-may-still-be-given-to-a-repo-but-it-is-now-a-nameable-choice)
 - `2026-08-11` — [Hard-error audit: a badge push failure could fail a caller's CI (bug fix)](#2026-08-11--hard-error-audit-a-badge-push-failure-could-fail-a-callers-ci-bug-fix)
 - `2026-08-11` — [The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)](#2026-08-11--the-gar-105-vs-103-delta-is-a-wall-clock-boundary-crossing-not-a-logic-change-root-cause-corrects-the-earlier-correction)
 - `2026-08-11` — [Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`](#2026-08-11--opt-in-node_modules-caching-on-ci-node-and-deploy-cloudflare-pages-pages-gains-a-separate-install_command)
@@ -57,6 +58,32 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — `badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice
+
+**The open question from the hard-error audit, now decided.** The badge job *inserts* badges
+after the first `# ` heading when a README has none, so the first default-branch build after
+upgrading commits `chore(ci): update README badges` into a repo that never asked for badges.
+Live since `v1.21.0` for every caller with `contents: write`.
+
+**Decision: add `badge_insert`, default `true`.** Behaviour is unchanged for everyone —
+nothing about existing callers moves — but the insertion stops being an unnamed side effect of
+a different input. A caller who does not want to be given badges sets one boolean instead of
+turning the whole feature off.
+
+**Why not update-only-by-default.** That was the tempting option: no repo is ever committed to
+unasked. But refresh-only makes default-on inert — no repo ever *gains* badges without someone
+hand-seeding a badge line, which is the discoverability the default flip existed to buy. The
+cost being avoided is one commit, once, in a repo whose owner granted `contents: write`.
+
+**Why not leave it unnamed.** Because "the tool did something to my repo that no input
+described" is the complaint, and `update_badges: false` answers it only by removing the
+feature. A named opt-out is the smallest thing that makes the behaviour legible.
+
+Docs for both workflows describe it; `catalog.json` regenerated so the contract is machine-
+readable. A stale claim in `docs/ci-node.md` — that a missing coverage report fails the job
+whenever badges are on — was corrected in the same pass: since `v1.21.1` that is an error only
+when `coverage_threshold` is non-zero, and a warning otherwise.
 
 ## 2026-08-11 — Hard-error audit: a badge push failure could fail a caller's CI (bug fix)
 

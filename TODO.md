@@ -197,13 +197,11 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   could fail a caller's CI (see DECISIONS.md). No other fatal path is reachable without opting
   in. The `readme_path` hard error described here was **already** warning-and-skip — that half
   of this entry was stale.
-  ☐ **Still open, needs your decision (live behaviour, not a bug):** the badge job *inserts*
-  badges after the first `# ` heading when none exist, so the first default-branch build after
-  upgrading commits `chore(ci): update README badges` into a repo that never asked for badges.
-  That is happening today for every caller with `contents: write`. Options: (a) leave it —
-  discoverability is the point of default-on; (b) update-only, never insert — no caller ever
-  gets badges without seeding one by hand; (c) a `badge_insert` input, default `true`, so the
-  behaviour is at least nameable. Changing it is a behaviour change for existing callers.
+  ✅ **Badge insertion DECIDED 2026-08-11** — option (c): `badge_insert`, default `true`.
+  Behaviour unchanged for every existing caller; the insertion is now a named boolean a caller
+  can decline instead of turning the whole feature off. Update-only-by-default was rejected: it
+  makes default-on inert, since no repo would ever gain badges without hand-seeding a badge
+  line. See DECISIONS.md.
 - [ ] **Tell callers, in their own run, when they are on an old version.** *Unblocked
   2026-08-11* — `WORKFLOW_VERSION` now ships in every reusable's `env:` (see the sweep entry
   below), which was the missing half: a called workflow cannot discover its own ref at runtime

@@ -33,6 +33,7 @@ only the universal core so it stays adoptable everywhere.
 | `lint_blocking` | `true` | `false` = report lint failures without failing the job (paydown mode) |
 | `go_private` | `''` | GOPRIVATE glob (e.g. `github.com/zopsmart/*`); when set, git fetches private modules over HTTPS using the `go_private_token` **secret** (required then) |
 | `update_badges` | **`true`** | commit Coverage + nolint-count badges into the README on default-branch pushes — see [README badges](#readme-badges). **On by default**; set `false` to opt out. Needs `permissions: contents: write` **in the caller** to push — without it the push warns instead of failing |
+| `badge_insert` | `true` | when a README has **no** badges yet, insert them after the first `# ` heading. `false` = only ever refresh badges that already exist, so no repo is committed to unasked |
 | `readme_path` | `README.md` | README the badges are written into — **repo-root relative**, *not* `working_directory` relative |
 | `badge_branch` | `''` | branch the badge commit is pushed to; empty ⇒ the repository default branch. Point it at a sandbox branch to trial the feature |
 
@@ -128,8 +129,9 @@ job that gets `contents: write`; build/test/lint stay `contents: read`.
 An existing badge is matched on its alt text (`![Coverage](…)`,
 `![nolint count](…)`) and **replaced in place**, so a legacy zopsmart badge line
 is updated rather than duplicated; if neither is present the badges are inserted
-after the first `# ` heading. When nothing changes, no commit is made — re-running
-is a no-op.
+after the first `# ` heading — set `badge_insert: false` to refresh only, never
+insert, so a repo that never asked for badges is not committed to. When nothing
+changes, no commit is made — re-running is a no-op.
 
 **No badge failure can fail your run.** A rejected push, a failed rebase, a missing
 `readme_path` — all warn and exit 0. The feature is cosmetic and on by default, so it
