@@ -123,6 +123,10 @@ change your production ops behind your back. **Never use `@main`.**
 - Semver tracks the **input contract**: a new required input, a removed input, a
   changed default, or a behaviour change on a destructive path is a major bump.
   Read the [DECISIONS.md](DECISIONS.md) entry for a release before upgrading.
+- **Let [Dependabot](AGENTS.md#then-let-dependabot-hold-it-for-you) keep the pin
+  current** — it has updated reusable-workflow refs since March 2023. This repo is
+  public and most callers are private, so nobody here can see that you are behind;
+  a weekly Dependabot PR is the only thing that reliably will.
 
 ## Conventions & security
 

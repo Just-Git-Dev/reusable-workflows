@@ -24,6 +24,28 @@ artifacts. Never `@v1`: it is a frozen legacy alias, not a moving major.
 The version is deliberately absent from `catalog.json` so the file cannot go stale between
 releases. Resolve it at read time.
 
+### Then let Dependabot hold it for you
+
+Pinning an exact tag is only half the job — the other half is not being stranded on it.
+Dependabot has updated **reusable workflow** refs since March 2023, not just actions, so six
+lines keep your pins current without anyone remembering:
+
+```yaml
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"          # finds .github/workflows/*
+    schedule:
+      interval: "weekly"
+```
+
+**Add this when you onboard.** This repository is public and most callers are private, so
+there is no mechanism by which we can notice that *you* are behind and tell you — the only
+party who can watch your pins is you. A 2026-07-27 audit of the repos we could see found 18
+of 27 caller lines six or more releases stale, every one of them a repo whose owner had not
+noticed. Dependabot turns that into a PR you can merge or ignore.
+
 ## 2. Pick the workflow
 
 | You want to… | Use |
