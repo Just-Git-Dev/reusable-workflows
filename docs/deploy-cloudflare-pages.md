@@ -126,6 +126,98 @@ jobs:
 into the build step's shell only, never `$GITHUB_ENV`, so nothing leaks to later
 steps.
 
+## Multiple environments (stage + prod)
+
+A Pages **project** has exactly two environments: **production** (its configured
+production branch) and **preview** (every other branch). This workflow passes
+`branch` straight through to `wrangler pages deploy --branch=…`, which is what
+selects between them. There are two ways to run stage and prod, and the choice is
+decided by **where your DNS lives**, not by preference.
+
+### Option A — one project per environment (works with any DNS)
+
+Two Pages projects, each deploying to its own production branch. Two caller jobs
+differing in the project and whatever selects the environment's config:
+
+```yaml
+# .github/workflows/deploy-pages-stage.yaml   → push to `development`
+jobs:
+  deploy:
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.20.0
+    with:
+      project_name: myapp-stage
+      account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      build_command: bash scripts/pages-build.sh configs/.stage.env
+      output_dir: out
+      branch: main            # production deployment OF THE STAGE PROJECT
+    secrets:
+      cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+# .github/workflows/deploy-pages-prod.yaml    → push of a `v*.*.*` tag
+      project_name: myapp-prod
+      build_command: bash scripts/pages-build.sh configs/.prod.env
+      branch: main
+```
+
+Each project gets its own custom domain, its own deployment history and rollback,
+and its own settings. A subdomain custom domain needs only a CNAME at your
+existing DNS provider — the zone does **not** have to be on Cloudflare.
+
+### Option B — one project, branch aliases (needs the zone on Cloudflare)
+
+One project; prod deploys with `branch: main` and stage with `branch: development`.
+The stage deploy becomes a **preview** deployment with a stable alias at
+`development.<project>.pages.dev` that always tracks the latest commit.
+
+```yaml
+      project_name: myapp
+      branch: ${{ github.ref_name == 'main' && 'main' || 'development' }}
+```
+
+To put a real hostname on the stage branch you add the custom domain to the
+project and then repoint its CNAME from `<project>.pages.dev` to
+`development.<project>.pages.dev`. **Cloudflare only honours this for a proxied
+Cloudflare DNS record** — with external DNS or an unproxied record the hostname
+serves production instead, silently. So Option B requires the zone to be on
+Cloudflare.
+
+Concurrency already keys on `<project_name>-<branch>`, so a stage deploy and a
+prod deploy never cancel each other under either option.
+
+### Choosing
+
+| | Option A (two projects) | Option B (one project) |
+|---|---|---|
+| Zone must be on Cloudflare | no | **yes**, for a stage hostname |
+| Per-PR preview deploys | no | yes, free |
+| Isolation of prod settings/history | full | shared project |
+| Custom domain per environment | independent | via branch alias |
+
+Pick A unless the zone is already on Cloudflare; consolidating to B later costs
+one DNS change and one input.
+
+### Per-environment configuration
+
+Cloudflare's dashboard variables are **not** an option for a static bundle: build
+variables only apply when Cloudflare runs the build (Git integration), and runtime
+variables/bindings are readable only by Pages Functions via `context.env`, never by
+a browser bundle. When this workflow builds in Actions and uploads the result,
+neither reaches your JavaScript.
+
+So per-environment config is a **build-time** concern. Either pass it with
+`build_env`, or — if the values are committed per environment — source the right
+file inside `build_command`:
+
+```yaml
+      build_command: >-
+        set -a && . ./configs/.prod.env && set +a && npm ci && npm run build
+```
+
+Note you **cannot** put `environment: prod` on a job that calls a reusable
+workflow (GitHub allows only `name`, `uses`, `with`, `secrets`, `needs`, `if`,
+`permissions`), so GitHub environment-scoped variables cannot feed this workflow
+directly — they would need a marshalling job that outputs them.
+
 ## Concurrency
 
 Keyed on `<project_name>-<branch>` with `cancel-in-progress: true` — a newer
