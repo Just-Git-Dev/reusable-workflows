@@ -29,6 +29,59 @@ jobs:
         with:
           fail-on-error: true
 
+  catalog:
+    name: catalog.json is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # catalog.json is what a consuming repo's agent reads instead of parsing
+      # ~7,500 lines of workflow YAML. It is generated, so the only way it stays
+      # true is failing here when someone changes a contract without regenerating.
+      - run: pip install --quiet pyyaml
+      - run: python3 scripts/gen_catalog.py --check
+
+  doc-examples:
+    name: doc examples are valid workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Every ```yaml block in docs/ that looks like a complete workflow is
+      # extracted and linted. v1.20.0 shipped a copy-paste example that failed at
+      # startup for anyone who used it; nothing caught it because the example was
+      # prose, not code. Now it is code.
+      - name: Extract complete workflow examples
+        run: |
+          mkdir -p /tmp/examples/.github/workflows
+          python3 - <<'PY'
+          import re, pathlib
+          out = pathlib.Path("/tmp/examples/.github/workflows")
+          n = 0
+          for md in sorted(pathlib.Path("docs").glob("*.md")) + [pathlib.Path("README.md")]:
+              for i, block in enumerate(re.findall(r"```yaml\n(.*?)```", md.read_text(), re.S)):
+                  # A complete workflow has jobs and a trigger; fragments ("with:" only) do not.
+                  if re.search(r"^jobs:", block, re.M) and re.search(r"^on:", block, re.M):
+                      (out / f"{md.stem}-{i}.yml").write_text(block)
+                      n += 1
+          print(f"extracted {n} complete example workflow(s)")
+          if n == 0:
+              raise SystemExit("::error::no complete examples found — the extractor is broken")
+          PY
+
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          files: /tmp/examples/.github/workflows/*.yml
+          fail-on-error: true
+
   plan-fixtures:
     name: cleanup-gar-images delete-plan fixtures
     runs-on: ubuntu-latest

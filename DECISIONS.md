@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest](#2026-08-11--onboarding-retrospective-a-generated-contract-file-an-agent-guide-and-ci-that-keeps-both-honest)
 - `2026-08-11` — [The `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
 - `2026-08-11` — [Default-on badges must not fail CI for callers without a coverage report (bug fix)](#2026-08-11--default-on-badges-must-not-fail-ci-for-callers-without-a-coverage-report-bug-fix)
 - `2026-08-11` — [README badges on by default; the badge job stops dictating caller permissions](#2026-08-11--readme-badges-on-by-default-the-badge-job-stops-dictating-caller-permissions)
@@ -50,6 +51,59 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest
+
+**Context.** Migrating one app (`eazyupdates-ui`) and repinning four caller repos in a day
+produced five failures worth generalising. None were caused by a workflow being wrong; all
+were caused by **what a consumer could not discover**:
+
+1. **A shipped example that could not work.** The `v1.20.0` copy-paste example granted
+   `contents: read` and called `ci-node`, whose badge job declared `contents: write`. GitHub
+   aborts such a run at startup with no logs. `actionlint` cannot see cross-workflow
+   permission caps, and the example was prose, so nothing checked it.
+2. **A default flip that broke the first real caller.** `update_badges: true` switched
+   coverage measurement on everywhere, and a missing report was a hard error (`v1.21.1`).
+3. **A documented invariant that was never measured.** "keep-only, so it can only ever
+   delete less" was false; a dry-run diff showed 103 → 105 candidates.
+4. **Pin drift as the normal state.** 39 example pins across twelve tags, oldest six
+   releases behind; `Traide-Co/webapp` frozen at `v1.15.0` by trap 1.
+5. **An EOL default.** `node_version: '20'`, three months past end-of-life, reached every
+   caller that omitted the input.
+
+**Decision.** Three artifacts, chosen because each attacks a *class* of these rather than an
+instance.
+
+**`catalog.json` — generated, CI-verified.** Every workflow's inputs, types, defaults,
+required flags, secrets, outputs and per-job declared permissions, derived from the shipped
+YAML by `scripts/gen_catalog.py`. A consuming agent reads one JSON file instead of ~7,500
+lines of YAML, and the file cannot drift: CI fails when a contract changes without
+regeneration. It deliberately **omits the version to pin** — embedding it would recreate the
+staleness problem between releases, so `AGENTS.md` tells the reader to resolve the latest
+release at read time.
+
+**`AGENTS.md` — the judgement layer.** What `catalog.json` cannot express: which workflow
+fits which task, the one-file-per-repo caller shape, and a §4 of traps that each cost real
+debugging time (permission caps failing silently, `environment:` being illegal on a caller
+job, tokens belonging in `secrets:` not `with:`, static hosts having no runtime config). §5
+requires a contract diff before any repin and a **dry-run plan diff** before repinning a
+destructive workflow — the direct lesson of failure 3.
+
+**CI that keeps both honest.** Two new jobs: `catalog.json is current`, and
+`doc examples are valid workflows`, which extracts every fenced YAML block in `docs/` that
+has both `on:` and `jobs:` — 25 of them today — and runs `actionlint` over each. That turns
+examples from prose into code. It would not have caught failure 1 (a permission cap is
+invisible to a linter), which is exactly why that trap is written out longhand in §4
+instead.
+
+**What was rejected.** A `~/.claude/skills/` skill: it would help one operator on one
+machine, while the people onboarding are in other repos and other orgs. `AGENTS.md` in the
+public repo reaches every consumer's agent and every human, and sits next to the thing it
+describes.
+
+**Known gap.** Nothing here detects a *caller* falling behind — the drift report in
+`TODO.md` remains the missing piece, and today's work is more evidence it should be built:
+every problem above was found by a human noticing, not by a system.
 
 ## 2026-08-11 — the `cleanup-gar-images` "keep-only" invariant is not true (correction)
 
