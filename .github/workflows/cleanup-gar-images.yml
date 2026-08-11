@@ -91,6 +91,16 @@ on:
         type: string
         required: false
         default: '1'
+      relock_immutable_tags:
+        description: >-
+          Re-enable immutable tags after the sweep. DEFAULT TRUE — leave it alone
+          unless you deliberately want the repository left unlocked (a maintenance
+          window, or debugging a failed sweep). Setting it false removes the
+          protection that stops a tag being moved to a different digest, and the
+          run will say so loudly.
+        type: boolean
+        required: false
+        default: true
       dry_run:
         description: 'true = print the plan only, delete nothing.'
         type: boolean
@@ -137,6 +147,7 @@ jobs:
       SHA_TAG_PATTERN:        ${{ inputs.sha_tag_pattern }}
       SHA_RETENTION_RELEASES: ${{ inputs.sha_retention_releases }}
       DRY_RUN:               ${{ inputs.dry_run }}
+      RELOCK:                ${{ inputs.relock_immutable_tags }}
     outputs:
       candidates: ${{ steps.plan.outputs.candidates }}
       deleted: ${{ steps.exec.outputs.deleted }}
@@ -437,6 +448,57 @@ jobs:
             jq -r '.to_delete[] | "- `\(.image)` (\(.reason), age \(.age_days)d, tags: \(.tags | join(",") // "none"))"' /tmp/delete-plan.json
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Immutable tags block deletion outright: per `gcloud artifacts repositories
+      # update --help`, "Tags cannot be deleted or moved to a different image digest,
+      # and tagged images cannot be deleted." Untagged versions are still deletable,
+      # so without this the sweep would half-succeed — untagged gone, every aged-out
+      # tagged image failing — which is the worst outcome for a destructive job.
+      - name: Check tag immutability
+        id: immutable
+        run: |
+          state=$(gcloud artifacts repositories describe "$GAR_REPO" \
+                    --location="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format="value(dockerConfig.immutableTags)" 2>/dev/null || echo "")
+          case "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" in
+            true) on=true ;;
+            *)    on=false ;;
+          esac
+          echo "immutable=$on" >> "$GITHUB_OUTPUT"
+          if [ "$on" = "true" ]; then
+            echo "::notice::repository has immutable tags enabled"
+          fi
+
+      # Pre-flight BEFORE anything is deleted. Discovering the permission is missing
+      # halfway through leaves the repo unlocked and the sweep half-done.
+      # `gcloud artifacts repositories` has no test-iam-permissions subcommand, so
+      # this goes through the REST endpoint.
+      - name: Verify permission to toggle immutability
+        if: steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false
+        run: |
+          res=$(curl -sS -X POST \
+            -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+            -H "Content-Type: application/json" \
+            -d '{"permissions":["artifactregistry.repositories.update"]}' \
+            "https://artifactregistry.googleapis.com/v1/projects/${GCP_PROJECT}/locations/${GCP_REGION}/repositories/${GAR_REPO}:testIamPermissions")
+          if ! printf '%s' "$res" | grep -q 'artifactregistry.repositories.update'; then
+            {
+              echo "::error::${SERVICE_ACCOUNT:-the deploy service account} cannot toggle immutable tags on"
+              echo "::error::${GCP_PROJECT}/${GAR_REPO}, but the repository has them enabled and this sweep"
+              echo "::error::would need to unlock it to delete tagged images. Nothing has been deleted."
+              echo "::error::Grant artifactregistry.repositories.update (roles/artifactregistry.admin),"
+              echo "::error::or run with dry_run: true to see the plan without deleting."
+            } >&2
+            exit 1
+          fi
+          echo "::notice::permission to toggle immutable tags confirmed"
+
+      - name: Unlock immutable tags
+        if: steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false
+        run: |
+          gcloud artifacts repositories update "$GAR_REPO" \
+            --location="$GCP_REGION" --project="$GCP_PROJECT" --no-immutable-tags
+          echo "::warning::immutable tags are OFF for ${GCP_PROJECT}/${GAR_REPO} while this sweep runs"
+
       - name: Execute deletions
         id: exec
         if: inputs.dry_run == false
@@ -493,3 +555,36 @@ jobs:
             grep '^FAIL ' /tmp/exec.log || true
             exit 1
           fi
+
+      # ALWAYS. The deletion step above exits 1 on any unexpected failure, and a repo
+      # left unlocked because a sweep failed is a silent loss of the protection the
+      # setting exists to provide. Runs even if the job is cancelled mid-sweep.
+      - name: Relock immutable tags
+        if: always() && steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false
+        run: |
+          if [ "${RELOCK}" != "true" ]; then
+            echo "::warning::relock_immutable_tags is false — ${GCP_PROJECT}/${GAR_REPO} is being LEFT UNLOCKED."
+            echo "::warning::Tags can now be moved to a different digest. Re-enable with:"
+            echo "::warning::  gcloud artifacts repositories update ${GAR_REPO} --location=${GCP_REGION} --project=${GCP_PROJECT} --immutable-tags"
+            exit 0
+          fi
+
+          gcloud artifacts repositories update "$GAR_REPO" \
+            --location="$GCP_REGION" --project="$GCP_PROJECT" --immutable-tags || true
+
+          # Trust the readback, not the exit code: the whole point is that the
+          # repository ends this run as protected as it started.
+          state=$(gcloud artifacts repositories describe "$GAR_REPO" \
+                    --location="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format="value(dockerConfig.immutableTags)" 2>/dev/null || echo "")
+          if [ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+            echo "::notice::immutable tags re-enabled on ${GCP_PROJECT}/${GAR_REPO}"
+            exit 0
+          fi
+
+          {
+            echo "::error::FAILED TO RE-LOCK ${GCP_PROJECT}/${GAR_REPO}. The repository is UNLOCKED:"
+            echo "::error::tags can be moved to a different digest until this is fixed. Run:"
+            echo "::error::  gcloud artifacts repositories update ${GAR_REPO} --location=${GCP_REGION} --project=${GCP_PROJECT} --immutable-tags"
+          } >&2
+          exit 1
