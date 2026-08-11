@@ -79,17 +79,24 @@ one that was already known — into a warning, and stopped there. Every other fa
 that step kept the semantics it was written with when badges were opt-in, where failing loudly
 was the right call because the caller had explicitly asked for the feature.
 
-**Why it wasn't caught.** The badge job's failure paths need a real push to a real branch to
-exercise; nothing in CI does that, and `run_step_tests.py` stubs commands rather than a remote.
-It is also invisible in review: each branch reads as reasonable on its own, and the
-default-on-ness is a property of an input default declared 400 lines away.
+**Why it wasn't caught — and this is the interesting part.** It *was* covered.
+`run_step_tests.py` executes this exact step body against a stubbed git remote, and carried an
+assertion named **`genuine failure still exits 1`**. The behaviour was not an oversight; it was
+pinned by a passing test. The test was written when badges were opt-in, where failing loudly
+was correct, and the `v1.21.0` default flip never revisited it — so the suite went on
+certifying opt-in semantics for a default-on feature, and its green tick actively discouraged
+looking. Changing the code without changing that assertion is what surfaced it.
 
 **Fix.** No badge failure fails the run. The rebase is guarded, and the terminal branch warns,
 prints the underlying error on stderr, and exits 0. The information is preserved; it just
 stops gating the build. Docs for both workflows now state this as a property, not a footnote.
 
 **Prevention.** The generalisable rule, now stated in both docs: **a cosmetic, default-on
-feature may never fail a caller's build.** The wider audit found no other fatal path reachable
+feature may never fail a caller's build.** And the sharper one, from how this hid: **flipping a
+default invalidates the tests written for the opt-in era.** A test asserting `exit 1` encodes
+"the caller asked for this"; when the caller no longer has to ask, that assertion has to be
+re-derived, not inherited. The suite is now updated to assert the new contract, including that
+the error is still surfaced. The wider audit found no other fatal path reachable
 without opting in — the 22 always-reachable fatal steps are all core-purpose (resolve an image
 ref, validate inputs, apply the alerts you asked to apply), and the remaining fatal paths are
 gated by a caller's own configuration (`dry_run`, `deploy_target`, `deploy_method`,
