@@ -9,16 +9,19 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
 - [x] **GAR retention is release-relative.** `cleanup-gar-images` no longer age-deletes the
       `:<sha>` promotion source: per package it keeps sha images newer than the
       `sha_retention_releases`-th most recent release (ordered by time, not semver).
-      ⚠️ **The "keep-only, so it can only ever delete less" claim is FALSE — measured
-      2026-08-11.** A dry-run comparison on `Realm-ID/project`'s `backend` repo (310 images,
-      2 live) put `v1.15.0` at 103 delete candidates and `v1.21.1` at 105: a strict superset,
-      +2 **untagged** `api` digests, 0 newly protected. `kept` did rise 20 → 24, so the
-      keep-set genuinely grew — but the delete-set grew too, which the invariant said was
-      impossible. **Do not repin a `cleanup-gar-images` caller on the strength of that claim;
-      dry-run and diff the plans.** Root cause not yet established: the likely candidate is
-      that classifying sha-tagged images against the new window shifts which *untagged*
-      digests fall outside the protected set, but that is a hypothesis, not a finding. Latent `TypeError` on a missing `updateTime` fixed in the
-      same pass.
+      ✅ **The keep-only claim HOLDS for identical input — root cause of the 105-vs-103
+      delta established 2026-08-11** (an earlier note here declared the claim false; that note
+      was wrong and is corrected). The `v1.15.0` (103) and `v1.21.1` (105) dry-runs on
+      `Realm-ID/project` were 2m27s apart, and both extra digests are **untagged with
+      `age_days` exactly 15** against `untagged_max_age_days: 15` (`>=`) — they aged past the
+      threshold *between the runs*. The delete loop and live-digest collection are
+      byte-identical across the two tags, the keep-set can only grow, and HEAD's delete-set is
+      a strict subset of `v1.15.0`'s on all 13 fixtures. See DECISIONS.md; boundary pinned by
+      `tests/fixtures/t23-untagged-age-boundary.json`.
+      **Still dry-run and diff the plans before repinning a caller** — but read the diff
+      properly: untagged digests sitting exactly at the threshold age are wall-clock noise;
+      tagged images, live digests, or ages away from the boundary are real. Latent `TypeError`
+      on a missing `updateTime` fixed in the same pass.
 - [ ] **Pilot `Realm-ID/issuer` end-to-end** (lowest blast radius of the five). In its
       `deploy.yml`: add a `main`-triggered `deploy-cloud-run` job with `build_only: true` →
       `:<sha>`; move the migrate-smoke validation to run against that pushed image; rewrite the
@@ -39,7 +42,10 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       assume.
 - [ ] **Post-pilot proof, on the real repos:** run `cleanup-gar-images` with `dry_run: true`
       against each of the 5 GAR repos, read the new `sha_retention` boundaries, and confirm
-      `candidates` **drops** (keep-only ⇒ it can never rise). Then assert the prod digest equals
+      `candidates` **drops** (keep-only ⇒ it can never rise *for the same input* — untagged
+      digests sitting exactly at `untagged_max_age_days` can still appear between two runs
+      minutes apart; see the 2026-08-11 boundary-crossing entry in DECISIONS.md before reading
+      a small rise as a regression). Then assert the prod digest equals
       the `:<sha>` digest — `gcloud artifacts docker images list --include-tags` — since that
       identity is the entire point. Also exercise `promote-image`'s existing preflight on a tag
       whose commit never built, to see it fail loudly.
