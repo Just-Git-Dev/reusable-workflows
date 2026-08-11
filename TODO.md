@@ -135,7 +135,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   the suite, `nolint_count` reads **57** (down from the frozen 78 — the narrower grep,
   measured against the real tree), **and a second push produces no new commit.** Only
   then tag `v1.16.0` and flip #2045's pin to the tag.
-- [ ] **caller pin-drift is invisible — build a drift report.** The 2026-07-27 repin sweep
+- [x] **caller pin-drift is invisible — build a drift report. BUILT 2026-08-11** (`scripts/fleet_drift.py` + `.github/workflows/caller-drift.yml`, weekly + dispatch, org list in `fleet.json`). First real run: **24 of 32 caller pins need attention**, incl. nine in `AutoMahn/project` nobody had looked at. Needs `FLEET_READ_TOKEN` (cross-org read) before the schedule is useful. Original entry:  The 2026-07-27 repin sweep
   (see DECISIONS.md) found 18 of the fleet's 27 caller lines stranded on `@v1.4.0`/`@v1.5.0`, six-plus
   releases behind, and only noticed because someone manually read check-run *annotations*
   across every caller. Nothing detects this. Wanted: a scheduled workflow in this repo that
