@@ -27,6 +27,42 @@ Otherwise it is deleted **only if** it also exceeds `untagged_max_age_days` /
 delete — age is still required. That asymmetry is what keeps the rule from ever
 widening the delete-set.
 
+### Age is measured from `createTime`
+
+Not `updateTime`. GAR bumps `updateTime` whenever a tag is **moved off** a digest, so
+an image reads as "days since the last tag churn" rather than its real age, and the
+effective retention is *threshold + churn interval*. A digest pushed on 2026-06-30
+still reported 28d on 2026-08-11 — under a 30d limit — because `latest` had moved off
+it two weeks after the push.
+
+How bad that is depends on the repo's release cadence, and it is worth being precise
+rather than alarming: measured across three fleet registries, switching to
+`createTime` newly deleted **one** image on `auto-mahn`, **two** on `realm-id` and
+**one** on `traide-in` — all 31–42 days old and outside the keep-set. A repo whose
+tags churn *faster* than `tagged_max_age_days` is the pathological case: there,
+nothing tagged ever reaches the threshold at all.
+
+`createTime` is used first, falling back to `uploadTime` then `updateTime` for the
+rare record that omits it.
+
+### Multi-arch indexes: children are not swept independently
+
+A `docker buildx` push is an **index**, not an image. The tag names a manifest list
+whose children — `linux/amd64`, plus the `unknown/unknown` attestation manifest —
+are untagged manifests in their own right, so they trip `untagged_max_age_days`
+while their parent is still a current release.
+
+GAR refuses to delete a child while its parent index exists (`referenced by parent
+manifests`), so those digests are **reported, not queued**: the plan lists them
+under `blocked_by_parent` with the parent that holds them. They are freed by
+deleting the parent tag, which cascades — so a child *is* queued when its own
+parent is also being deleted in the same run.
+
+This matters because the two rules interact: a repo whose tagged images never age
+out (see above) has every untagged child permanently pinned, and the sweep deletes
+nothing at all while reporting success. If a run plans deletions and removes none,
+it now emits a workflow warning rather than passing quietly.
+
 ## Inputs
 
 | Input | Required | Default | Notes |
