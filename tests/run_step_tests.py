@@ -324,9 +324,16 @@ def main():
     check("race with a concurrent push rebases once", r["pulls"] == 1, r["pulls"])
     check("race retry succeeds", r["rc"] == 0, r["out"])
 
+    # Contract changed 2026-08-11 (hard-error audit): this used to assert exit 1 on a
+    # push failure that is not a permission problem. That was opt-in-era semantics left
+    # in place when badges went default-on in v1.21.0 — it fails the CI of a caller who
+    # never asked for badges, over a cosmetic README commit. The error must still be
+    # SURFACED; it must not gate the build.
     r = run_badge_push_step(node_body, push_mode="hard")
-    check("genuine failure still exits 1", r["rc"] == 1, r["out"])
+    check("genuine failure exits 0 (cosmetic feature, default-on)", r["rc"] == 0, r["out"])
     check("genuine failure surfaces the error", "hung up unexpectedly" in r["out"], r["out"])
+    check("genuine failure warns", "::warning::" in r["out"], r["out"])
+    check("genuine failure offers the opt-out", "update_badges" in r["out"], r["out"])
 
     r = run_badge_push_step(node_body, push_mode="ok", has_changes=False)
     check("no README change pushes nothing", r["pushes"] == 0, r["pushes"])
