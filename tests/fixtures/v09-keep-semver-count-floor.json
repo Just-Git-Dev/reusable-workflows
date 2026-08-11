@@ -1,0 +1,18 @@
+{
+  "name": "V9 \u2014 keep_semver_count below 2 is rejected",
+  "why": "Two releases is the floor the policy is built on: the boundary IS the 2nd-most-recent release, so keeping fewer than 2 cannot be expressed.",
+  "env": {
+    "KEEP_SEMVER_COUNT": "1"
+  },
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 10
+    }
+  ],
+  "expect_exit": 1
+}

@@ -1,0 +1,29 @@
+{
+  "name": "V1 \u2014 no release-tagged images: NOTHING is deleted, at any age (ports t03)",
+  "why": "The core guarantee: a repo with no releases has no retention boundary, so the sweep must be inert. v1 only spared 40-hex sha tags \u2014 an untagged digest or a build-42 tag was still age-deleted. v2 spares every non-release artifact.",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:sha-recent",
+      "tags": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "days_ago": 5
+    },
+    {
+      "package": "api",
+      "version": "sha256:untagged-ancient",
+      "tags": [],
+      "days_ago": 400
+    },
+    {
+      "package": "api",
+      "version": "sha256:oddly-tagged",
+      "tags": [
+        "build-42"
+      ],
+      "days_ago": 100
+    }
+  ],
+  "expect_delete": []
+}

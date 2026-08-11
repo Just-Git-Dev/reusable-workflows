@@ -1,0 +1,54 @@
+{
+  "name": "V6 \u2014 untagged children of a KEPT release are kept, not queued (supersedes t25)",
+  "why": "A buildx push is an index whose children are untagged manifests. GAR refuses to delete a child while its parent lives, so queueing them is guaranteed waste. v2 keeps them outright: to_delete AND blocked_by_parent are both empty.",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel2-amd64",
+      "tags": [],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel2-attest",
+      "tags": [],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 40
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1-amd64",
+      "tags": [],
+      "days_ago": 40
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1-attest",
+      "tags": [],
+      "days_ago": 40
+    }
+  ],
+  "child_map": {
+    "sha256:rel2-amd64": "sha256:rel2",
+    "sha256:rel2-attest": "sha256:rel2",
+    "sha256:rel1-amd64": "sha256:rel1",
+    "sha256:rel1-attest": "sha256:rel1"
+  },
+  "expect_delete": [],
+  "expect_blocked": []
+}

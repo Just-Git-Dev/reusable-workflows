@@ -1,0 +1,35 @@
+{
+  "name": "V5 \u2014 grace_period is measured back from the OLDEST RETAINED image, not from now",
+  "why": "Same shape as V4 (v1 is 10 days older than the oldest retained image). With grace 15 the cutoff moves back past it and it survives; the plan therefore does not depend on the wall clock, so two sweeps minutes apart agree.",
+  "env": {
+    "KEEP_SEMVER_COUNT": "2",
+    "GRACE_PERIOD_DAYS": "15"
+  },
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel3",
+      "tags": [
+        "v3.0.0"
+      ],
+      "days_ago": 5
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 20
+    }
+  ],
+  "expect_delete": []
+}

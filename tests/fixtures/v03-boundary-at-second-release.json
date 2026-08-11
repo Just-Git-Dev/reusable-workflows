@@ -1,0 +1,49 @@
+{
+  "name": "V3 \u2014 builds older than the 2nd-most-recent release are deleted (ports t01)",
+  "why": "The central rule. Builds newer than the boundary release are the rollback window; older ones are the sweep's actual work.",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 40
+    },
+    {
+      "package": "api",
+      "version": "sha256:build-new",
+      "tags": [
+        "cccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "days_ago": 5
+    },
+    {
+      "package": "api",
+      "version": "sha256:build-mid",
+      "tags": [
+        "dddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "days_ago": 20
+    },
+    {
+      "package": "api",
+      "version": "sha256:build-old",
+      "tags": [
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "days_ago": 60
+    }
+  ],
+  "expect_delete": [
+    "api@sha256:build-old"
+  ]
+}

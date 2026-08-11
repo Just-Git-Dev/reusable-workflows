@@ -1,0 +1,42 @@
+{
+  "name": "V12 \u2014 a live digest is kept, but does not drag the grace cutoff backwards",
+  "why": "The cutoff is anchored to the RELEASE-POLICY retained set. If a long-running service pinned to an ancient digest moved the cutoff, one stale deployment would silently disable the sweep for the whole repo.",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 40
+    },
+    {
+      "package": "api",
+      "version": "sha256:live-ancient",
+      "tags": [],
+      "days_ago": 200
+    },
+    {
+      "package": "api",
+      "version": "sha256:build-old",
+      "tags": [
+        "ffffffffffffffffffffffffffffffffffffffff"
+      ],
+      "days_ago": 60
+    }
+  ],
+  "live_digests": [
+    "sha256:live-ancient"
+  ],
+  "expect_delete": [
+    "api@sha256:build-old"
+  ]
+}

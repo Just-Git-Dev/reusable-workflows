@@ -1,0 +1,41 @@
+{
+  "name": "V13 \u2014 keep_tags protects its digest without moving the cutoff",
+  "why": "Same reasoning as V12 for `latest`/`buildcache`/`hotfix-`.",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 40
+    },
+    {
+      "package": "api",
+      "version": "sha256:cache-ancient",
+      "tags": [
+        "buildcache"
+      ],
+      "days_ago": 300
+    },
+    {
+      "package": "api",
+      "version": "sha256:build-old",
+      "tags": [
+        "0000000000000000000000000000000000000000"
+      ],
+      "days_ago": 60
+    }
+  ],
+  "expect_delete": [
+    "api@sha256:build-old"
+  ]
+}

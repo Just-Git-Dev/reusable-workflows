@@ -1,24 +1,35 @@
 name: Cleanup GAR images (reusable)
 
-# Age-sweeps every image in a Google Artifact Registry Docker repo.
+# Sweeps a Google Artifact Registry Docker repo on a RELEASE-RELATIVE policy.
+# Retention is defined by your release history, not by the calendar (v2.0.0 —
+# see DECISIONS.md for why the age-threshold model was retired).
 #
-# The keep-set is built from:
+# Every artifact is one of two things, per image name:
+#   RELEASE — carries a tag matching release_tag_pattern (default vX.Y.Z)
+#   BUILD   — everything else: commit-sha tags, :latest-only images, other tag
+#             schemes, and untagged manifests (including buildx index children)
+#
+# The keep-set is:
+#   - the most-recent `keep_semver_count` RELEASES (ordered by createTime)
+#   - every BUILD newer than the boundary release, where the boundary is the
+#     `build_retention_releases`-th most recent release. That is the pending
+#     builds plus a rollback window, and it is what protects the :<sha>
+#     promotion source under build-once/promote-to-prod
+#   - every untagged manifest that a KEPT release references as a child: GAR
+#     refuses to delete a child while its parent lives, so queueing one is
+#     guaranteed waste
+#   - any tag in keep_tags, or matching a prefix in keep_tag_prefixes
 #   - live digests referenced by ALL Cloud Run Services AND Jobs in-region
 #     (cron/migration containers commonly live on Jobs, not Services)
-#   - the most-recent N semver (vX.Y.Z) tags per image
-#   - any tag in keep_tags, or matching a prefix in keep_tag_prefixes
-#   - commit-sha-tagged images inside the release-relative retention window
-#     (see "sha retention" below) — the build-once/promote-to-prod source
-# Everything else is deleted once older than the untagged/tagged age limits.
 #
-# sha retention (build-once, promote-to-prod):
-#   Under build-once, `main` publishes image:<commit-sha> and a release only
-#   RETAGS that digest — so an age sweep that deletes :<sha> destroys the
-#   promotion source. Per package this workflow keeps every sha-tagged image
-#   newer than the (sha_retention_releases)-th most recent release, i.e. the
-#   unreleased-but-pending builds plus one release worth of rollback window.
-#   The pass is keep-ONLY: it can never select anything extra for deletion, so
-#   enabling it can only ever delete less than before.
+# Everything else is deleted once it is more than `grace_period_days` OLDER
+# than the oldest release-policy-retained image. The cutoff is anchored to your
+# artifacts, not to `now`, so two sweeps minutes apart produce the same plan.
+#
+# THE FAIL-SAFE, and it is the point: fewer than `build_retention_releases`
+# releases for an image means there is no boundary, so NOTHING is deleted for
+# it. A repo that has never released, or whose release_tag_pattern is wrong, is
+# left completely alone — and says so, rather than going quietly idle.
 #
 # The caller owns the schedule and the dry_run decision. This workflow performs
 # exactly what dry_run says. Run with dry_run: true first and read the plan.
@@ -52,20 +63,41 @@ on:
         type: string
         required: true
       keep_semver_count:
-        description: 'Per image, keep this many of the most recent vX.Y.Z-tagged digests.'
+        description: >-
+          Per image, keep this many of the most recent RELEASES. Minimum 2 — the
+          boundary that protects your builds is itself a release, so a policy that
+          keeps fewer than two cannot express one.
         type: string
         required: false
         default: '5'
-      untagged_max_age_days:
-        description: 'Delete untagged manifests at least this many days old.'
+      release_tag_pattern:
+        description: >-
+          Regex (Python re.match) identifying a production release tag. An artifact
+          carrying one is a RELEASE; everything else is a BUILD. Getting this wrong
+          is safe: no matches means no boundary, so nothing is ever deleted and the
+          run warns that retention is inert.
         type: string
         required: false
-        default: '15'
-      tagged_max_age_days:
-        description: 'Delete tagged images at least this many days old, unless in the keep-set.'
+        default: '^v\d+\.\d+\.\d+$'
+      build_retention_releases:
+        description: >-
+          Keep BUILDS newer than the Nth-most-recent release, ordered by time rather
+          than semver precedence (a backport released today must not move the
+          boundary back to its version's position). 2 = pending builds plus one
+          release of rollback window. Cannot exceed keep_semver_count, and with
+          fewer than N releases there is no boundary and nothing is deleted.
         type: string
         required: false
-        default: '30'
+        default: '2'
+      grace_period_days:
+        description: >-
+          Reprieve for artifacts outside the keep-set: one is deleted only once it is
+          more than this many days OLDER than the oldest release-policy-retained
+          image. 0 deletes them on the next sweep. Measured against your artifacts,
+          not the wall clock, so the plan does not drift between runs.
+        type: string
+        required: false
+        default: '0'
       keep_tags:
         description: 'Comma-separated exact tags that are never deleted.'
         type: string
@@ -76,21 +108,6 @@ on:
         type: string
         required: false
         default: 'hotfix-,rc-,debug-'
-      sha_tag_pattern:
-        description: >-
-          Regex (Python re.search) identifying commit-sha tags published by a
-          build-once `main` pipeline. Empty ⇒ sha retention off entirely.
-        type: string
-        required: false
-        default: '^[0-9a-f]{40}$'
-      sha_retention_releases:
-        description: >-
-          Keep sha-tagged images newer than the Nth-most-recent release of that
-          package (releases ordered by TIME, not semver precedence). 1 = keep
-          unreleased builds plus one release of rollback window. 0 ⇒ off.
-        type: string
-        required: false
-        default: '1'
       relock_immutable_tags:
         description: >-
           Re-enable immutable tags after the sweep. DEFAULT TRUE — leave it alone
@@ -130,7 +147,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v1.24.0
+  WORKFLOW_VERSION: v2.0.0
 
 jobs:
   cleanup:
@@ -145,12 +162,11 @@ jobs:
       GAR_REPO:    ${{ inputs.gar_repo }}
       REPO_PATH:   ${{ inputs.gcp_region }}-docker.pkg.dev/${{ inputs.gcp_project }}/${{ inputs.gar_repo }}
       KEEP_SEMVER_COUNT:     ${{ inputs.keep_semver_count }}
-      UNTAGGED_MAX_AGE_DAYS: ${{ inputs.untagged_max_age_days }}
-      TAGGED_MAX_AGE_DAYS:   ${{ inputs.tagged_max_age_days }}
+      RELEASE_TAG_PATTERN:   ${{ inputs.release_tag_pattern }}
+      BUILD_RETENTION_RELEASES: ${{ inputs.build_retention_releases }}
+      GRACE_PERIOD_DAYS:     ${{ inputs.grace_period_days }}
       KEEP_TAGS:             ${{ inputs.keep_tags }}
       KEEP_TAG_PREFIXES:     ${{ inputs.keep_tag_prefixes }}
-      SHA_TAG_PATTERN:        ${{ inputs.sha_tag_pattern }}
-      SHA_RETENTION_RELEASES: ${{ inputs.sha_retention_releases }}
       DRY_RUN:               ${{ inputs.dry_run }}
       RELOCK:                ${{ inputs.relock_immutable_tags }}
     outputs:
@@ -298,32 +314,46 @@ jobs:
         run: |
           python3 <<'PY' | tee /tmp/delete-plan.json
           import json, os, subprocess, re, sys
-          from datetime import datetime, timezone
+          from datetime import datetime, timedelta, timezone
 
           REPO_PATH = os.environ["REPO_PATH"]
           KEEP_SEMVER_COUNT = int(os.environ["KEEP_SEMVER_COUNT"])
-          UNTAGGED_MAX_AGE_DAYS = int(os.environ["UNTAGGED_MAX_AGE_DAYS"])
-          TAGGED_MAX_AGE_DAYS = int(os.environ["TAGGED_MAX_AGE_DAYS"])
-          SHA_TAG_PATTERN = os.environ.get("SHA_TAG_PATTERN", "").strip()
-          SHA_RETENTION_RELEASES = int(os.environ.get("SHA_RETENTION_RELEASES", "0") or 0)
+          BUILD_RETENTION_RELEASES = int(os.environ["BUILD_RETENTION_RELEASES"])
+          GRACE_PERIOD_DAYS = int(os.environ["GRACE_PERIOD_DAYS"])
+          RELEASE_TAG_PATTERN = os.environ["RELEASE_TAG_PATTERN"]
 
-          # Fail closed on a bad pattern. Silently disabling the window would let the
-          # sweep delete the promotion source — the exact failure this rule prevents.
-          # Same stance as "zero live digests ⇒ abort" in the previous step.
-          sha_re = None
-          if SHA_TAG_PATTERN:
-              try:
-                  sha_re = re.compile(SHA_TAG_PATTERN)
-              except re.error as exc:
-                  print("::error::sha_tag_pattern is not a valid regex: %s" % exc, file=sys.stderr)
-                  raise SystemExit(1)
+          # Caller configuration is validated up front and fatally: every one of these
+          # describes a policy that cannot be carried out, and running anyway would
+          # delete things under a rule nobody wrote.
+          if KEEP_SEMVER_COUNT < 2:
+              print("::error::keep_semver_count must be at least 2 — the boundary that "
+                    "protects your builds is itself a release (got %d)" % KEEP_SEMVER_COUNT,
+                    file=sys.stderr)
+              raise SystemExit(1)
+          if BUILD_RETENTION_RELEASES < 1:
+              print("::error::build_retention_releases must be at least 1 (got %d)"
+                    % BUILD_RETENTION_RELEASES, file=sys.stderr)
+              raise SystemExit(1)
+          if BUILD_RETENTION_RELEASES > KEEP_SEMVER_COUNT:
+              print("::error::build_retention_releases (%d) cannot exceed keep_semver_count "
+                    "(%d): the boundary release must itself be retained, or the run would "
+                    "delete the anchor it just used"
+                    % (BUILD_RETENTION_RELEASES, KEEP_SEMVER_COUNT), file=sys.stderr)
+              raise SystemExit(1)
+          if GRACE_PERIOD_DAYS < 0:
+              print("::error::grace_period_days cannot be negative (got %d)"
+                    % GRACE_PERIOD_DAYS, file=sys.stderr)
+              raise SystemExit(1)
 
-          window_on = sha_re is not None and SHA_RETENTION_RELEASES > 0
-          # The releases that DEFINE the window must not age out of the semver keep-set
-          # between sweeps, or the boundary would drift and take the window with it.
-          EFF_SEMVER_COUNT = (
-              max(KEEP_SEMVER_COUNT, SHA_RETENTION_RELEASES + 1) if window_on else KEEP_SEMVER_COUNT
-          )
+          # Fail closed on a bad pattern. Treating it as "no releases" would look
+          # exactly like a healthy repo that has not released yet — silent inertness
+          # is the failure mode this whole version exists to remove.
+          try:
+              release_re = re.compile(RELEASE_TAG_PATTERN)
+          except re.error as exc:
+              print("::error::release_tag_pattern is not a valid regex: %s" % exc,
+                    file=sys.stderr)
+              raise SystemExit(1)
 
           def csv(name):
               return tuple(p for p in (s.strip() for s in os.environ.get(name, "").split(",")) if p)
@@ -349,35 +379,17 @@ jobs:
               images = json.loads(raw)
 
           now = datetime.now(timezone.utc)
-          semver_re = re.compile(r"^v\d+\.\d+\.\d+$")
 
           # buildTime is deliberately excluded: reproducible builds report 1970-01-01,
           # which would pin every boundary to the epoch and disable the window.
           TIME_FIELDS = ("createTime", "uploadTime", "updateTime")
 
-          def _times(img):
-              out = []
-              for f in TIME_FIELDS:
-                  v = img.get(f)
-                  if not v:
-                      continue
-                  try:
-                      out.append(datetime.fromisoformat(str(v).replace("Z", "+00:00")))
-                  except Exception:
-                      continue
-              return out
-
-          # Asymmetric on purpose: newest() on the sha side, oldest() on the boundary
-          # release. Every timestamp ambiguity then resolves toward KEEPING the image.
-          def newest(img):
-              ts = _times(img)
-              return max(ts) if ts else None
-
-          def oldest(img):
-              ts = _times(img)
-              return min(ts) if ts else None
-
-          # The age rule asks "how long has this image existed", so it reads createTime
+          # ONE clock for the whole policy. v1 read three different notions of time in
+          # adjacent blocks — the keep-set ranked on raw updateTime, the boundary on the
+          # oldest available field, the age rule on createTime — so the keep-set and the
+          # window could disagree about which release was second-most-recent.
+          #
+          # The rule asks "how long has this image existed", so it reads createTime
           # first. `updateTime` answers a different question — GAR bumps it whenever a
           # tag is moved off a digest — so an actively-released repo re-ages its old
           # images on every push and they can outrun any fixed threshold indefinitely.
@@ -405,71 +417,97 @@ jobs:
           def protected(tag):
               return tag in keep_tags or (bool(keep_prefixes) and tag.startswith(keep_prefixes))
 
-          def is_sha_tagged(img):
-              return sha_re is not None and any(
-                  sha_re.search(t) for t in (img.get("tags", []) or [])
-              )
+          def is_release(img):
+              """An artifact is a RELEASE iff it carries a release tag. Everything else —
+              sha tags, :latest-only images, other schemes, untagged manifests — is a
+              BUILD. One classification, so there is no artifact the policy cannot see."""
+              return any(release_re.match(tag) for tag in (img.get("tags", []) or []))
 
           by_pkg = {}
           for img in images:
               by_pkg.setdefault(img.get("package"), []).append(img)
 
           keep = set(live_digests)
+          # `policy_keep` is the release-relative keep-set ALONE — releases and builds.
+          # It anchors the grace cutoff. Live digests and protected tags are added to
+          # `keep` further down but deliberately left out of this set: a service still
+          # pinned to a year-old digest, or an ancient `buildcache` tag, would otherwise
+          # drag the cutoff back with it and silently disable the sweep for the repo.
+          policy_keep = set()
+          retention = {}
           for pkg, imgs in by_pkg.items():
               for img in imgs:
-                  tags = img.get("tags", []) or []
-                  if any(protected(t) for t in tags):
+                  if any(protected(t) for t in (img.get("tags", []) or [])):
                       keep.add(img.get("version"))
-              semver_imgs = []
-              for img in imgs:
-                  for t in (img.get("tags", []) or []):
-                      if semver_re.match(t):
-                          semver_imgs.append((img.get("updateTime"), img.get("version")))
-                          break
-              # Sort on coalesced strings: a single image missing updateTime used to
-              # raise TypeError (NoneType vs str) and abort the whole sweep.
-              semver_imgs.sort(key=lambda kv: (kv[0] or "", kv[1] or ""), reverse=True)
-              for _, digest in semver_imgs[:EFF_SEMVER_COUNT]:
-                  keep.add(digest)
 
-          # ---- sha retention window (KEEP-ONLY pass; runs before the delete loop) ----
-          # Invariant: this block may only `keep.add(...)`. It never appends to
-          # to_delete and never removes from keep, so enabling it can only ever delete
-          # LESS than before — "never deletes more than today" is true by construction.
-          sha_retention = {}
-          if window_on:
-              for pkg, imgs in by_pkg.items():
-                  releases = [
-                      (oldest(img), img)
-                      for img in imgs
-                      if any(semver_re.match(t) for t in (img.get("tags", []) or []))
-                  ]
-                  # Order releases by TIME, not semver precedence: a sha image carries no
-                  # semver, so the comparison is time-based regardless, and semver order
-                  # breaks on backports (v3.0.0 released long before a fresh v2.9.0 would
-                  # put the boundary at the backport and delete genuine pending builds).
-                  ranked = sorted(
-                      (r for r in releases if r[0] is not None), key=lambda r: r[0], reverse=True
-                  )
-                  boundary = ranked[SHA_RETENTION_RELEASES] if len(ranked) > SHA_RETENTION_RELEASES else None
-                  boundary_ts = boundary[0] if boundary else None
+              # One clock for everything: createTime, falling back through uploadTime to
+              # updateTime. Ranking on updateTime would let a moved `:latest` reorder the
+              # release history, and the boundary with it.
+              releases = sorted(
+                  ((created(img), img) for img in imgs if is_release(img) and created(img)),
+                  key=lambda r: r[0], reverse=True,
+              )
+              for _, img in releases[:KEEP_SEMVER_COUNT]:
+                  policy_keep.add(img.get("version"))
 
-                  sha_imgs = [img for img in imgs if is_sha_tagged(img)]
-                  kept_here = 0
-                  for img in sha_imgs:
-                      ts = newest(img)
-                      # No boundary (too few releases) or unreadable timestamp ⇒ keep.
-                      if boundary_ts is None or ts is None or ts > boundary_ts:
-                          keep.add(img.get("version"))
-                          kept_here += 1
-                  sha_retention[pkg] = {
-                      "releases": len(ranked),
-                      "releases_undated": len(releases) - len(ranked),
-                      "boundary_time": boundary_ts.isoformat() if boundary_ts else None,
-                      "boundary_tags": (boundary[1].get("tags", []) or []) if boundary else [],
-                      "sha_images": len(sha_imgs),
-                      "sha_kept": kept_here,
-                  }
+              # Fewer releases than the window needs ⇒ no boundary ⇒ every build is kept.
+              boundary = (releases[BUILD_RETENTION_RELEASES - 1]
+                          if len(releases) >= BUILD_RETENTION_RELEASES else None)
+              boundary_ts = boundary[0] if boundary else None
+
+              builds = [img for img in imgs if not is_release(img)]
+              for img in builds:
+                  ts = created(img)
+                  # No boundary, or an unreadable timestamp ⇒ keep. Both resolve toward
+                  # keeping, which is the only safe direction on a destructive path.
+                  if boundary_ts is None or ts is None or ts > boundary_ts:
+                      policy_keep.add(img.get("version"))
+
+              if not releases:
+                  print("::warning::%s has no image tagged like a release (pattern %s) — "
+                        "retention is inert for it and nothing will ever be deleted. If it "
+                        "does publish releases, release_tag_pattern is wrong."
+                        % (pkg, RELEASE_TAG_PATTERN), file=sys.stderr)
+
+              retention[pkg] = {
+                  "releases": len(releases),
+                  "releases_kept": len(releases[:KEEP_SEMVER_COUNT]),
+                  "boundary_time": boundary_ts.isoformat() if boundary_ts else None,
+                  "boundary_tags": (boundary[1].get("tags", []) or []) if boundary else [],
+                  "builds": len(builds),
+                  # Filled in after the child pass below, which adds more builds.
+                  "builds_kept": None,
+                  "_builds": [b.get("version") for b in builds],
+              }
+
+          # An untagged child of a release we are KEEPING can never be deleted while its
+          # parent lives, so it belongs in the keep-set rather than in a plan that
+          # re-attempts it every run. Children of a DOOMED parent stay deletable: phase 1
+          # removes tagged indexes first and `--delete-tags` cascades.
+          for child, parent in child_to_parent.items():
+              if parent in policy_keep:
+                  policy_keep.add(child)
+
+          # Recomputed here, not in the loop above: the child pass adds builds to the
+          # keep-set, and a summary that under-reports what it kept is exactly the kind
+          # of misleading number this version set out to remove.
+          for pkg, info in retention.items():
+              info["builds_kept"] = sum(1 for d in info.pop("_builds") if d in policy_keep)
+
+          keep |= policy_keep
+
+          # The grace cutoff, per package: an artifact outside the keep-set is deleted
+          # only once it is more than GRACE_PERIOD_DAYS older than the OLDEST image the
+          # release policy retained. Anchoring to the artifacts rather than to `now`
+          # means the plan does not drift between two sweeps minutes apart — the whole
+          # class of "why did this run plan two more than the last one" disappears.
+          cutoff = {}
+          for pkg, imgs in by_pkg.items():
+              retained = [created(img) for img in imgs
+                          if img.get("version") in policy_keep and created(img)]
+              # Nothing retained by policy ⇒ no anchor ⇒ delete nothing for this package.
+              cutoff[pkg] = (min(retained) - timedelta(days=GRACE_PERIOD_DAYS)
+                             if retained else None)
 
           candidates = []
           per_pkg = {}
@@ -482,20 +520,17 @@ jobs:
               ts = created(img)
               if ts is None or digest in keep:
                   continue
-              age_days = (now - ts).days
-              if not tags and age_days >= UNTAGGED_MAX_AGE_DAYS:
-                  reason = f"untagged>={UNTAGGED_MAX_AGE_DAYS}d"
-              elif tags and age_days >= TAGGED_MAX_AGE_DAYS:
-                  reason = f"tagged>={TAGGED_MAX_AGE_DAYS}d"
-              else:
+              edge = cutoff.get(pkg)
+              if edge is None or ts >= edge:
                   continue
               candidates.append({
                   "image": f"{pkg}@{digest}",
                   "package": pkg,
                   "digest": digest,
                   "tags": tags,
-                  "age_days": age_days,
-                  "reason": reason,
+                  "age_days": (now - ts).days,
+                  "reason": ("outside the keep-set and older than the retention cutoff "
+                             f"{edge.date().isoformat()}"),
               })
 
           # A child manifest is deletable only once no SURVIVING parent references it.
@@ -518,8 +553,11 @@ jobs:
               "total_images": len(images),
               "live_digests": len(live_digests),
               "kept": len(keep),
-              "sha_retention_releases": SHA_RETENTION_RELEASES if window_on else 0,
-              "sha_retention": sha_retention,
+              "keep_semver_count": KEEP_SEMVER_COUNT,
+              "build_retention_releases": BUILD_RETENTION_RELEASES,
+              "grace_period_days": GRACE_PERIOD_DAYS,
+              "retention": retention,
+              "cutoff": {p: (c.isoformat() if c else None) for p, c in cutoff.items()},
               "to_delete": to_delete,
               "blocked_by_parent": blocked,
               "per_package": per_pkg,
@@ -552,11 +590,13 @@ jobs:
             echo ""
             jq -r '.per_package | to_entries[] | "- `\(.key)` — \(.value.delete)/\(.value.total) candidates"' /tmp/delete-plan.json
             echo ""
-            echo "### sha retention window (build-once promotion sources)"
+            echo "### Retention policy"
             echo ""
-            echo "- sha_retention_releases: $(jq -r '.sha_retention_releases' /tmp/delete-plan.json) (0 = off)"
+            echo "- keep_semver_count: $(jq -r '.keep_semver_count' /tmp/delete-plan.json) releases"
+            echo "- build_retention_releases: $(jq -r '.build_retention_releases' /tmp/delete-plan.json) (builds newer than the Nth-most-recent release)"
+            echo "- grace_period_days: $(jq -r '.grace_period_days' /tmp/delete-plan.json)"
             echo ""
-            jq -r '.sha_retention | to_entries[] | "- `\(.key)` — kept \(.value.sha_kept)/\(.value.sha_images) sha image(s); \(.value.releases) release(s); boundary: \(.value.boundary_time // "none (unbounded — every sha kept)") \(.value.boundary_tags | join(","))"' /tmp/delete-plan.json
+            jq -r '.retention | to_entries[] | "- `\(.key)` — \(.value.releases_kept)/\(.value.releases) release(s) kept, \(.value.builds_kept)/\(.value.builds) build(s) kept; boundary: \(.value.boundary_time // "NONE — too few releases, nothing will be deleted") \(.value.boundary_tags | join(","))"' /tmp/delete-plan.json
             echo ""
             echo "### Candidates"
             echo ""

@@ -1,0 +1,36 @@
+{
+  "name": "V8 \u2014 release_tag_pattern is configurable; non-matching tags are builds",
+  "why": "A repo tagging `release-N` is not a repo with zero releases. Also proves the classification is 'carries a release tag', not 'looks like a sha'.",
+  "env": {
+    "RELEASE_TAG_PATTERN": "^release-\\d+$"
+  },
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "release-2"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "release-1"
+      ],
+      "days_ago": 40
+    },
+    {
+      "package": "api",
+      "version": "sha256:build-old",
+      "tags": [
+        "v9.9.9"
+      ],
+      "days_ago": 60
+    }
+  ],
+  "expect_delete": [
+    "api@sha256:build-old"
+  ]
+}

@@ -613,6 +613,12 @@
     },
     "cleanup-gar-images": {
       "inputs": {
+        "build_retention_releases": {
+          "default": "2",
+          "description": "Keep BUILDS newer than the Nth-most-recent release, ordered by time rather than semver precedence (a backport released today must not move the boundary back to its version's position). 2 = pending builds plus one release of rollback window. Cannot exceed keep_semver_count, and with fewer than N releases there is no boundary and nothing is deleted.",
+          "required": false,
+          "type": "string"
+        },
         "dry_run": {
           "default": true,
           "description": "true = print the plan only, delete nothing.",
@@ -637,9 +643,15 @@
           "required": false,
           "type": "string"
         },
+        "grace_period_days": {
+          "default": "0",
+          "description": "Reprieve for artifacts outside the keep-set: one is deleted only once it is more than this many days OLDER than the oldest release-policy-retained image. 0 deletes them on the next sweep. Measured against your artifacts, not the wall clock, so the plan does not drift between runs.",
+          "required": false,
+          "type": "string"
+        },
         "keep_semver_count": {
           "default": "5",
-          "description": "Per image, keep this many of the most recent vX.Y.Z-tagged digests.",
+          "description": "Per image, keep this many of the most recent RELEASES. Minimum 2 \u2014 the boundary that protects your builds is itself a release, so a policy that keeps fewer than two cannot express one.",
           "required": false,
           "type": "string"
         },
@@ -655,6 +667,12 @@
           "required": false,
           "type": "string"
         },
+        "release_tag_pattern": {
+          "default": "^v\\d+\\.\\d+\\.\\d+$",
+          "description": "Regex (Python re.match) identifying a production release tag. An artifact carrying one is a RELEASE; everything else is a BUILD. Getting this wrong is safe: no matches means no boundary, so nothing is ever deleted and the run warns that retention is inert.",
+          "required": false,
+          "type": "string"
+        },
         "relock_immutable_tags": {
           "default": true,
           "description": "Re-enable immutable tags after the sweep. DEFAULT TRUE \u2014 leave it alone unless you deliberately want the repository left unlocked (a maintenance window, or debugging a failed sweep). Setting it false removes the protection that stops a tag being moved to a different digest, and the run will say so loudly.",
@@ -665,30 +683,6 @@
           "default": null,
           "description": "Service account email to impersonate via WIF.",
           "required": true,
-          "type": "string"
-        },
-        "sha_retention_releases": {
-          "default": "1",
-          "description": "Keep sha-tagged images newer than the Nth-most-recent release of that package (releases ordered by TIME, not semver precedence). 1 = keep unreleased builds plus one release of rollback window. 0 \u21d2 off.",
-          "required": false,
-          "type": "string"
-        },
-        "sha_tag_pattern": {
-          "default": "^[0-9a-f]{40}$",
-          "description": "Regex (Python re.search) identifying commit-sha tags published by a build-once `main` pipeline. Empty \u21d2 sha retention off entirely.",
-          "required": false,
-          "type": "string"
-        },
-        "tagged_max_age_days": {
-          "default": "30",
-          "description": "Delete tagged images at least this many days old, unless in the keep-set.",
-          "required": false,
-          "type": "string"
-        },
-        "untagged_max_age_days": {
-          "default": "15",
-          "description": "Delete untagged manifests at least this many days old.",
-          "required": false,
           "type": "string"
         },
         "wif_provider": {

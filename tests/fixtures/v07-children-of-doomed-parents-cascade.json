@@ -1,0 +1,55 @@
+{
+  "name": "V7 \u2014 children of a release being deleted this run stay queued (ports t25's other half)",
+  "why": "Phase 1 deletes tagged indexes and --delete-tags cascades, so a doomed parent's children are genuinely deletable in phase 2. Only a SURVIVING parent blocks.",
+  "env": {
+    "KEEP_SEMVER_COUNT": "2"
+  },
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel3",
+      "tags": [
+        "v3.0.0"
+      ],
+      "days_ago": 5
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 20
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1-amd64",
+      "tags": [],
+      "days_ago": 20
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1-attest",
+      "tags": [],
+      "days_ago": 20
+    }
+  ],
+  "child_map": {
+    "sha256:rel1-amd64": "sha256:rel1",
+    "sha256:rel1-attest": "sha256:rel1"
+  },
+  "expect_delete": [
+    "api@sha256:rel1",
+    "api@sha256:rel1-amd64",
+    "api@sha256:rel1-attest"
+  ],
+  "expect_blocked": []
+}

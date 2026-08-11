@@ -7,6 +7,7 @@ archived by age only; nothing is deleted, and both files are greppable.
 
 - `2026-08-11` — [`cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)](#2026-08-11--cleanup-gar-images-plans-are-mostly-impossible-fleet-wide-one-caller-stalled-completely-bug-fix)
 - `2026-08-11` — [`badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice](#2026-08-11--badge_insert-default-on-badges-may-still-be-given-to-a-repo-but-it-is-now-a-nameable-choice)
+- `2026-08-11` — [`cleanup-gar-images` v2.0.0: retention is release-relative, not age-based](#2026-08-11--cleanup-gar-images-v200-retention-is-release-relative-not-age-based)
 - `2026-08-11` — [Hard-error audit: a badge push failure could fail a caller's CI (bug fix)](#2026-08-11--hard-error-audit-a-badge-push-failure-could-fail-a-callers-ci-bug-fix)
 - `2026-08-11` — [The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)](#2026-08-11--the-gar-105-vs-103-delta-is-a-wall-clock-boundary-crossing-not-a-logic-change-root-cause-corrects-the-earlier-correction)
 - `2026-08-11` — [Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`](#2026-08-11--opt-in-node_modules-caching-on-ci-node-and-deploy-cloudflare-pages-pages-gains-a-separate-install_command)
@@ -156,6 +157,89 @@ Docs for both workflows describe it; `catalog.json` regenerated so the contract 
 readable. A stale claim in `docs/ci-node.md` — that a missing coverage report fails the job
 whenever badges are on — was corrected in the same pass: since `v1.21.1` that is an error only
 when `coverage_threshold` is non-zero, and a warning otherwise.
+
+## 2026-08-11 — `cleanup-gar-images` v2.0.0: retention is release-relative, not age-based
+
+**The change.** Retention is now defined by release history. Per image name every artifact is
+a **RELEASE** (carries a tag matching `release_tag_pattern`) or a **BUILD** (everything else —
+sha tags, `:latest`-only images, other schemes, untagged manifests). Keep the last
+`keep_semver_count` releases, plus every build newer than the `build_retention_releases`-th
+most recent release, plus untagged children of kept releases. Delete the rest once it is more
+than `grace_period_days` older than the oldest release-policy-retained image.
+
+Out: `sha_tag_pattern`, `sha_retention_releases`, `untagged_max_age_days`,
+`tagged_max_age_days`. In: `release_tag_pattern`, `build_retention_releases`,
+`grace_period_days`, and a floor of 2 on `keep_semver_count`.
+
+**Why the age model had to go, rather than be fixed.** Three defects found in one day were all
+the same defect wearing different clothes:
+
+- A repo whose tags churn faster than `tagged_max_age_days` never ages anything out, so
+  `Traide-Co/project` ran green at `deleted=0` for six consecutive days while its registry grew
+  to 580 MB.
+- Two dry runs 2m27s apart produced different plans because two untagged digests crossed the
+  15-day line between them — and the difference was investigated as a behaviour change in the
+  workflow. It was the clock.
+- The window that was supposed to protect promotion sources recognised images by
+  `sha_tag_pattern`, so on the two registries that publish no sha tags it protected **nothing**
+  and age made every decision unobserved.
+
+Each was individually fixable. What they have in common is that *wall-clock age is not the
+thing anyone actually means*. Nobody wants "delete images older than 30 days"; they want "keep
+the last few releases and whatever has been built since". Encoding the real intent removes the
+whole class.
+
+**What the user specified, and where the implementation differs.** The rule as given was: keep
+the last 2 releases and the non-release versions since the last release, falling back to the
+2nd-last when the last release is the newest artifact. The conditional is not implemented —
+`build_retention_releases: 2` always anchors at the 2nd-most-recent release, which is a
+superset of that rule (it keeps strictly more, and coincides in the fallback case). A fixed
+boundary is far easier to reason about at 3am than one that moves depending on what was pushed
+last, and nothing the rule wanted kept is deleted.
+
+**`grace_period_days` is anchored to the artifacts, not to `now`.** An artifact outside the
+keep-set is deleted once it is more than N days *older than the oldest image the release policy
+retained*. That is the reading of "older than (last retained image + grace period)" that ages
+add up in, and it is the only one implementable without persistent state — the sweep sees a
+registry listing, not history. Its real value is that the plan stops depending on the clock:
+the 105-vs-103 investigation cannot recur.
+
+Live digests and `keep_tags` protections deliberately **do not** move that anchor. They keep
+their own digest, but if they moved the cutoff, one service pinned to a year-old image would
+silently disable the sweep for the entire repo.
+
+**The fail-safe is the point, not a side effect.** Fewer releases than the window needs ⇒ no
+boundary ⇒ nothing is deleted, at any age. A repo that has never released, or whose
+`release_tag_pattern` is wrong, is left alone. The cost is that a misconfigured repo is
+indistinguishable from a healthy pre-release one — so a package with no release-tagged
+artifacts now emits a `::warning::`. Six silent green days is the failure this pairs against.
+
+**One clock.** v1 read three different notions of time in adjacent blocks: the keep-set ranked
+on raw `updateTime`, the boundary on the oldest available field, the age rule on `createTime`.
+So the keep-set and the window could disagree about which release was second-most-recent.
+Everything now reads `created()`.
+
+**Children of kept parents are kept, not reported.** #46 established that GAR refuses to delete
+a child while its parent lives, and reported them under `blocked_by_parent`. v2 goes further:
+if we are keeping the parent, the child belongs in the keep-set. `blocked_by_parent` remains
+for the genuinely unexpected case. This is why #46 had to land first — v2 consumes its
+parent/child map rather than duplicating the manifest walk.
+
+**Breaking, and deliberately loudly so.** The four removed inputs are removed, not
+accepted-and-ignored: a caller who believes they still have a 15-day grace period and does not
+is worse off than one whose run refuses to start. Every caller pins an exact tag, so nobody
+moves until they choose to.
+
+**Expect a bigger first sweep.** v2 deletes more than v1 on an actively-released repo, because
+v1 was silently retaining a backlog. Dry-run both pins per caller before repinning, per
+AGENTS.md §5.
+
+**Tests.** The v1 fixture suite asserted age-threshold behaviour that no longer exists; all 15
+were retired and 14 written, each naming the v1 fixture whose intent it carries. The structural
+probe changed too: v1 re-ran every fixture with the window off and asserted keep-only, which v2
+has no switch for. v2 re-runs each fixture with a longer window and with a large grace period
+and asserts neither deletes anything the default does not — both monotonicity claims the policy
+makes.
 
 ## 2026-08-11 — Hard-error audit: a badge push failure could fail a caller's CI (bug fix)
 

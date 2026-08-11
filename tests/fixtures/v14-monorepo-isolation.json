@@ -1,0 +1,47 @@
+{
+  "name": "V14 \u2014 packages are independent: one with releases, one without (ports t20)",
+  "why": "The 'no releases \u21d2 nothing deleted' guarantee is per IMAGE NAME, not per repo.",
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:api-rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:api-rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 40
+    },
+    {
+      "package": "api",
+      "version": "sha256:api-old",
+      "tags": [
+        "1111111111111111111111111111111111111111"
+      ],
+      "days_ago": 60
+    },
+    {
+      "package": "worker",
+      "version": "sha256:wrk-old",
+      "tags": [],
+      "days_ago": 400
+    },
+    {
+      "package": "worker",
+      "version": "sha256:wrk-older",
+      "tags": [
+        "2222222222222222222222222222222222222222"
+      ],
+      "days_ago": 500
+    }
+  ],
+  "expect_delete": [
+    "api@sha256:api-old"
+  ]
+}

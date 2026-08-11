@@ -30,12 +30,11 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 DEFAULT_ENV = {
     "REPO_PATH": "fixture-docker.pkg.dev/fixture-project/fixture-repo",
     "KEEP_SEMVER_COUNT": "5",
-    "UNTAGGED_MAX_AGE_DAYS": "15",
-    "TAGGED_MAX_AGE_DAYS": "30",
+    "RELEASE_TAG_PATTERN": r"^v\d+\.\d+\.\d+$",
+    "BUILD_RETENTION_RELEASES": "2",
+    "GRACE_PERIOD_DAYS": "0",
     "KEEP_TAGS": "latest,buildcache",
     "KEEP_TAG_PREFIXES": "hotfix-,rc-,debug-",
-    "SHA_TAG_PATTERN": "^[0-9a-f]{40}$",
-    "SHA_RETENTION_RELEASES": "1",
 }
 
 
@@ -175,22 +174,39 @@ def main():
                     )
                     continue
 
-            # Structural invariant, checked on EVERY fixture: the sha-retention pass
-            # is keep-only, so turning it off can only ever delete MORE. If some
-            # fixture ever deletes something the legacy (N=0) run would not, the
-            # pass has stopped being keep-only.
+            # Structural invariants, checked on EVERY fixture. Both are monotonicity
+            # claims the policy makes, and a fixture that violates either has found a
+            # real defect even if its own expect_delete still matches.
+            #
+            #   1. A LONGER build window keeps more. Moving the boundary further back
+            #      can only add builds to the keep-set.
+            #   2. A LONGER grace period keeps more. The cutoff moves backwards in
+            #      time, so nothing new can fall outside it.
+            #
+            # v1 asserted keep-only by disabling the window (SHA_RETENTION_RELEASES=0);
+            # v2 has no "off" switch, so the probes vary the knob instead.
             if not fixture.get("skip_monotonic"):
-                _, legacy, _ = run_plan(source, fixture, {"SHA_RETENTION_RELEASES": "0"}, tmp)
-                if legacy is None:
-                    failures.append("%s: monotonicity probe (N=0) produced no plan" % name)
-                    continue
-                extra = set(got) - set(delete_set(legacy))
-                if extra:
-                    failures.append(
-                        "%s: NOT keep-only — window run deletes %s that N=0 does not"
-                        % (name, sorted(extra))
-                    )
-                    continue
+                keep_n = int(fixture.get("env", {}).get(
+                    "KEEP_SEMVER_COUNT", DEFAULT_ENV["KEEP_SEMVER_COUNT"]))
+                for label, override in (
+                    ("longer window", {"BUILD_RETENTION_RELEASES": str(keep_n)}),
+                    ("longer grace", {"GRACE_PERIOD_DAYS": "3650"}),
+                ):
+                    _, probe, probe_err = run_plan(source, fixture, override, tmp)
+                    if probe is None:
+                        failures.append(
+                            "%s: %s probe produced no plan\n    stderr: %s"
+                            % (name, label, probe_err.strip()))
+                        break
+                    extra = set(delete_set(probe)) - set(got)
+                    if extra:
+                        failures.append(
+                            "%s: NOT monotonic — with a %s the plan deletes %s that the "
+                            "default does not" % (name, label, sorted(extra)))
+                        break
+                else:
+                    print("ok   %s (%d delete candidate(s))" % (name, len(got)))
+                continue
 
             print("ok   %s (%d delete candidate(s))" % (name, len(got)))
 
