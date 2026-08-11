@@ -249,6 +249,12 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   CI rule exists to prevent, on a workflow holding a Pages deploy token; `website` shells out to
   `npx wrangler`. Both should move to `deploy-cloudflare-pages`, but the smoke-check gap above is
   a real blocker for `ui` — do that first, then migrate.
+  ⧖ **`ui` migration OPEN as Realm-ID/ui#3 (2026-08-11)** — pinned `@v1.23.0`; the `guard` job
+  (tag reachable from `origin/main`) and the tag→`package.json` stamp stayed caller-side; the
+  `/device` smoke check became inputs, still aimed at `app.realmid.dev` rather than the preview
+  URL. Node deliberately held at `22` (reusable defaults to 24) — bump separately.
+  **Unproven until the first `v*.*.*` tag after merge.** `website` (`npx wrangler`) is untouched
+  and still the tail.
 - [ ] ~~build-once/promote for frontends~~ — **considered and rejected 2026-08-11.** Adding
   `build_only` + cross-run artifact download + a `predeploy_command` seam to
   `deploy-cloudflare-pages` (so one bundle could serve stage and prod, differing only in a
