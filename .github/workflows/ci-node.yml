@@ -223,6 +223,11 @@ concurrency:
   group: ci-node-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v1.24.0
+
 jobs:
   # install · lint · build always here; tests here too UNLESS enable_services
   # routes them to the node-db job below (service containers cannot be attached

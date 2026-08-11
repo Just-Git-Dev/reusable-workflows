@@ -7,6 +7,9 @@ name: CI
 on:
   push:
     branches: [main]
+    # Release tags run CI too, so `version-sweep` can assert the tag being cut
+    # matches what the tree is stamped with (see that job).
+    tags: ['v*.*.*']
   pull_request:
   workflow_dispatch:
 
@@ -44,6 +47,32 @@ jobs:
       # true is failing here when someone changes a contract without regenerating.
       - run: pip install --quiet pyyaml
       - run: python3 scripts/gen_catalog.py --check
+
+  version-sweep:
+    name: version stamps and doc pins agree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Two failure modes, one script. On a PR this only asserts the tree agrees
+      # with ITSELF, so an unrelated PR is never failed by a release happening.
+      # On a tag push it additionally asserts the tree agrees with the TAG — the
+      # moment a skipped sweep would otherwise ship docs pinned to the previous
+      # release and workflows stamped with a version nobody can use.
+      - name: Check the sweep
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            python3 scripts/stamp_version.py --check --expect "${{ github.ref_name }}"
+          else
+            python3 scripts/stamp_version.py --check
+          fi
+
+      - name: Run stamp-sweep tests
+        run: python3 tests/run_stamp_tests.py
 
   doc-examples:
     name: doc examples are valid workflows

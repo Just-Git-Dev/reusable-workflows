@@ -84,7 +84,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.24.0
     with:
       go_version_file: go.mod
       coverage_threshold: 50
@@ -102,7 +102,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.23.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.24.0
     with:
       gcp_project: my-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -127,6 +127,23 @@ change your production ops behind your back. **Never use `@main`.**
   current** — it has updated reusable-workflow refs since March 2023. This repo is
   public and most callers are private, so nobody here can see that you are behind;
   a weekly Dependabot PR is the only thing that reliably will.
+
+### Cutting a release
+
+The version appears in two places that used to be swept by hand — the `@vX.Y.Z`
+pins in every doc example, and the `WORKFLOW_VERSION` stamp in each workflow's
+`env:` (a called workflow cannot discover its own ref at runtime, so the version
+has to be baked in). One script does both, **in the PR that precedes the tag**:
+
+```bash
+python3 scripts/stamp_version.py v1.2.3    # the tag you are about to cut
+python3 scripts/stamp_version.py --check   # what CI asserts on every PR
+```
+
+Merge that, then tag it. CI re-runs on the tag with `--expect`, and fails
+the release if the tree is stamped with anything else — so a skipped sweep is
+caught at the one moment it matters, while ordinary PRs are never failed just
+because a release happened elsewhere.
 
 ## Conventions & security
 
@@ -153,8 +170,15 @@ change your production ops behind your back. **Never use `@main`.**
 ## Contributing
 
 `.github/workflows/ci.yml` runs `actionlint` (which includes `shellcheck` over
-every `run:` body) and a check that every third-party action is SHA-pinned. Run
-`actionlint` locally before pushing.
+every `run:` body), a check that every third-party action is SHA-pinned, and the
+version-sweep check above. Run these locally before pushing:
+
+```bash
+actionlint
+python3 scripts/gen_catalog.py --check
+python3 scripts/stamp_version.py --check
+python3 tests/run_stamp_tests.py && python3 tests/run_step_tests.py
+```
 
 Changes here run in other people's production. Open a pull request, and record
 the reasoning in [DECISIONS.md](DECISIONS.md).

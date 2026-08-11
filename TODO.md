@@ -193,21 +193,23 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   job *inserts* badges after the first `# ` heading when none exist, so every caller's README
   gets an unsolicited commit on first upgrade. Decide whether default-on should insert or only
   update badges that already exist.
-- [ ] **Tell callers, in their own run, when they are on an old version.** The obvious
-  mechanism does not exist: a **probe run on 2026-08-11 proved** that inside a called workflow
-  `GITHUB_WORKFLOW_REF` / `GITHUB_WORKFLOW_SHA` describe the **caller's** workflow, and the
-  `github` context contains **no `job_workflow_sha` key at all** (actionlint's model does not
-  know it either, and it gates CI). So a reusable cannot discover which version of *itself* is
-  running. The workable design is to **stamp the version into each workflow at release time**
-  (`WORKFLOW_VERSION: v1.22.0` in `env:`) and have a cheap, never-failing step compare it to
-  the latest release. That wants the same release automation as the pin sweep below — one
-  script stamping both, with CI asserting all stamps agree.
-- [ ] **Automate the doc example pin sweep at release time.** Every release since `v1.20.0`
-  has needed a manual `perl -pi` pass over `docs/` + `README.md`, and it is exactly the kind of
-  chore that gets skipped — which is how 39 pins ended up spread over twelve tags in the first
-  place. Either a `scripts/bump_pins.py <tag>` invoked from a release checklist, or a CI check
-  that fails when the newest example pin is older than the latest release. The check is better:
-  it cannot be forgotten.
+- [ ] **Tell callers, in their own run, when they are on an old version.** *Unblocked
+  2026-08-11* — `WORKFLOW_VERSION` now ships in every reusable's `env:` (see the sweep entry
+  below), which was the missing half: a called workflow cannot discover its own ref at runtime
+  (`GITHUB_WORKFLOW_REF`/`_SHA` describe the **caller**, and the `github` context has no
+  `job_workflow_sha` key — probed 2026-08-11; actionlint's model doesn't know it either, and it
+  gates CI). What remains is the notice step itself: a cheap, **never-failing** step that
+  compares `WORKFLOW_VERSION` to the latest release and writes a `::notice::` + step-summary
+  line when behind. Open questions: which workflows carry it (all, or only the deploy paths —
+  it costs an API call per run); whether it needs a token at all (`/releases/latest` is public
+  and unauthenticated, but rate-limited by runner IP, so it must degrade silently); and an
+  opt-out input for callers who deliberately hold a pin.
+- [x] **Automate the doc example pin sweep at release time — BUILT 2026-08-11.**
+  `scripts/stamp_version.py <tag>` sweeps doc pins *and* stamps `WORKFLOW_VERSION`;
+  `tests/run_stamp_tests.py` covers it; CI's `version-sweep` job asserts internal agreement on
+  every PR and agreement **with the tag** on `v*.*.*` pushes. The originally-proposed check
+  ("fail when the newest pin is older than the latest release") was rejected — it fails
+  unrelated PRs in the window between a release and its sweep. See DECISIONS.md.
 - [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.** Both
   rely on `setup-node`'s cache, which covers only `~/.npm`; npm still unpacks and links the tree
   on every run. `eazyupdates-ui`'s outgoing GKE workflow caches `node_modules` itself, keyed on
