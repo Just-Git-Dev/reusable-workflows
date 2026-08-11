@@ -19,6 +19,8 @@ own jobs/steps in the caller.
 | `node_cache` | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
 | `cache_dependency_path` | `<working_directory>/package-lock.json` | lockfile the cache keys on |
 | `enable_corepack` | `false` | run `corepack enable` before setup-node (pnpm / modern yarn) |
+| `npm_registry_url` | `''` | private npm registry to authenticate against, e.g. `https://npm.pkg.github.com`. Empty ⇒ registry auth is untouched — see [Private registries](#private-registries) |
+| `npm_registry_scope` | `''` | package scope routed to `npm_registry_url`, e.g. `@acme`. Optional for GitHub Packages, which falls back to the repository owner |
 | `timeout_minutes` | `15` | job timeout |
 | `install` / `install_command` | `true` / `npm ci` | dependency install |
 | `run_lint` / `lint_command` | `true` / `npm run lint` | lint |
@@ -35,8 +37,47 @@ own jobs/steps in the caller.
 | `readme_path` | `README.md` | README the badges are written into — **repo-root relative**, *not* `working_directory` relative |
 | `badge_branch` | `''` | branch the badge commit is pushed to; empty ⇒ the repository default branch. Point it at a sandbox branch to trial the feature |
 
-No secrets — public/read-only CI. (Need a private sibling repo for specs? Do that
-checkout in a caller job; this workflow takes no secrets by design.)
+## Secrets
+
+| Name | Required | Notes |
+|---|---|---|
+| `npm_auth_token` | no | token for `npm_registry_url`, exposed to the install step as `NODE_AUTH_TOKEN`. Omit it and CI stays credential-free |
+
+Nothing else — otherwise this is public/read-only CI. (Need a private sibling repo
+for specs? Do that checkout in a caller job.)
+
+## Private registries
+
+Installing a scoped package from a private registry needs two inputs and a secret.
+The work is delegated to `actions/setup-node`, which writes
+`$RUNNER_TEMP/.npmrc` containing `//<registry>/:_authToken=${NODE_AUTH_TOKEN}` plus
+`@scope:registry=<url>`, and points `NPM_CONFIG_USERCONFIG` at it; npm expands the
+token at install time.
+
+```yaml
+    with:
+      npm_registry_url: https://npm.pkg.github.com
+      npm_registry_scope: '@acme'
+      install_command: npm ci --legacy-peer-deps
+    secrets:
+      npm_auth_token: ${{ secrets.PACKAGES_READ_PAT }}
+```
+
+The token must be a **secret**, never an input — `workflow_call` inputs are not
+masked in logs. For **GitHub Packages** it needs `read:packages`, and it has to be a
+PAT whenever the package lives in a different repo than the caller: `GITHUB_TOKEN`
+only reaches packages owned by, or explicitly shared with, the caller repo.
+
+Two limits worth knowing before you reach for this:
+
+- **One registry.** setup-node writes a single registry line, so a repo pulling
+  scoped packages from two private registries still has to hand-roll its own
+  `.npmrc`. Tracked in `TODO.md`.
+- **A committed `.npmrc` wins.** setup-node's file is the npm *user* config, and a
+  repo-level `.npmrc` takes precedence over it for any key it sets.
+
+Leaving `npm_registry_url` empty (the default) is a true no-op: setup-node skips
+auth setup entirely, writing no `.npmrc` and exporting no `NPM_CONFIG_USERCONFIG`.
 
 **Service containers are language-agnostic** — the same `enable_services` inputs
 exist on [`ci-go`](ci-go.md). Set `enable_services: true` for a DB-backed Node

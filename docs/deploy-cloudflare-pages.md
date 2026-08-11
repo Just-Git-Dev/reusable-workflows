@@ -20,6 +20,9 @@ cannot hold deploy credentials, so those runs would only fail noisily.
 | `node_version` | input | `20` | any setup-node spec: `20`, `20.x`, `lts/*` |
 | `node_cache` | input | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
 | `cache_dependency_path` | input | `<working_directory>/package-lock.json` | lockfile the cache keys on |
+| `npm_registry_url` | input | `''` | private npm registry the build authenticates against. Empty ⇒ untouched — see [Private registries](#private-registries) |
+| `npm_registry_scope` | input | `''` | package scope routed there, e.g. `@acme`. Optional for GitHub Packages |
+| `npm_auth_token` | **secret** | — | optional; token for `npm_registry_url`, exposed to the build step as `NODE_AUTH_TOKEN` |
 | `branch` | input | `main` | Pages deployment branch |
 | `ref` | input | `''` | git ref to check out and deploy; empty ⇒ the triggering ref. Set it to re-deploy a specific tag from a `workflow_dispatch` run |
 | `build_env` | input | `''` | extra build environment, newline-separated `KEY=VALUE` (values may contain spaces); scoped to the build step only |
@@ -28,6 +31,31 @@ cannot hold deploy credentials, so those runs would only fail noisily.
 ## Outputs
 
 `deployment_url` — the URL of the deployment this run produced.
+
+## Private registries
+
+If the build installs a scoped package from a private registry, point
+`npm_registry_url` at it and pass the token as the `npm_auth_token` **secret** —
+inputs are not masked in logs. `actions/setup-node` writes
+`$RUNNER_TEMP/.npmrc` with `//<registry>/:_authToken=${NODE_AUTH_TOKEN}` and
+`@scope:registry=<url>`; the token is exposed to the **build** step, since the
+default `build_command` is what installs.
+
+```yaml
+    with:
+      npm_registry_url: https://npm.pkg.github.com
+      npm_registry_scope: '@acme'
+      build_command: npm ci --legacy-peer-deps && npm run build
+    secrets:
+      cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      npm_auth_token: ${{ secrets.PACKAGES_READ_PAT }}
+```
+
+For GitHub Packages the token needs `read:packages`, and must be a PAT when the
+package lives in another repo — `GITHUB_TOKEN` only reaches packages owned by, or
+shared with, the caller repo. Only one registry is supported, and a repo-committed
+`.npmrc` still outranks setup-node's user-level file. Leaving `npm_registry_url`
+empty is a true no-op. Same contract as [`ci-node`](ci-node.md#private-registries).
 
 ## The API token
 

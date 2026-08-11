@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11-private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
 - `2026-07-28` — [`promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)](#2026-07-28-promote-image-races-the-build-it-promotes-from-bounded-source_wait_seconds-plus-the-first-executable-run-body-tests-bug-fix)
 - `2026-07-28` — [`run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out](#2026-07-28-run-db-job-built-docker_target-added-the-runner-side-prebuild-hook-deliberately-left-out)
 - `2026-07-27` — [`deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)](#2026-07-27-deploy-cloud-run-summary-step-fails-a-successful-job-when-there-is-no-service-url-bug-fix)
@@ -46,6 +47,55 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`
+
+**Context.** Planning the `zopsmart/eazyupdates-ui` migration from GKE/nginx to Cloudflare
+Pages surfaced the first hard blocker to reusing our own CI/deploy workflows: the app
+depends on `@zopsmart/zs-components`, published to GitHub Packages. Its existing workflow
+hand-writes `~/.npmrc` with a PAT before `npm ci`. Neither `ci-node` nor
+`deploy-cloudflare-pages` could authenticate to any registry, so the caller could not have
+been migrated at all — a capability gap, not a preference.
+
+**Decision.** Add `npm_registry_url` + `npm_registry_scope` inputs and an optional
+`npm_auth_token` secret to both workflows, and wire them to `actions/setup-node`'s
+`registry-url` / `scope` inputs plus a step-level `NODE_AUTH_TOKEN`. Ships as `v1.20.0`.
+
+**Why a secret, not an input.** `workflow_call` **inputs are not masked in logs**; secrets
+are. A token passed as an input would be one `set -x` or a verbose npm error away from
+appearing in a public run log. The registry URL and scope are not credentials and stay
+inputs.
+
+**Why delegate to `setup-node` rather than write `.npmrc` ourselves.** We already depend on
+the action, and its behaviour was verified at our pinned SHA (`8207627…`, v7.0.0) rather
+than assumed: `src/main.ts:65-67` only calls `configAuthentication` when `registry-url` is
+non-empty, and `src/authutil.ts` writes `$RUNNER_TEMP/.npmrc` containing
+`//<host>/:_authToken=${NODE_AUTH_TOKEN}` plus `@scope:registry=<url>`, exporting
+`NPM_CONFIG_USERCONFIG`. The token is expanded by npm at install time, so setting it as
+step-level `env:` works even though `setup-node` ran earlier. Owning that file ourselves
+would mean owning yarn/pnpm compatibility too, for no gain.
+
+**That guard is what makes this non-breaking**, and it is the reason the defaults are empty
+strings rather than anything cleverer: an existing caller that passes neither input gets a
+runner state byte-identical to before — no `.npmrc`, no `NPM_CONFIG_USERCONFIG`. The added
+`NODE_AUTH_TOKEN: ''` on the install step is inert, since nothing references it unless a
+registry was configured (and npm errors on *unset* config references, not empty ones).
+`ci-node` gained its first `secrets:` block; a `required: false` secret is invisible to
+existing callers, including those using `secrets: inherit`.
+
+**Placement of the token differs by workflow, deliberately.** `ci-node` has a dedicated
+install step, so the token goes there and nowhere else. `deploy-cloudflare-pages` has no
+install step — its `build_command` defaults to `npm ci && npm run build` — so the token
+goes on the build step. Narrower is better: a token on a step that never installs is
+exposure without purpose.
+
+**Known limits, documented rather than engineered around.** `setup-node` writes exactly one
+registry line, so a repo pulling scoped packages from two private registries must still
+hand-roll `.npmrc`; and because its file is the npm *user* config, a repo-committed
+`.npmrc` outranks it. Generalising to multiple registries is in `TODO.md`, deliberately
+deferred — no caller needs it, and the moment we support a list we are back to owning the
+file. For GitHub Packages the token needs `read:packages` and must be a PAT when the
+package lives in a different repo than the caller; `GITHUB_TOKEN` does not reach it.
 
 ## 2026-07-28 — `promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)
 

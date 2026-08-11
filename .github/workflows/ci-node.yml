@@ -54,6 +54,22 @@ on:
         type: boolean
         required: false
         default: false
+      npm_registry_url:
+        description: >
+          Private npm registry to authenticate against, e.g. https://npm.pkg.github.com.
+          Empty (the default) leaves registry auth untouched — setup-node writes no .npmrc
+          at all, so callers that do not need it are unaffected.
+        type: string
+        required: false
+        default: ''
+      npm_registry_scope:
+        description: >
+          Package scope routed to npm_registry_url, e.g. "@acme". Optional: for
+          npm.pkg.github.com setup-node falls back to the repository owner. Ignored
+          unless npm_registry_url is set.
+        type: string
+        required: false
+        default: ''
       timeout_minutes:
         description: 'Job timeout.'
         type: number
@@ -182,6 +198,15 @@ on:
         type: string
         required: false
         default: ''
+    secrets:
+      npm_auth_token:
+        description: >
+          Token for npm_registry_url, exposed to the install step as NODE_AUTH_TOKEN.
+          A secret rather than an input because workflow_call inputs are not masked in
+          logs. For GitHub Packages this needs read:packages, and must be a PAT when the
+          package lives in a different repo than the caller — GITHUB_TOKEN only reaches
+          packages owned by, or explicitly shared with, the caller repo.
+        required: false
 
 permissions:
   contents: read
@@ -216,9 +241,17 @@ jobs:
           node-version: ${{ inputs.node_version }}
           cache: ${{ inputs.node_cache }}
           cache-dependency-path: ${{ inputs.cache_dependency_path != '' && inputs.cache_dependency_path || format('{0}/package-lock.json', inputs.working_directory) }}
+          # Empty ⇒ setup-node skips auth entirely (no .npmrc, no NPM_CONFIG_USERCONFIG),
+          # so callers without a private registry keep exactly today's behaviour.
+          registry-url: ${{ inputs.npm_registry_url }}
+          scope: ${{ inputs.npm_registry_scope }}
 
       - name: Install
         if: ${{ inputs.install }}
+        env:
+          # setup-node writes `_authToken=${NODE_AUTH_TOKEN}` into $RUNNER_TEMP/.npmrc;
+          # npm expands it here, at install time. Empty when no registry is configured.
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token }}
         run: ${{ inputs.install_command }}
 
       - name: Lint
@@ -322,9 +355,17 @@ jobs:
           node-version: ${{ inputs.node_version }}
           cache: ${{ inputs.node_cache }}
           cache-dependency-path: ${{ inputs.cache_dependency_path != '' && inputs.cache_dependency_path || format('{0}/package-lock.json', inputs.working_directory) }}
+          # Empty ⇒ setup-node skips auth entirely (no .npmrc, no NPM_CONFIG_USERCONFIG),
+          # so callers without a private registry keep exactly today's behaviour.
+          registry-url: ${{ inputs.npm_registry_url }}
+          scope: ${{ inputs.npm_registry_scope }}
 
       - name: Install
         if: ${{ inputs.install }}
+        env:
+          # setup-node writes `_authToken=${NODE_AUTH_TOKEN}` into $RUNNER_TEMP/.npmrc;
+          # npm expands it here, at install time. Empty when no registry is configured.
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token }}
         run: ${{ inputs.install_command }}
 
       - name: Test (with services)

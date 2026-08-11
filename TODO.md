@@ -144,4 +144,13 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   references to 4 reusables (`ci-go`, `deploy-cluster-keyed`, `manage-config-secrets`,
   `promote-image`) are still
   at `@v1.11.0` and still emit the Node-20 `docker/build-push-action` deprecation warning.
+- [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **generalise private-registry auth beyond a
+  single npm registry.** The `npm_registry_url` / `npm_registry_scope` / `npm_auth_token` trio
+  delegates to `actions/setup-node`'s `registry-url`, which writes exactly **one** registry line
+  into `$RUNNER_TEMP/.npmrc`. A repo pulling scoped packages from two private registries (e.g.
+  GitHub Packages *and* Artifact Registry npm) still has to hand-roll its own `.npmrc`. Deferred
+  deliberately — no caller needs it yet, and a list-of-registries input would mean writing and
+  owning the `.npmrc` ourselves instead of delegating. Documented as a known limitation in
+  `docs/ci-node.md` and `docs/deploy-cloudflare-pages.md`; revisit when a second registry
+  actually shows up.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
