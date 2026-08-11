@@ -204,6 +204,16 @@ on:
         type: boolean
         required: false
         default: true
+      badge_insert:
+        description: >-
+          When a README has no badges yet, insert them after the first `# ` heading.
+          True keeps today's behaviour. Set false to only ever REFRESH badges that
+          already exist — badges are on by default, so on first upgrade insertion
+          means an unsolicited `chore(ci): update README badges` commit in a repo
+          that never asked for them.
+        type: boolean
+        required: false
+        default: true
       readme_path:
         description: 'README to rewrite, REPO-ROOT relative (not working_directory relative).'
         type: string
@@ -534,6 +544,7 @@ jobs:
         env:
           README: ${{ inputs.readme_path }}
           SCAN_DIR: ${{ inputs.working_directory }}
+          BADGE_INSERT: ${{ inputs.badge_insert }}
           COVERAGE: ${{ needs['node-db'].result == 'success' && needs['node-db'].outputs.coverage || needs.node.outputs.coverage }}
         run: |
           # A warning, not an error: badges default to on, so this runs against
@@ -584,7 +595,11 @@ jobs:
           upsert "eslint-disable count" \
             "![eslint-disable count](https://img.shields.io/badge/eslint--disable_count-${SUPPRESSIONS}-${LINT_COLOUR})"
 
-          if [ -n "${PENDING}" ]; then
+          if [ -n "${PENDING}" ] && [ "${BADGE_INSERT}" != "true" ]; then
+            # Refresh-only: the caller has opted out of being given badges they
+            # never asked for. Existing badges (upserted above) are still updated.
+            echo "::notice::badge_insert is false and '${README}' has no badges yet — none were added"
+          elif [ -n "${PENDING}" ]; then
             if grep -q '^# ' "$README"; then
               awk -v ins="${PENDING}" '
                 { print }
@@ -627,11 +642,20 @@ jobs:
           fi
 
           echo "::notice::push rejected — rebasing once and retrying"
-          git pull --rebase origin "${BRANCH}"
-          if push; then exit 0; fi
-          if readonly_token; then
-            echo "::warning::README badges were generated but not pushed — the workflow token cannot write to '${BRANCH}'."
+          # Guarded: an unguarded `git pull --rebase` failing would abort this step
+          # under `set -e` and fail the caller's CI, which is the same unfairness the
+          # readonly_token branch below exists to avoid.
+          if ! git pull --rebase origin "${BRANCH}" 2>"$ERR"; then
+            echo "::warning::README badges were generated but not pushed — could not rebase onto '${BRANCH}'."
+            cat "$ERR" >&2
             exit 0
           fi
+          if push; then exit 0; fi
+
+          # No push failure may fail the run. Badges are cosmetic AND on by default,
+          # so this job executes for callers that never asked for them; failing their
+          # CI over a README commit is not a trade they agreed to. The reason is still
+          # surfaced — as a warning and on stderr — it just does not gate the build.
+          echo "::warning::README badges were generated but not pushed. See the error below; set 'update_badges: false' to stop trying."
           cat "$ERR" >&2
-          exit 1
+          exit 0

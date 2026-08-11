@@ -192,13 +192,16 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   path into a default one.** Both surviving `::error::` exits in that job needed re-triaging
   against "is this fair to a caller who never asked for the feature?" — the missing-README one
   was caught during design, the missing-coverage one only by running it against a real repo.
-  Worth a sweep of the other reusables' hard failures before any future default flip. — opt-out rather than
-  opt-in. Blocked on the permission fix above, and needs two behaviour changes first, because
-  default-on means it runs against repos that never asked for it: a missing `readme_path` is
-  currently a **hard error** (`::error::` + exit 1) and must become a warning-and-skip; and the
-  job *inserts* badges after the first `# ` heading when none exist, so every caller's README
-  gets an unsolicited commit on first upgrade. Decide whether default-on should insert or only
-  update badges that already exist.
+  ✅ **Sweep DONE 2026-08-11** — all 133 `::error::` emissions across the 21 reusables
+  classified by guard chain. One real finding, now fixed: the badge job's push failure path
+  could fail a caller's CI (see DECISIONS.md). No other fatal path is reachable without opting
+  in. The `readme_path` hard error described here was **already** warning-and-skip — that half
+  of this entry was stale.
+  ✅ **Badge insertion DECIDED 2026-08-11** — option (c): `badge_insert`, default `true`.
+  Behaviour unchanged for every existing caller; the insertion is now a named boolean a caller
+  can decline instead of turning the whole feature off. Update-only-by-default was rejected: it
+  makes default-on inert, since no repo would ever gain badges without hand-seeding a badge
+  line. See DECISIONS.md.
 - [ ] **Tell callers, in their own run, when they are on an old version.** *Unblocked
   2026-08-11* — `WORKFLOW_VERSION` now ships in every reusable's `env:` (see the sweep entry
   below), which was the missing half: a called workflow cannot discover its own ref at runtime
@@ -244,6 +247,12 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   CI rule exists to prevent, on a workflow holding a Pages deploy token; `website` shells out to
   `npx wrangler`. Both should move to `deploy-cloudflare-pages`, but the smoke-check gap above is
   a real blocker for `ui` — do that first, then migrate.
+  ⧖ **`ui` migration OPEN as Realm-ID/ui#3 (2026-08-11)** — pinned `@v1.23.0`; the `guard` job
+  (tag reachable from `origin/main`) and the tag→`package.json` stamp stayed caller-side; the
+  `/device` smoke check became inputs, still aimed at `app.realmid.dev` rather than the preview
+  URL. Node deliberately held at `22` (reusable defaults to 24) — bump separately.
+  **Unproven until the first `v*.*.*` tag after merge.** `website` (`npx wrangler`) is untouched
+  and still the tail.
 - [ ] ~~build-once/promote for frontends~~ — **considered and rejected 2026-08-11.** Adding
   `build_only` + cross-run artifact download + a `predeploy_command` seam to
   `deploy-cloudflare-pages` (so one bundle could serve stage and prod, differing only in a

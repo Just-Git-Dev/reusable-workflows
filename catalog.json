@@ -128,6 +128,12 @@
           "required": false,
           "type": "string"
         },
+        "badge_insert": {
+          "default": true,
+          "description": "When a README has no badges yet, insert them after the first `# ` heading. True keeps today's behaviour. Set false to only ever REFRESH badges that already exist \u2014 badges are on by default, so on first upgrade insertion means an unsolicited `chore(ci): update README badges` commit in a repo that never asked for them.",
+          "required": false,
+          "type": "boolean"
+        },
         "build_packages": {
           "default": "./...",
           "description": "Package pattern for `go build`.",
@@ -321,6 +327,12 @@
           "description": "Branch the badge commit is pushed to. Empty \u21d2 the repository default branch. Set to a sandbox branch to trial the feature.",
           "required": false,
           "type": "string"
+        },
+        "badge_insert": {
+          "default": true,
+          "description": "When a README has no badges yet, insert them after the first `# ` heading. True keeps today's behaviour. Set false to only ever REFRESH badges that already exist \u2014 badges are on by default, so on first upgrade insertion means an unsolicited `chore(ci): update README badges` commit in a repo that never asked for them.",
+          "required": false,
+          "type": "boolean"
         },
         "build_command": {
           "default": "npm run build",

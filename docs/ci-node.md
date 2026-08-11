@@ -35,6 +35,7 @@ own jobs/steps in the caller.
 | `redis_image` | `redis:7` | redis service (`enable_services` only) |
 | `run_build` / `build_command` | `true` / `npm run build` | build |
 | `update_badges` | **`true`** | commit Coverage + eslint-disable-count badges into the README on default-branch pushes — see [README badges](#readme-badges). **On by default**; set `false` to opt out. Needs `permissions: contents: write` **in the caller** to push — without it the push warns instead of failing |
+| `badge_insert` | `true` | when a README has **no** badges yet, insert them after the first `# ` heading. `false` = only ever refresh badges that already exist, so no repo is committed to unasked |
 | `readme_path` | `README.md` | README the badges are written into — **repo-root relative**, *not* `working_directory` relative |
 | `badge_branch` | `''` | branch the badge commit is pushed to; empty ⇒ the repository default branch. Point it at a sandbox branch to trial the feature |
 
@@ -117,7 +118,10 @@ auth setup entirely, writing no `.npmrc` and exporting no `NPM_CONFIG_USERCONFIG
 > **README badges are on by default** (since `v1.21.0`). To let the badge commit
 > land, grant `permissions: contents: write` on the job that calls this workflow.
 > Without it nothing breaks — the badges are generated and the push degrades to a
-> `::warning::`. Set `update_badges: false` to turn the feature off entirely.
+> `::warning::`. **No badge failure can fail your run**: a rejected push, a failed
+> rebase, a missing `readme_path` — all warn and exit 0. The feature is cosmetic and
+> on by default, so it must never gate a build. Set `update_badges: false` to turn it
+> off entirely.
 >
 > This workflow declares **no workflow-level `permissions:`**, so the badge job
 > inherits whatever you granted. That is deliberate: a reusable workflow declaring
@@ -201,10 +205,12 @@ Add the reporter:
 "test": "vitest run --coverage --coverage.reporter=json-summary --coverage.reporter=text"
 ```
 
-If the file is missing while `coverage_threshold` or `update_badges` is on, the
-job fails with a `::error::` naming the reporter flag to add. `coverage_summary_path`
-is relative to `working_directory` (unlike `readme_path`, which is repo-root
-relative).
+If the file is missing, what happens depends on whether you asked for a **gate**:
+with `coverage_threshold` non-zero the job fails with an `::error::` naming the
+reporter flag to add; with badges only (no gate) it is a `::warning::`, the
+coverage badge is omitted and the run passes — badges are on by default, so a
+missing report is not the caller's fault. `coverage_summary_path` is relative to
+`working_directory` (unlike `readme_path`, which is repo-root relative).
 
 **2. The suppression badge counts `eslint-disable`,** via
 `grep -rIE --include='*.{js,jsx,ts,tsx,vue}' --exclude-dir=node_modules` (also
