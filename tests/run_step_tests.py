@@ -17,6 +17,7 @@ backoff schedule is asserted exactly and the suite runs instantly.
 Usage:  python3 tests/run_step_tests.py
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -162,6 +163,26 @@ exit 0
         }
 
 
+def run_coverage_step(body: str, *, summary_pct=None, threshold=0):
+    """Execute the ci-node Coverage body. summary_pct=None ⇒ no report on disk."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        summary = tmp / "coverage-summary.json"
+        if summary_pct is not None:
+            summary.write_text(json.dumps({"total": {"lines": {"pct": summary_pct}}}))
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env.update(SUMMARY=str(summary), COVERAGE_THRESHOLD=str(threshold),
+                   GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "output": out.read_text()}
+
+
 def check(name, cond, detail=""):
     if cond:
         print(f"  ok   {name}")
@@ -235,6 +256,36 @@ def main():
     r = run_badge_push_step(node_body, push_mode="ok", has_changes=False)
     check("no README change pushes nothing", r["pushes"] == 0, r["pushes"])
     check("no README change exits 0", r["rc"] == 0, r["out"])
+
+    # ---- coverage: badges are on by default, so a missing report must not fail
+    # a caller who never asked for a gate. Regression from v1.21.0, caught by
+    # Traide-Co/webapp (vitest without --coverage). ----
+    cov = extract_step(CI_NODE, "node", "Coverage")
+    print("\nci-node · Coverage")
+
+    r = run_coverage_step(cov, summary_pct=None, threshold=0)
+    check("missing report without a gate exits 0", r["rc"] == 0, r["out"])
+    check("missing report without a gate warns", "::warning::" in r["out"], r["out"])
+    check("missing report without a gate names the reporter flag",
+          "json-summary" in r["out"], r["out"])
+    check("missing report without a gate sets no coverage output",
+          "coverage=" not in r["output"], r["output"])
+
+    r = run_coverage_step(cov, summary_pct=None, threshold=80)
+    check("missing report WITH a gate exits 1", r["rc"] == 1, r["out"])
+    check("missing report WITH a gate says why", "coverage_threshold is 80" in r["out"], r["out"])
+
+    r = run_coverage_step(cov, summary_pct=83.5, threshold=0)
+    check("report present exits 0", r["rc"] == 0, r["out"])
+    check("report present emits the value", "coverage=83.5" in r["output"], r["output"])
+
+    r = run_coverage_step(cov, summary_pct=50, threshold=80)
+    check("below threshold exits 1", r["rc"] == 1, r["out"])
+    check("below threshold names both numbers",
+          "50%" in r["out"] and "80%" in r["out"], r["out"])
+
+    r = run_coverage_step(cov, summary_pct=90, threshold=80)
+    check("above threshold exits 0", r["rc"] == 0, r["out"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

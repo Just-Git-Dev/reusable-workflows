@@ -289,9 +289,19 @@ jobs:
           node -e '
             const fs = require("fs");
             const p = process.env.SUMMARY;
+            const how = "test_command must emit an Istanbul json-summary report (jest --coverage --coverageReporters=json-summary, or vitest --coverage --coverage.reporter=json-summary)";
             if (!fs.existsSync(p)) {
-              console.log(`::error::coverage summary "${p}" not found — test_command must emit an Istanbul json-summary report (jest --coverage --coverageReporters=json-summary, or vitest --coverage --coverage.reporter=json-summary)`);
-              process.exit(1);
+              const gate = Number(process.env.COVERAGE_THRESHOLD || 0);
+              if (gate > 0) {
+                console.log(`::error::coverage summary "${p}" not found, but coverage_threshold is ${gate} — ${how}`);
+                process.exit(1);
+              }
+              // Badges-only: coverage is a nice-to-have here. Badges are ON BY
+              // DEFAULT from v1.21.0, so failing would break every caller whose
+              // tests do not emit coverage — which is most of them. The badge
+              // step omits the coverage badge and keeps the suppression one.
+              console.log(`::warning::coverage summary "${p}" not found — skipping the coverage badge. ${how}`);
+              process.exit(0);
             }
             const pct = JSON.parse(fs.readFileSync(p, "utf8")).total.lines.pct;
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `coverage=${pct}\n`);
@@ -397,9 +407,19 @@ jobs:
           node -e '
             const fs = require("fs");
             const p = process.env.SUMMARY;
+            const how = "test_command must emit an Istanbul json-summary report (jest --coverage --coverageReporters=json-summary, or vitest --coverage --coverage.reporter=json-summary)";
             if (!fs.existsSync(p)) {
-              console.log(`::error::coverage summary "${p}" not found — test_command must emit an Istanbul json-summary report (jest --coverage --coverageReporters=json-summary, or vitest --coverage --coverage.reporter=json-summary)`);
-              process.exit(1);
+              const gate = Number(process.env.COVERAGE_THRESHOLD || 0);
+              if (gate > 0) {
+                console.log(`::error::coverage summary "${p}" not found, but coverage_threshold is ${gate} — ${how}`);
+                process.exit(1);
+              }
+              // Badges-only: coverage is a nice-to-have here. Badges are ON BY
+              // DEFAULT from v1.21.0, so failing would break every caller whose
+              // tests do not emit coverage — which is most of them. The badge
+              // step omits the coverage badge and keeps the suppression one.
+              console.log(`::warning::coverage summary "${p}" not found — skipping the coverage badge. ${how}`);
+              process.exit(0);
             }
             const pct = JSON.parse(fs.readFileSync(p, "utf8")).total.lines.pct;
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `coverage=${pct}\n`);

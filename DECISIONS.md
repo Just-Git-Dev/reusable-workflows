@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [Default-on badges must not fail CI for callers without a coverage report (bug fix)](#2026-08-11--default-on-badges-must-not-fail-ci-for-callers-without-a-coverage-report-bug-fix)
 - `2026-08-11` — [README badges on by default; the badge job stops dictating caller permissions](#2026-08-11--readme-badges-on-by-default-the-badge-job-stops-dictating-caller-permissions)
 - `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11-private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
 - `2026-07-28` — [`promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)](#2026-07-28-promote-image-races-the-build-it-promotes-from-bounded-source_wait_seconds-plus-the-first-executable-run-body-tests-bug-fix)
@@ -48,6 +49,40 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — Default-on badges must not fail CI for callers without a coverage report (bug fix)
+
+**Symptom.** `Traide-Co/webapp`, repinned to `v1.21.0`, failed its first run:
+`::error::coverage summary "coverage/coverage-summary.json" not found`. Install, lint and
+test all passed — including the jump to Node 24 — and the run started cleanly, so the
+`v1.21.0` permission fix worked. The Coverage step is what failed.
+
+**Root cause.** The Coverage step runs when `coverage_threshold != 0` **or**
+`update_badges` is on. Defaulting `update_badges` to `true` therefore switched coverage
+measurement on for every caller, and a missing Istanbul `json-summary` was a hard
+`::error::` + `exit 1`. That was defensible while badges were opt-in — you asked for badges,
+so emit the report — but as a default it fails every caller whose `test_command` does not
+produce coverage. Traide's is `npm test -- --run`: vitest, no `--coverage`.
+
+**Why it wasn't caught.** When making default-on safe I reasoned through the paths that run
+against repos that never opted in, and softened the missing-`readme_path` error for exactly
+this reason — then missed the sibling case one step earlier in the same job. The step tests
+added in `v1.21.0` covered the push, not the coverage gate. Linting and a green
+reusable-workflows CI cannot catch it either: it only appears when a real caller without a
+coverage reporter runs.
+
+**Fix.** A missing report is fatal **only when `coverage_threshold > 0`** — an explicit gate
+the caller asked for. Otherwise it emits a `::warning::` naming the reporter flag and exits
+0; the badge step already omits the coverage badge when no value is available and still
+writes the suppression badge. `ci-go` needs no equivalent change: it generates its own
+profile with `go test -coverprofile`, so the report cannot be absent, and it only fails on
+the threshold.
+
+**Prevention.** `tests/run_step_tests.py` now executes the shipped Coverage body across all
+five paths — missing report with and without a gate, present report under and over
+threshold, and the value it emits. The broader lesson is recorded in `TODO.md`: flipping a
+default turns every previously opt-in error path into a default one, and each needs
+re-triaging as "would this be fair to a caller who never asked?"
 
 ## 2026-08-11 — README badges on by default; the badge job stops dictating caller permissions
 

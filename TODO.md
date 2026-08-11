@@ -166,7 +166,13 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   `::warning::` when the token is read-only, instead of failing. That un-freezes permission-minimal
   callers *and* is the precondition for defaulting `update_badges` to true — flipping the default
   before this lands would break every caller that has not granted write.
-- [x] **`update_badges` defaults to `true`** — shipped in `v1.21.0` (user's call, 2026-08-11) — opt-out rather than
+- [x] **`update_badges` defaults to `true`** — shipped in `v1.21.0` (user's call, 2026-08-11).
+  Follow-up in `v1.21.1`: a missing coverage report was still a hard error, which broke the
+  first real caller. **Rule worth remembering: flipping a default converts every opt-in error
+  path into a default one.** Both surviving `::error::` exits in that job needed re-triaging
+  against "is this fair to a caller who never asked for the feature?" — the missing-README one
+  was caught during design, the missing-coverage one only by running it against a real repo.
+  Worth a sweep of the other reusables' hard failures before any future default flip. — opt-out rather than
   opt-in. Blocked on the permission fix above, and needs two behaviour changes first, because
   default-on means it runs against repos that never asked for it: a missing `readme_path` is
   currently a **hard error** (`::error::` + exit 1) and must become a warning-and-skip; and the
