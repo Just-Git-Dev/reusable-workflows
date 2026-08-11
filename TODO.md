@@ -153,4 +153,26 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   owning the `.npmrc` ourselves instead of delegating. Documented as a known limitation in
   `docs/ci-node.md` and `docs/deploy-cloudflare-pages.md`; revisit when a second registry
   actually shows up.
+- [ ] `deploy-cloudflare-pages.yml` — **add a post-deploy smoke check** (`smoke_path` + bounded
+  retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `Realm-ID/ui`
+  hand-rolls exactly this after the **2026-06-29 `/device` outage**, where a stale bundle went
+  live with a broken client-routed path and nothing caught it — Pages deploys are
+  eventually-consistent, so the poll needs a bounded retry, not a single curl. It is also part of
+  why that repo has not migrated to the reusable. **Six consumers**: the five current callers
+  (`AutoMahn/{ui,admin-ui,website}`, `Traide-Co/{webapp,website}`) plus `eazyupdates-ui`. Lift the
+  logic from `Realm-ID/ui`'s `deploy.yml` rather than reinventing it.
+- [ ] **`Realm-ID/ui` + `Realm-ID/website` are the unmigrated Cloudflare Pages tail.** `ui` pins
+  `cloudflare/wrangler-action@v4` — a **mutable tag**, which is precisely what this repo's SHA-pin
+  CI rule exists to prevent, on a workflow holding a Pages deploy token; `website` shells out to
+  `npx wrangler`. Both should move to `deploy-cloudflare-pages`, but the smoke-check gap above is
+  a real blocker for `ui` — do that first, then migrate.
+- [ ] ~~build-once/promote for frontends~~ — **considered and rejected 2026-08-11.** Adding
+  `build_only` + cross-run artifact download + a `predeploy_command` seam to
+  `deploy-cloudflare-pages` (so one bundle could serve stage and prod, differing only in a
+  generated `environment.js`) was scoped for the eazyupdates-ui migration and dropped. A fleet
+  check found **all seven** platform frontends are single-environment, tag-triggered, build-and-
+  deploy-in-one-job, with config injected at build time from `vars.*` — so it would have added an
+  artifact race, retention tuning, a `github_token`, and a **second `eval` seam** to a
+  credential-minting workflow that five repos depend on, to serve exactly one caller. Revisit only
+  if a second frontend genuinely grows a stage environment.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
