@@ -114,7 +114,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.21.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.21.1
     with:
       node_version: '24'
       test_command: 'npm test -- --run'
@@ -181,7 +181,7 @@ separator.
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.21.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.21.1
     permissions:
       contents: write        # REQUIRED — caller permissions cap the called workflow
     with:
