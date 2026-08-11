@@ -13,10 +13,11 @@
 #
 # update_badges commits shields.io Coverage + eslint-disable-count badges back
 # into the caller's README on default-branch pushes (parity with
-# zopsmart/workflows test-and-lint). Default off; the caller must also grant
-# `permissions: contents: write` — a reusable workflow's permissions are capped
-# by its caller. Coverage is read from an Istanbul `json-summary` report, so the
-# caller's test_command must emit one.
+# zopsmart/workflows test-and-lint). ON BY DEFAULT — set update_badges: false to
+# opt out. To push, the caller must grant `permissions: contents: write` on the
+# calling job; without it the badges are generated and the push degrades to a
+# warning, never a failed run. Coverage is read from an Istanbul `json-summary`
+# report, so the caller's test_command must emit one.
 name: ci-node
 
 on:
@@ -183,12 +184,13 @@ on:
       update_badges:
         description: >-
           Commit shields.io Coverage + eslint-disable-count badges into the
-          caller's README on default-branch pushes. Requires
-          `permissions: contents: write` in the calling job. Off ⇒ nothing below
-          applies and nothing is pushed.
+          caller's README on default-branch pushes. ON BY DEFAULT — set false to
+          opt out. Needs `permissions: contents: write` on the calling job to
+          actually push; without it the badges are still generated and the push
+          degrades to a warning rather than failing the run.
         type: boolean
         required: false
-        default: false
+        default: true
       readme_path:
         description: 'README to rewrite, REPO-ROOT relative (not working_directory relative).'
         type: string
@@ -211,8 +213,11 @@ on:
           packages owned by, or explicitly shared with, the caller repo.
         required: false
 
-permissions:
-  contents: read
+# No workflow-level `permissions:` on purpose. A reusable workflow's declared
+# permissions are validated against the CALLER at startup, before any job-level
+# `if:` runs — so declaring more than a caller granted fails the whole run with
+# `startup_failure` and no logs. Omitting it here lets each job say what it needs
+# and lets the badge job inherit whatever the caller actually granted.
 
 concurrency:
   group: ci-node-${{ github.workflow }}-${{ github.ref }}
@@ -224,6 +229,8 @@ jobs:
   # conditionally to a single job, so the DB path is a second job).
   node:
     name: install · lint${{ inputs.enable_services && '' || ' · test' }} · build
+    permissions:
+      contents: read
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     outputs:
@@ -310,6 +317,8 @@ jobs:
   node-db:
     name: test (postgres · mysql · redis)
     if: ${{ inputs.run_tests && inputs.enable_services }}
+    permissions:
+      contents: read
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     outputs:
@@ -421,8 +430,9 @@ jobs:
           && contains(fromJSON('["success","skipped"]'), needs['node-db'].result)
           && github.ref_name == (inputs.badge_branch != '' && inputs.badge_branch
                                  || github.event.repository.default_branch) }}
-    permissions:
-      contents: write
+    # Inherits the caller's grant deliberately — see the note above `concurrency`.
+    # With `contents: write` the badge commit lands; with read-only the push step
+    # degrades to a warning instead of failing the run.
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 10
     defaults:
@@ -440,8 +450,11 @@ jobs:
           SCAN_DIR: ${{ inputs.working_directory }}
           COVERAGE: ${{ needs['node-db'].result == 'success' && needs['node-db'].outputs.coverage || needs.node.outputs.coverage }}
         run: |
+          # A warning, not an error: badges default to on, so this runs against
+          # repos that never asked for them and must not fail their CI.
           if [ ! -f "$README" ]; then
-            echo "::error::readme_path '${README}' not found at the repository root"; exit 1
+            echo "::warning::readme_path '${README}' not found at the repository root — skipping badges"
+            exit 0
           fi
 
           # grep exits 1 on zero matches; that is a valid count, not a failure.
@@ -511,7 +524,28 @@ jobs:
           git commit -m 'chore(ci): update README badges'
           # No [skip ci] needed: pushes authenticated with GITHUB_TOKEN do not
           # trigger further workflow runs.
-          if git push origin "HEAD:${BRANCH}"; then exit 0; fi
+          ERR="${RUNNER_TEMP:-/tmp}/badge-push.err"
+          push() { git push origin "HEAD:${BRANCH}" 2>"$ERR"; }
+
+          # Badges are on by default, so this job also runs for callers that never
+          # granted write. That is not an error — say so and move on, rather than
+          # failing a CI run over a cosmetic README update.
+          readonly_token() {
+            grep -qiE '403|permission|denied|not authorized|read-only|protected branch' "$ERR"
+          }
+
+          if push; then exit 0; fi
+          if readonly_token; then
+            echo "::warning::README badges were generated but not pushed — the workflow token cannot write to '${BRANCH}'. Grant 'permissions: contents: write' on the job that calls this workflow, or set 'update_badges: false'."
+            exit 0
+          fi
+
           echo "::notice::push rejected — rebasing once and retrying"
           git pull --rebase origin "${BRANCH}"
-          git push origin "HEAD:${BRANCH}"
+          if push; then exit 0; fi
+          if readonly_token; then
+            echo "::warning::README badges were generated but not pushed — the workflow token cannot write to '${BRANCH}'."
+            exit 0
+          fi
+          cat "$ERR" >&2
+          exit 1

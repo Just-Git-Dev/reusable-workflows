@@ -154,7 +154,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   owning the `.npmrc` ourselves instead of delegating. Documented as a known limitation in
   `docs/ci-node.md` and `docs/deploy-cloudflare-pages.md`; revisit when a second registry
   actually shows up.
-- [ ] **`ci-node` / `ci-go`: the badge job forces `contents: write` on every caller.** The job
+- [x] **`ci-node` / `ci-go`: the badge job forced `contents: write` on every caller — fixed in `v1.21.0`.** The job
   declares `permissions: contents: write` statically (`ci-node.yml:424`), and GitHub validates a
   called workflow's permissions against the caller **at startup**, before job-level `if:` is
   evaluated — so a `contents: read` caller gets `startup_failure` with no logs **even when
@@ -166,7 +166,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   `::warning::` when the token is read-only, instead of failing. That un-freezes permission-minimal
   callers *and* is the precondition for defaulting `update_badges` to true — flipping the default
   before this lands would break every caller that has not granted write.
-- [ ] **`update_badges` should default to `true`** (user's call, 2026-08-11) — opt-out rather than
+- [x] **`update_badges` defaults to `true`** — shipped in `v1.21.0` (user's call, 2026-08-11) — opt-out rather than
   opt-in. Blocked on the permission fix above, and needs two behaviour changes first, because
   default-on means it runs against repos that never asked for it: a missing `readme_path` is
   currently a **hard error** (`::error::` + exit 1) and must become a warning-and-skip; and the

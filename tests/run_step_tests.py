@@ -27,6 +27,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 PROMOTE = ROOT / ".github" / "workflows" / "promote-image.yml"
+CI_NODE = ROOT / ".github" / "workflows" / "ci-node.yml"
+CI_GO = ROOT / ".github" / "workflows" / "ci-go.yml"
 
 FAILURES = []
 
@@ -100,6 +102,66 @@ def run_wait_step(body: str, *, wait_seconds: int, appear_at_attempt: int | None
         }
 
 
+def run_badge_push_step(body: str, *, push_mode: str, has_changes: bool = True):
+    """Execute the badge Commit + push body against a stubbed git.
+
+    push_mode: 'ok'          push succeeds first time
+               'denied'      remote rejects for permissions (read-only token)
+               'transient'   first push rejected (non-fast-forward), retry succeeds
+               'hard'        both attempts fail for a non-permission reason
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub_dir = tmp / "bin"
+        stub_dir.mkdir()
+        pushes = tmp / "pushes"
+        pushes.write_text("")
+        pulls = tmp / "pulls"
+        pulls.write_text("")
+
+        git = stub_dir / "git"
+        git.write_text(f"""#!/usr/bin/env bash
+case "$1" in
+  diff)   exit {0 if not has_changes else 1} ;;
+  config|add|commit) exit 0 ;;
+  pull)   echo x >> {pulls} ; exit 0 ;;
+  push)
+    echo x >> {pushes}
+    n=$(wc -l < {pushes} | tr -d ' ')
+    case "{push_mode}" in
+      ok)        exit 0 ;;
+      denied)    echo "remote: Permission to o/r.git denied to github-actions[bot]" >&2
+                 echo "fatal: unable to access: The requested URL returned error: 403" >&2
+                 exit 128 ;;
+      transient) if [ "$n" -ge 2 ]; then exit 0; fi
+                 echo "! [rejected] main -> main (non-fast-forward)" >&2 ; exit 1 ;;
+      hard)      echo "fatal: the remote end hung up unexpectedly" >&2 ; exit 128 ;;
+    esac ;;
+esac
+exit 0
+""")
+        git.chmod(0o755)
+        readme = tmp / "README.md"
+        readme.write_text("# t\n")
+
+        env = dict(os.environ)
+        env["PATH"] = f"{stub_dir}:{env['PATH']}"
+        env["README"] = str(readme)
+        env["BRANCH"] = "main"
+        env["RUNNER_TEMP"] = str(tmp)
+
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {
+            "rc": proc.returncode,
+            "out": proc.stdout + proc.stderr,
+            "pushes": len(pushes.read_text().split()),
+            "pulls": len(pulls.read_text().split()),
+        }
+
+
 def check(name, cond, detail=""):
     if cond:
         print(f"  ok   {name}")
@@ -141,6 +203,38 @@ def main():
     r = run_wait_step(body, wait_seconds=1, appear_at_attempt=None)
     check("1s budget probes twice", r["attempts"] == 2, r["attempts"])
     check("1s budget clamps the sleep", r["sleeps"] == [1], r["sleeps"])
+
+    # ---- badge push: must never fail a caller's CI over a cosmetic README ----
+    node_body = extract_step(CI_NODE, "badges", "Commit + push")
+    go_body = extract_step(CI_GO, "badges", "Commit + push")
+    print("\nci-node / ci-go · badges · Commit + push")
+    check("ci-node and ci-go bodies are identical", node_body == go_body,
+          "the two must not drift")
+
+    r = run_badge_push_step(node_body, push_mode="ok")
+    check("successful push exits 0", r["rc"] == 0, r["out"])
+    check("successful push pushes once", r["pushes"] == 1, r["pushes"])
+    check("successful push emits no warning", "::warning::" not in r["out"], r["out"])
+
+    # The default-on case that must not break anyone: caller granted only read.
+    r = run_badge_push_step(node_body, push_mode="denied")
+    check("read-only token exits 0", r["rc"] == 0, r["out"])
+    check("read-only token warns", "::warning::" in r["out"], r["out"])
+    check("read-only token names the fix", "contents: write" in r["out"], r["out"])
+    check("read-only token offers the opt-out", "update_badges" in r["out"], r["out"])
+    check("read-only token does not retry", r["pulls"] == 0, r["pulls"])
+
+    r = run_badge_push_step(node_body, push_mode="transient")
+    check("race with a concurrent push rebases once", r["pulls"] == 1, r["pulls"])
+    check("race retry succeeds", r["rc"] == 0, r["out"])
+
+    r = run_badge_push_step(node_body, push_mode="hard")
+    check("genuine failure still exits 1", r["rc"] == 1, r["out"])
+    check("genuine failure surfaces the error", "hung up unexpectedly" in r["out"], r["out"])
+
+    r = run_badge_push_step(node_body, push_mode="ok", has_changes=False)
+    check("no README change pushes nothing", r["pushes"] == 0, r["pushes"])
+    check("no README change exits 0", r["rc"] == 0, r["out"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

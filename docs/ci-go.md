@@ -32,7 +32,7 @@ only the universal core so it stays adoptable everywhere.
 | `golangci_args` | `--timeout=5m` | passed to golangci-lint |
 | `lint_blocking` | `true` | `false` = report lint failures without failing the job (paydown mode) |
 | `go_private` | `''` | GOPRIVATE glob (e.g. `github.com/zopsmart/*`); when set, git fetches private modules over HTTPS using the `go_private_token` **secret** (required then) |
-| `update_badges` | `false` | commit Coverage + nolint-count badges into the README on default-branch pushes — see [README badges](#readme-badges). Requires `permissions: contents: write` **in the caller** |
+| `update_badges` | **`true`** | commit Coverage + nolint-count badges into the README on default-branch pushes — see [README badges](#readme-badges). **On by default**; set `false` to opt out. Needs `permissions: contents: write` **in the caller** to push — without it the push warns instead of failing |
 | `readme_path` | `README.md` | README the badges are written into — **repo-root relative**, *not* `working_directory` relative |
 | `badge_branch` | `''` | branch the badge commit is pushed to; empty ⇒ the repository default branch. Point it at a sandbox branch to trial the feature |
 
@@ -65,7 +65,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.20.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
     with:
       go_version_file: go.mod
       test_args: '-race -count=1 ./...'
@@ -77,7 +77,7 @@ DB-backed suite — inline service containers + a coverage gate:
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.20.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
     with:
       enable_services: true     # postgres + mysql + redis on localhost
       coverage_threshold: 50    # fail under 50% total coverage
@@ -90,7 +90,7 @@ tests in your own job instead:
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.20.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
     with:
       run_tests: false          # unit-with-DB handled below
   integration:
@@ -140,7 +140,7 @@ zero and `orange` otherwise.
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.20.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
     permissions:
       contents: write        # REQUIRED — a reusable workflow's permissions are
                              # capped by the caller; without this the push fails

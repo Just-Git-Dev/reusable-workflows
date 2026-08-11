@@ -33,7 +33,7 @@ own jobs/steps in the caller.
 | `mysql_image` / `mysql_database` / `mysql_root_password` | `mysql:8` / `test` / `root` | mysql service (`enable_services` only) |
 | `redis_image` | `redis:7` | redis service (`enable_services` only) |
 | `run_build` / `build_command` | `true` / `npm run build` | build |
-| `update_badges` | `false` | commit Coverage + eslint-disable-count badges into the README on default-branch pushes — see [README badges](#readme-badges). Requires `permissions: contents: write` **in the caller** |
+| `update_badges` | **`true`** | commit Coverage + eslint-disable-count badges into the README on default-branch pushes — see [README badges](#readme-badges). **On by default**; set `false` to opt out. Needs `permissions: contents: write` **in the caller** to push — without it the push warns instead of failing |
 | `readme_path` | `README.md` | README the badges are written into — **repo-root relative**, *not* `working_directory` relative |
 | `badge_branch` | `''` | branch the badge commit is pushed to; empty ⇒ the repository default branch. Point it at a sandbox branch to trial the feature |
 
@@ -79,12 +79,16 @@ Two limits worth knowing before you reach for this:
 Leaving `npm_registry_url` empty (the default) is a true no-op: setup-node skips
 auth setup entirely, writing no `.npmrc` and exporting no `NPM_CONFIG_USERCONFIG`.
 
-> **Callers must grant `permissions: contents: write`** on the job that calls this
-> workflow — **even with `update_badges: false`**. The badge job declares that
-> permission statically, and GitHub validates a called workflow's permissions against
-> the caller *at startup*, before any job-level `if:` runs. A `contents: read` caller
-> fails the whole run with `startup_failure` and no logs. Tracked in `TODO.md`: the
-> badge job should not force this on callers that never use it.
+> **README badges are on by default** (since `v1.21.0`). To let the badge commit
+> land, grant `permissions: contents: write` on the job that calls this workflow.
+> Without it nothing breaks — the badges are generated and the push degrades to a
+> `::warning::`. Set `update_badges: false` to turn the feature off entirely.
+>
+> This workflow declares **no workflow-level `permissions:`**, so the badge job
+> inherits whatever you granted. That is deliberate: a reusable workflow declaring
+> more than its caller granted fails the whole run at startup with `startup_failure`
+> and no logs, before any job-level `if:` is evaluated — which is what froze one
+> caller on `v1.15.0` before `v1.21.0` fixed it.
 
 **Running CI and deploy from one workflow?** The copy-paste
 [CI + stage + prod example](deploy-cloudflare-pages.md#copy-paste-one-workflow-for-ci--stage--prod)
@@ -110,7 +114,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.21.0
     with:
       node_version: '24'
       test_command: 'npm test -- --run'
@@ -177,7 +181,7 @@ separator.
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.21.0
     permissions:
       contents: write        # REQUIRED — caller permissions cap the called workflow
     with:
