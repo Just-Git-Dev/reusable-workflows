@@ -65,7 +65,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.1
     with:
       go_version_file: go.mod
       test_args: '-race -count=1 ./...'
@@ -77,7 +77,7 @@ DB-backed suite — inline service containers + a coverage gate:
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.1
     with:
       enable_services: true     # postgres + mysql + redis on localhost
       coverage_threshold: 50    # fail under 50% total coverage
@@ -90,7 +90,7 @@ tests in your own job instead:
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.1
     with:
       run_tests: false          # unit-with-DB handled below
   integration:
@@ -140,7 +140,7 @@ zero and `orange` otherwise.
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.21.1
     permissions:
       contents: write        # REQUIRED — a reusable workflow's permissions are
                              # capped by the caller; without this the push fails

@@ -157,7 +157,7 @@ on: [push, pull_request]
 permissions: { contents: read }
 jobs:
   ci:
-    uses: <org>/reusable-workflows/.github/workflows/ci-go.yml@v1.21.0
+    uses: <org>/reusable-workflows/.github/workflows/ci-go.yml@v1.21.1
     with: { go_version_file: go.mod, coverage_threshold: 50 }
 ```
 
@@ -172,7 +172,7 @@ permissions: { contents: read, id-token: write }   # id-token: write ⇒ keyless
 jobs:
   stage:
     if: github.ref == 'refs/heads/development'
-    uses: <org>/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.21.0
+    uses: <org>/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.21.1
     with:
       gcp_project: my-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}     # from access onboarding (§4)
@@ -182,7 +182,7 @@ jobs:
       service: api-stage
   prod:
     if: startsWith(github.ref, 'refs/tags/v')
-    uses: <org>/reusable-workflows/.github/workflows/promote-image.yml@v1.21.0
+    uses: <org>/reusable-workflows/.github/workflows/promote-image.yml@v1.21.1
     with:
       gcp_region: asia-southeast1
       gar_project: my-project
