@@ -287,6 +287,32 @@ def main():
     r = run_coverage_step(cov, summary_pct=90, threshold=80)
     check("above threshold exits 0", r["rc"] == 0, r["out"])
 
+    # ---- fleet drift: pure classification logic, no network ----
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import fleet_drift as fd
+    print("\nfleet_drift · pin classification")
+    check("exact latest is current", fd.minors_behind("v1.21.1", "v1.21.1") == 0)
+    check("two minors behind", fd.minors_behind("v1.19.0", "v1.21.1") == 2)
+    check("six minors behind", fd.minors_behind("v1.15.0", "v1.21.1") == 6)
+    check("a major behind is maximal", fd.minors_behind("v0.9.0", "v1.21.1") == 99)
+    check("@main is not a release", fd.minors_behind("main", "v1.21.1") is None)
+    check("@v1 alias is not a release", fd.minors_behind("v1", "v1.21.1") is None)
+    check("a SHA pin is not a release", fd.minors_behind("3d60a0d", "v1.21.1") is None)
+    rows = fd.classify([
+        {"repo": "o/a", "file": "ci.yml", "workflow": "ci-node", "ref": "v1.21.1"},
+        {"repo": "o/b", "file": "d.yml", "workflow": "promote-image", "ref": "v1"},
+        {"repo": "o/c", "file": "d.yml", "workflow": "cleanup-gar-images", "ref": "v1.15.0"},
+    ], "v1.21.1", 1)
+    check("classifies OK / MUTABLE / STALE",
+          [r["status"] for r in rows] == ["OK", "MUTABLE", "STALE"],
+          [r["status"] for r in rows])
+    md = fd.render_md(rows, "v1.21.1")
+    check("markdown lists only the problems", md.count("| MUTABLE |") == 1 and md.count("| STALE |") == 1)
+    check("markdown omits healthy pins", "o/a" not in md)
+    check("clean fleet renders a clean report",
+          "are current" in fd.render_md([{"repo": "o/a", "file": "c", "workflow": "w",
+                                          "ref": "v1.21.1", "status": "OK", "detail": ""}], "v1.21.1"))
+
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")
         return 1

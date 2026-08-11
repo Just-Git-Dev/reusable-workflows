@@ -1,0 +1,52 @@
+name: Caller pin drift
+
+# Nothing else detects a caller falling behind. The 2026-07-27 sweep found 18 of 27
+# caller lines six-plus releases stale, and only because someone read check-run
+# annotations by hand; on 2026-08-11 five separate defects were all caught by a human
+# noticing. This is the systematic version.
+#
+# Read-only: it reports, it never edits a caller. Needs a token that can read the
+# platform orgs' private repos — GITHUB_TOKEN cannot cross orgs.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'      # Mondays, 07:00 UTC
+  workflow_dispatch:
+    inputs:
+      max_minors_behind:
+        description: 'Minors behind the latest release before a pin is STALE.'
+        type: string
+        required: false
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caller-drift
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report drift
+        env:
+          # Cross-org read. Scope it to `repo` (read) and nothing else — this job
+          # never writes.
+          GH_TOKEN: ${{ secrets.FLEET_READ_TOKEN }}
+          MAX_BEHIND: ${{ inputs.max_minors_behind || '1' }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::FLEET_READ_TOKEN is not set. It needs read access to the orgs in fleet.json; GITHUB_TOKEN cannot read across orgs."
+            exit 1
+          fi
+          pip install --quiet pyyaml
+          python3 scripts/fleet_drift.py --format md --max-minors-behind "${MAX_BEHIND}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
