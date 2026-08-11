@@ -86,6 +86,13 @@ permissions:
 jobs:
   # Runs on every PR, every push and every tag. Nothing deploys without it.
   ci:
+    # REQUIRED, even with update_badges off. ci-node's badge job declares
+    # `permissions: contents: write`, and GitHub validates a called workflow's
+    # permissions against the caller at startup — a `contents: read` caller fails
+    # the whole run with `startup_failure` and no logs, before any `if:` is
+    # evaluated. Scoped to this job, so the deploy jobs stay read-only.
+    permissions:
+      contents: write
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
     with:
       node_version: '24'

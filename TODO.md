@@ -154,6 +154,25 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   owning the `.npmrc` ourselves instead of delegating. Documented as a known limitation in
   `docs/ci-node.md` and `docs/deploy-cloudflare-pages.md`; revisit when a second registry
   actually shows up.
+- [ ] **`ci-node` / `ci-go`: the badge job forces `contents: write` on every caller.** The job
+  declares `permissions: contents: write` statically (`ci-node.yml:424`), and GitHub validates a
+  called workflow's permissions against the caller **at startup**, before job-level `if:` is
+  evaluated — so a `contents: read` caller gets `startup_failure` with no logs **even when
+  `update_badges` is false**. This is not theoretical: `Traide-Co/webapp` hit it and is frozen at
+  `v1.15.0` with a comment explaining why, and the copy-paste example shipped in `v1.20.0` had the
+  same defect (patched in `v1.20.1` by granting write on the `ci` job).
+  **Fix:** drop the workflow-level `permissions: contents: read` and the badge job's explicit
+  block so the job inherits whatever the caller granted; then make the push degrade with a
+  `::warning::` when the token is read-only, instead of failing. That un-freezes permission-minimal
+  callers *and* is the precondition for defaulting `update_badges` to true — flipping the default
+  before this lands would break every caller that has not granted write.
+- [ ] **`update_badges` should default to `true`** (user's call, 2026-08-11) — opt-out rather than
+  opt-in. Blocked on the permission fix above, and needs two behaviour changes first, because
+  default-on means it runs against repos that never asked for it: a missing `readme_path` is
+  currently a **hard error** (`::error::` + exit 1) and must become a warning-and-skip; and the
+  job *inserts* badges after the first `# ` heading when none exist, so every caller's README
+  gets an unsolicited commit on first upgrade. Decide whether default-on should insert or only
+  update badges that already exist.
 - [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.** Both
   rely on `setup-node`'s cache, which covers only `~/.npm`; npm still unpacks and links the tree
   on every run. `eazyupdates-ui`'s outgoing GKE workflow caches `node_modules` itself, keyed on

@@ -79,6 +79,13 @@ Two limits worth knowing before you reach for this:
 Leaving `npm_registry_url` empty (the default) is a true no-op: setup-node skips
 auth setup entirely, writing no `.npmrc` and exporting no `NPM_CONFIG_USERCONFIG`.
 
+> **Callers must grant `permissions: contents: write`** on the job that calls this
+> workflow — **even with `update_badges: false`**. The badge job declares that
+> permission statically, and GitHub validates a called workflow's permissions against
+> the caller *at startup*, before any job-level `if:` runs. A `contents: read` caller
+> fails the whole run with `startup_failure` and no logs. Tracked in `TODO.md`: the
+> badge job should not force this on callers that never use it.
+
 **Running CI and deploy from one workflow?** The copy-paste
 [CI + stage + prod example](deploy-cloudflare-pages.md#copy-paste-one-workflow-for-ci--stage--prod)
 wires this workflow to `deploy-cloudflare-pages` with `needs:`, so a deploy cannot
