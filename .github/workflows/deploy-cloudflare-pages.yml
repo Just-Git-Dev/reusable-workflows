@@ -86,6 +86,50 @@ on:
         type: string
         required: false
         default: ''
+      smoke_path:
+        description: >-
+          Path to fetch after deploying, e.g. "/" or "/device". Empty (the default)
+          skips the check entirely. A deploy that succeeded is not the same as a
+          working site; this is the difference.
+        type: string
+        required: false
+        default: ''
+      smoke_url_base:
+        description: >-
+          Origin to run smoke_path against. Empty ⇒ the deployment URL produced by
+          THIS run, which is what you want: it tests the bundle just uploaded. Point
+          it at a custom domain only for production-branch deploys — a preview deploy
+          does not update the custom domain, so checking it would test the previous
+          release and pass regardless.
+        type: string
+        required: false
+        default: ''
+      smoke_expect:
+        description: >-
+          Newline-separated substrings that must ALL appear in the response body.
+          Use stable markers such as a root element id or the <title>; never hashed
+          asset filenames, which change every build. Empty ⇒ status code only.
+        type: string
+        required: false
+        default: ''
+      smoke_status:
+        description: 'HTTP status the smoke request must return.'
+        type: string
+        required: false
+        default: '200'
+      smoke_attempts:
+        description: >-
+          How many times to try before failing. Cloudflare Pages deploys are
+          eventually consistent, so a single request would false-fail on slow
+          propagation.
+        type: number
+        required: false
+        default: 8
+      smoke_interval_seconds:
+        description: 'Seconds between smoke attempts.'
+        type: number
+        required: false
+        default: 5
     secrets:
       cloudflare_api_token:
         description: 'Cloudflare API token with "Cloudflare Pages: Edit".'
@@ -173,6 +217,58 @@ jobs:
             --project-name=${{ inputs.project_name }}
             --branch=${{ inputs.branch }}
             --commit-hash=${{ github.sha }}
+
+      # A green deploy only proves the upload succeeded. Realm-ID/ui added this after
+      # the 2026-06-29 outage: a stale bundle went live with a broken client-routed
+      # path and nothing noticed. Opt-in via smoke_path, and blocking when set — a
+      # check that reports but does not fail would not have caught that either.
+      - name: Smoke check
+        if: inputs.smoke_path != ''
+        env:
+          BASE:      ${{ inputs.smoke_url_base != '' && inputs.smoke_url_base || steps.deploy.outputs.deployment-url }}
+          SMOKE_PATH: ${{ inputs.smoke_path }}
+          EXPECT:    ${{ inputs.smoke_expect }}
+          WANT:      ${{ inputs.smoke_status }}
+          ATTEMPTS:  ${{ inputs.smoke_attempts }}
+          INTERVAL:  ${{ inputs.smoke_interval_seconds }}
+        run: |
+          if [ -z "${BASE}" ]; then
+            echo "::error::smoke_path is set but there is no URL to test: this run produced no deployment URL and smoke_url_base is empty."
+            exit 1
+          fi
+          URL="${BASE%/}/${SMOKE_PATH#/}"
+          BODY="${RUNNER_TEMP:-/tmp}/smoke-body"
+
+          for attempt in $(seq 1 "${ATTEMPTS}"); do
+            status=$(curl -sS -o "$BODY" -w '%{http_code}' "$URL" 2>/dev/null || echo "000")
+            missing=""
+            if [ "$status" = "${WANT}" ]; then
+              while IFS= read -r marker; do
+                [ -z "$marker" ] && continue
+                grep -qF -- "$marker" "$BODY" || missing="${missing:+$missing, }${marker}"
+              done <<< "${EXPECT}"
+              if [ -z "$missing" ]; then
+                echo "::notice::smoke check passed on attempt ${attempt}: ${URL} returned ${status}"
+                {
+                  echo ""
+                  echo "- Smoke check: \`${URL}\` → ${status} ✅"
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "attempt ${attempt}/${ATTEMPTS}: ${status} but missing marker(s): ${missing}" >&2
+            else
+              echo "attempt ${attempt}/${ATTEMPTS}: got ${status}, want ${WANT}" >&2
+            fi
+            [ "$attempt" -lt "${ATTEMPTS}" ] && sleep "${INTERVAL}"
+          done
+
+          {
+            echo "::error::smoke check FAILED: ${URL} never returned ${WANT}${EXPECT:+ with the expected marker(s)} after ${ATTEMPTS} attempt(s)."
+            echo "::error::last status=${status}${missing:+; missing: ${missing}}"
+          } >&2
+          echo "----- last response body (first 40 lines) -----" >&2
+          head -n 40 "$BODY" >&2 || true
+          exit 1
 
       - name: Summary
         if: always()

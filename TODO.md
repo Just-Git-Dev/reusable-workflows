@@ -216,7 +216,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   to the reusables is a measurable build-time regression. Worth an opt-in
   `cache_node_modules` input. Note the key must include the Node version, and it is only sound
   because `npm ci` is deterministic.
-- [ ] `deploy-cloudflare-pages.yml` — **add a post-deploy smoke check** (`smoke_path` + bounded
+- [x] **`deploy-cloudflare-pages` post-deploy smoke check — BUILT 2026-08-11** (`smoke_path`, `smoke_expect`, bounded retry, blocking). Next: migrate `Realm-ID/ui` onto the reusable, which this unblocks. Original entry:  (`smoke_path` + bounded
   retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `Realm-ID/ui`
   hand-rolls exactly this after the **2026-06-29 `/device` outage**, where a stale bundle went
   live with a broken client-routed path and nothing caught it — Pages deploys are

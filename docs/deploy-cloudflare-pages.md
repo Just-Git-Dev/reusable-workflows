@@ -26,6 +26,11 @@ cannot hold deploy credentials, so those runs would only fail noisily.
 | `branch` | input | `main` | Pages deployment branch |
 | `ref` | input | `''` | git ref to check out and deploy; empty ⇒ the triggering ref. Set it to re-deploy a specific tag from a `workflow_dispatch` run |
 | `build_env` | input | `''` | extra build environment, newline-separated `KEY=VALUE` (values may contain spaces); scoped to the build step only |
+| `smoke_path` | input | `''` | path to fetch after deploying; empty skips the check — see [Smoke check](#smoke-check) |
+| `smoke_url_base` | input | `''` | origin for the check; empty ⇒ **this run's deployment URL** |
+| `smoke_expect` | input | `''` | newline-separated substrings that must all appear in the body |
+| `smoke_status` | input | `200` | status the request must return |
+| `smoke_attempts` / `smoke_interval_seconds` | input | `8` / `5` | bounded retry for propagation |
 | `cloudflare_api_token` | **secret** (req) | — | needs `Cloudflare Pages: Edit` |
 
 ## Outputs
@@ -92,7 +97,7 @@ jobs:
     # deploy jobs stay read-only.
     permissions:
       contents: write
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.22.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.23.0
     with:
       node_version: '24'
       # Chain extra gates with && — each is a plain shell command.
@@ -105,7 +110,7 @@ jobs:
   stage:
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'   # CHANGE ME
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.22.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
     with:
       project_name: myapp-stage                       # CHANGE ME
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -118,7 +123,7 @@ jobs:
   prod:
     needs: ci
     if: startsWith(github.ref, 'refs/tags/v')
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.22.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
     with:
       project_name: myapp-prod                        # CHANGE ME
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -166,7 +171,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.22.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
     with:
       project_name: my-website
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -197,7 +202,7 @@ on:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.22.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
     with:
       project_name: my-app
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -231,7 +236,7 @@ differing in the project and whatever selects the environment's config:
 # .github/workflows/deploy-pages-stage.yaml   → push to `development`
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.22.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.23.0
     with:
       project_name: myapp-stage
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -305,6 +310,39 @@ Note you **cannot** put `environment: prod` on a job that calls a reusable
 workflow (GitHub allows only `name`, `uses`, `with`, `secrets`, `needs`, `if`,
 `permissions`), so GitHub environment-scoped variables cannot feed this workflow
 directly — they would need a marshalling job that outputs them.
+
+
+## Smoke check
+
+A green deploy proves the upload succeeded. It does not prove the site works.
+
+`Realm-ID/ui` added a post-deploy check by hand after the **2026-06-29 outage**, where a
+stale bundle went live in production with a broken client-routed path and nothing caught
+it. This generalises that guard.
+
+```yaml
+    with:
+      smoke_path: /device
+      smoke_expect: |
+        id="root"
+        <title>RealmID</title>
+```
+
+Opt-in — with `smoke_path` empty nothing runs. When set it is **blocking**: a check that
+reported without failing would not have caught that outage either.
+
+**It retries.** Cloudflare Pages deploys are eventually consistent, so a single request
+would false-fail on slow propagation. The default is 8 attempts, 5s apart, stopping the
+moment the response is healthy.
+
+**Pick stable markers.** A root element id or the `<title>` survives a rebuild; a hashed
+asset filename like `/assets/index-a1b2c3.js` changes every build and makes the check
+brittle. Markers are matched literally, and **all** must be present.
+
+**Which URL it tests.** By default, the deployment URL produced by *this run* — so it tests
+the bundle just uploaded. Set `smoke_url_base` to a custom domain only for
+production-branch deploys: a preview deploy does not update the custom domain, so checking
+it would test the *previous* release and pass no matter what you shipped.
 
 ## Concurrency
 
