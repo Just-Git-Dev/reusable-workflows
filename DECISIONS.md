@@ -5,7 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
-- `2026-08-11` — [`cleanup-gar-images` deleted nothing for six green runs: age read from `updateTime`, and undeletable children queued (bug fix)](#2026-08-11--cleanup-gar-images-deleted-nothing-for-six-green-runs-age-read-from-updatetime-and-undeletable-children-queued-bug-fix)
+- `2026-08-11` — [`cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)](#2026-08-11--cleanup-gar-images-plans-are-mostly-impossible-fleet-wide-one-caller-stalled-completely-bug-fix)
 - `2026-08-11` — [`badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice](#2026-08-11--badge_insert-default-on-badges-may-still-be-given-to-a-repo-but-it-is-now-a-nameable-choice)
 - `2026-08-11` — [Hard-error audit: a badge push failure could fail a caller's CI (bug fix)](#2026-08-11--hard-error-audit-a-badge-push-failure-could-fail-a-callers-ci-bug-fix)
 - `2026-08-11` — [The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)](#2026-08-11--the-gar-105-vs-103-delta-is-a-wall-clock-boundary-crossing-not-a-logic-change-root-cause-corrects-the-earlier-correction)
@@ -60,7 +60,7 @@ archived by age only; nothing is deleted, and both files are greppable.
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
-## 2026-08-11 — `cleanup-gar-images` deleted nothing for six green runs: age read from `updateTime`, and undeletable children queued (bug fix)
+## 2026-08-11 — `cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)
 
 **Symptom.** A caller (`Traide-Co/project`, pinned `@v1.15.0`) ran the daily sweep for six
 consecutive days at `deleted=0`, `failed=0`, exit 0 — a green check every morning while its
@@ -70,10 +70,11 @@ GAR repo grew to 580 MB / 78 image versions. The plan was never empty: it queued
 **Root cause — two defects that lock together.**
 
 1. **Age came from `updateTime`.** GAR bumps `updateTime` when a tag is *moved off* a
-   digest, so each new release re-ages the previous ones. `v0.4.0`, pushed 2026-06-30, read
-   as 28d on 2026-08-11 against a 30d limit because `latest` left it on 07-14. On a repo
-   that releases regularly no tagged image ever ages out — the threshold is unreachable, not
-   merely generous.
+   digest, so each new release re-ages the previous ones and effective retention becomes
+   *threshold + churn interval*. `v0.4.0`, pushed 2026-06-30, read as 28d on 2026-08-11
+   against a 30d limit because `latest` left it on 07-14. **This is a delay, not a
+   universal stall** — see the correction below; the stall happens only where tags churn
+   faster than `tagged_max_age_days`, which is exactly this caller's release cadence.
 2. **Untagged children of a surviving index were queued.** A buildx push is an OCI index:
    the tag names a manifest list whose `linux/amd64` and `unknown/unknown` (attestation)
    children are untagged manifests. They trip `untagged_max_age_days` immediately, but GAR
@@ -81,8 +82,11 @@ GAR repo grew to 580 MB / 78 image versions. The plan was never empty: it queued
    Measured on the caller's repo: **52 untagged versions, 52 child links, zero orphans** —
    every "untagged" image the sweep saw was structurally undeletable.
 
-Together they are absorbing: (1) keeps every parent index alive forever, so (2) pins every
-child forever, so the sweep can only ever delete things that do not exist.
+Together they are absorbing: (1) holds parent indexes past their threshold, so (2) pins
+their children for as long as that lasts. On a repo whose churn outruns the threshold —
+this caller — the two close the loop completely and the sweep can only attempt things that
+cannot happen. Elsewhere it degrades rather than stalls: a few real deletions per run,
+around a plan that is mostly impossible.
 
 **Why it wasn't caught.** The executor classifies `referenced by parent manifests` as
 `OK skipped(kept-parent)` — correct for the cascade case, but it made a plan that was 100%
@@ -101,12 +105,26 @@ the age rule read, and no fixture modelled the index/child relationship at all.
   behaviour (queue, absorb the error) — this must never become a new way for a sweep to fail.
 - `planned > 0 && deleted == 0` now emits a workflow warning.
 
-**Measured, not reasoned** (AGENTS.md §5, and the correction entry below it). Both plan
-builders were run against a real 78-image dump of the caller's registry: **before — 20
-candidates, 18 of them impossible; after — 3 candidates, all deletable (`v0.4.0` plus the
-two children its own deletion frees), 18 correctly reported as held.** The net effect on
-that repo is *more* deletion, so this is a behaviour change, not a bug fix that can only
-delete less: callers should dry-run before repinning.
+**Measured across the fleet, not reasoned** (AGENTS.md §5, and the correction entry below
+it). The first draft of this entry claimed the sweep "never deletes anything" and that no
+tagged image can ever age out. **That generalised one caller to the fleet and was wrong** —
+`AutoMahn/project` deletes ~3 per run and `RealmID` cleared 125 in one. Both plan builders
+were then run against real dumps of all three registries:
+
+| repo | before (queued) | of which impossible | after (queued) | newly deleted | reported as held |
+|---|---|---|---|---|---|
+| `traide-in` | 20 | 18 | 3 | 1 (`v0.4.0`, 42d) | 18 |
+| `auto-mahn` | 20 | 20 | 3 | 1 (`v0.0.104`, 31d) | 18 |
+| `realm-id` | 112 | 111 | 9 | 2 (`v0.31.0` 32d, `v0.18.1` 31d) | 105 |
+
+Two things that only the measurement shows. **The child defect is fleet-wide** — 50/50 and
+200/200 untagged manifests on `auto-mahn` and `realm-id` are index children, and 18 of the
+19 `kept-parent` skips in AutoMahn's 2026-08-11 run are confirmed children by digest. Those
+repos looked healthy because a handful of real deletions hid a plan that was ~95% noise.
+**The age change is small, not sweeping** — one or two extra images per repo, each 31–42
+days old and outside the keep-set. It is still *more* deletion, so it remains a behaviour
+change and callers should dry-run before repinning; it is not the mass prune the first
+draft implied.
 
 **Tested.** `t26` gives one image divergent per-field timestamps (created 90d, updated 3d)
 and requires it to be deleted; `t25` models the buildx shape — index + amd64 + attestation

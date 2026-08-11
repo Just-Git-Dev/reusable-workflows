@@ -29,13 +29,21 @@ widening the delete-set.
 
 ### Age is measured from `createTime`
 
-Not `updateTime`. GAR bumps `updateTime` whenever a tag is **moved off** a digest,
-so on a repo that releases regularly, every old image is re-aged by each new push
-and reads as "days since the last tag churn". A digest pushed on 2026-06-30 still
-reported 28d on 2026-08-11 — under a 30d limit — because `latest` had moved off it
-two weeks after the push. Images in that state never age out and the repo grows
-without bound. `createTime` is used first, falling back to `uploadTime` then
-`updateTime` for the rare record that omits it.
+Not `updateTime`. GAR bumps `updateTime` whenever a tag is **moved off** a digest, so
+an image reads as "days since the last tag churn" rather than its real age, and the
+effective retention is *threshold + churn interval*. A digest pushed on 2026-06-30
+still reported 28d on 2026-08-11 — under a 30d limit — because `latest` had moved off
+it two weeks after the push.
+
+How bad that is depends on the repo's release cadence, and it is worth being precise
+rather than alarming: measured across three fleet registries, switching to
+`createTime` newly deleted **one** image on `auto-mahn`, **two** on `realm-id` and
+**one** on `traide-in` — all 31–42 days old and outside the keep-set. A repo whose
+tags churn *faster* than `tagged_max_age_days` is the pathological case: there,
+nothing tagged ever reaches the threshold at all.
+
+`createTime` is used first, falling back to `uploadTime` then `updateTime` for the
+rare record that omits it.
 
 ### Multi-arch indexes: children are not swept independently
 
