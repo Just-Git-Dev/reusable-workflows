@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [The `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
 - `2026-08-11` — [Default-on badges must not fail CI for callers without a coverage report (bug fix)](#2026-08-11--default-on-badges-must-not-fail-ci-for-callers-without-a-coverage-report-bug-fix)
 - `2026-08-11` — [README badges on by default; the badge job stops dictating caller permissions](#2026-08-11--readme-badges-on-by-default-the-badge-job-stops-dictating-caller-permissions)
 - `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11-private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
@@ -49,6 +50,40 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — the `cleanup-gar-images` "keep-only" invariant is not true (correction)
+
+**What we claimed.** The 2026-07-27 build-once entry, and `TODO.md` after it, described the
+release-relative sha retention added in `v1.17.0` as **keep-only — "so it can only ever
+delete less."** That claim was reasoning about the intent of the change, not a measurement,
+and it was then used to justify treating `cleanup-gar-images` repins as low risk.
+
+**What a measurement shows.** Repinning `Realm-ID/project` from `v1.15.0` to `v1.21.1`,
+dry-run on both pins against the same `backend` repo minutes apart (310 images, 2 live
+digests):
+
+| | `v1.15.0` | `v1.21.1` |
+|---|---|---|
+| kept | 20 | 24 |
+| delete candidates | **103** | **105** |
+
+Diffed by digest: **2 digests are in the new plan and not the old, 0 the other way.** A
+strict superset. Both additions are untagged `api` images, so the practical risk is low —
+nothing tagged, nothing live — but the invariant is wrong, and it was load-bearing.
+
+**Why it matters more than two images.** The claim is exactly what let a repin look safe
+without evidence. `TODO.md` separately prescribed a dry-run proof per GAR repo; had that not
+existed, this would have shipped on the strength of a sentence someone wrote from intent.
+The lesson is the same one `v1.21.1` taught a few hours earlier: **a property that was
+reasoned about is not a property that was measured**, and the difference only shows up
+against a real caller.
+
+**Action.** The claim is corrected in `TODO.md` with the measured numbers, and repinning a
+`cleanup-gar-images` caller now explicitly requires a dry-run plan diff first. The root
+cause of the two extra deletions is **not yet established** — the plausible mechanism is
+that classifying sha-tagged images against the new window changes which untagged digests
+fall outside the protected set, but that is untested. Deliberately recorded as open rather
+than papered over.
 
 ## 2026-08-11 — Default-on badges must not fail CI for callers without a coverage report (bug fix)
 
