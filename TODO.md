@@ -111,10 +111,11 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
 - [ ] `.github/workflows/manage-config-secrets.yml` — implement the reserved `eso`
   backend (currently errors "not implemented"): emit an `ExternalSecret` CR
   referencing the GSM secret written by the `gsm` backend.
-- [ ] `docs/ci-go.md` / `docs/ci-node.md` — every `Example caller` block still pins
-  `@v1.4.0` while the repo is at `v1.15.0`; the new README-badges examples pin
-  `@v1.16.0`, so the two docs now contradict themselves. Sweep all example pins to
-  the current tag (and check the other `docs/*.md` for the same staleness).
+- [x] `docs/*.md` / `README.md` — **example pins swept to `v1.20.0` (2026-08-11).** All 39
+  `uses: …@vX.Y.Z` lines across the docs were spread over twelve different tags, the oldest
+  `v1.4.0`, so most copy-paste examples silently gave the reader a stale contract. Now uniform.
+  **This will rot again** — the drift-report entry below is the durable fix; until it exists,
+  sweep as part of each release.
 - [ ] `ci-go.yml` / `ci-node.yml` — **`update_badges` is not yet dogfooded; this gates
   the `v1.16.0` tag.** Nothing about `contents: write`, caller permission-capping, or
   the commit-back push is testable locally. Dogfood is **quizzing-pro/api#2045**
@@ -144,4 +145,43 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   references to 4 reusables (`ci-go`, `deploy-cluster-keyed`, `manage-config-secrets`,
   `promote-image`) are still
   at `@v1.11.0` and still emit the Node-20 `docker/build-push-action` deprecation warning.
+- [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **generalise private-registry auth beyond a
+  single npm registry.** The `npm_registry_url` / `npm_registry_scope` / `npm_auth_token` trio
+  delegates to `actions/setup-node`'s `registry-url`, which writes exactly **one** registry line
+  into `$RUNNER_TEMP/.npmrc`. A repo pulling scoped packages from two private registries (e.g.
+  GitHub Packages *and* Artifact Registry npm) still has to hand-roll its own `.npmrc`. Deferred
+  deliberately — no caller needs it yet, and a list-of-registries input would mean writing and
+  owning the `.npmrc` ourselves instead of delegating. Documented as a known limitation in
+  `docs/ci-node.md` and `docs/deploy-cloudflare-pages.md`; revisit when a second registry
+  actually shows up.
+- [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.** Both
+  rely on `setup-node`'s cache, which covers only `~/.npm`; npm still unpacks and links the tree
+  on every run. `eazyupdates-ui`'s outgoing GKE workflow caches `node_modules` itself, keyed on
+  `hashFiles('package-lock.json')` with no `restore-keys` (a prefix fallback would restore a tree
+  built from a different lockfile), and its comment puts the tree at **~1.2 GB** — so migrating it
+  to the reusables is a measurable build-time regression. Worth an opt-in
+  `cache_node_modules` input. Note the key must include the Node version, and it is only sound
+  because `npm ci` is deterministic.
+- [ ] `deploy-cloudflare-pages.yml` — **add a post-deploy smoke check** (`smoke_path` + bounded
+  retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `Realm-ID/ui`
+  hand-rolls exactly this after the **2026-06-29 `/device` outage**, where a stale bundle went
+  live with a broken client-routed path and nothing caught it — Pages deploys are
+  eventually-consistent, so the poll needs a bounded retry, not a single curl. It is also part of
+  why that repo has not migrated to the reusable. **Six consumers**: the five current callers
+  (`AutoMahn/{ui,admin-ui,website}`, `Traide-Co/{webapp,website}`) plus `eazyupdates-ui`. Lift the
+  logic from `Realm-ID/ui`'s `deploy.yml` rather than reinventing it.
+- [ ] **`Realm-ID/ui` + `Realm-ID/website` are the unmigrated Cloudflare Pages tail.** `ui` pins
+  `cloudflare/wrangler-action@v4` — a **mutable tag**, which is precisely what this repo's SHA-pin
+  CI rule exists to prevent, on a workflow holding a Pages deploy token; `website` shells out to
+  `npx wrangler`. Both should move to `deploy-cloudflare-pages`, but the smoke-check gap above is
+  a real blocker for `ui` — do that first, then migrate.
+- [ ] ~~build-once/promote for frontends~~ — **considered and rejected 2026-08-11.** Adding
+  `build_only` + cross-run artifact download + a `predeploy_command` seam to
+  `deploy-cloudflare-pages` (so one bundle could serve stage and prod, differing only in a
+  generated `environment.js`) was scoped for the eazyupdates-ui migration and dropped. A fleet
+  check found **all seven** platform frontends are single-environment, tag-triggered, build-and-
+  deploy-in-one-job, with config injected at build time from `vars.*` — so it would have added an
+  artifact race, retention tuning, a `github_token`, and a **second `eval` seam** to a
+  credential-minting workflow that five repos depend on, to serve exactly one caller. Revisit only
+  if a second frontend genuinely grows a stage environment.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)

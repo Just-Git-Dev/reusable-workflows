@@ -38,10 +38,13 @@ on:
         required: false
         default: 'dist'
       node_version:
-        description: 'Node.js version for the build. Accepts any setup-node spec (20, 20.x, lts/*).'
+        description: >-
+          Node.js version for the build (any setup-node spec: 24, 22, lts/*).
+          Defaults to the active LTS. Node 20 reached end-of-life on 2026-04-30 and
+          receives no security patches — pin it explicitly only if you must.
         type: string
         required: false
-        default: '20'
+        default: '24'
       node_cache:
         description: 'setup-node cache backend (npm | yarn | pnpm). Empty string disables caching.'
         type: string
@@ -49,6 +52,22 @@ on:
         default: 'npm'
       cache_dependency_path:
         description: 'Lockfile setup-node keys its cache on. Defaults to package-lock.json in working_directory.'
+        type: string
+        required: false
+        default: ''
+      npm_registry_url:
+        description: >
+          Private npm registry the build authenticates against, e.g. https://npm.pkg.github.com.
+          Empty (the default) leaves registry auth untouched — setup-node writes no .npmrc
+          at all, so callers that do not need it are unaffected.
+        type: string
+        required: false
+        default: ''
+      npm_registry_scope:
+        description: >
+          Package scope routed to npm_registry_url, e.g. "@acme". Optional: for
+          npm.pkg.github.com setup-node falls back to the repository owner. Ignored
+          unless npm_registry_url is set.
         type: string
         required: false
         default: ''
@@ -71,6 +90,14 @@ on:
       cloudflare_api_token:
         description: 'Cloudflare API token with "Cloudflare Pages: Edit".'
         required: true
+      npm_auth_token:
+        description: >
+          Token for npm_registry_url, exposed to the build step as NODE_AUTH_TOKEN.
+          A secret rather than an input because workflow_call inputs are not masked in
+          logs. For GitHub Packages this needs read:packages, and must be a PAT when the
+          package lives in a different repo than the caller — GITHUB_TOKEN only reaches
+          packages owned by, or explicitly shared with, the caller repo.
+        required: false
     outputs:
       deployment_url:
         description: 'URL of the deployment produced by this run.'
@@ -108,9 +135,17 @@ jobs:
           node-version: ${{ inputs.node_version }}
           cache: ${{ inputs.node_cache }}
           cache-dependency-path: ${{ inputs.cache_dependency_path || format('{0}/package-lock.json', inputs.working_directory) }}
+          # Empty ⇒ setup-node skips auth entirely (no .npmrc, no NPM_CONFIG_USERCONFIG),
+          # so callers without a private registry keep exactly today's behaviour.
+          registry-url: ${{ inputs.npm_registry_url }}
+          scope: ${{ inputs.npm_registry_scope }}
 
       - name: Build
         env:
+          # The default build_command installs, so the token belongs on this step.
+          # setup-node writes `_authToken=${NODE_AUTH_TOKEN}` into $RUNNER_TEMP/.npmrc;
+          # npm expands it here. Empty when no registry is configured.
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token }}
           # Passed through the environment, never spliced into the script body:
           # a caller-supplied string interpolated into `run:` is a script-injection seam.
           BUILD_COMMAND: ${{ inputs.build_command }}
