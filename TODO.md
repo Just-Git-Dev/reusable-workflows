@@ -153,6 +153,14 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   owning the `.npmrc` ourselves instead of delegating. Documented as a known limitation in
   `docs/ci-node.md` and `docs/deploy-cloudflare-pages.md`; revisit when a second registry
   actually shows up.
+- [ ] `ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.** Both
+  rely on `setup-node`'s cache, which covers only `~/.npm`; npm still unpacks and links the tree
+  on every run. `eazyupdates-ui`'s outgoing GKE workflow caches `node_modules` itself, keyed on
+  `hashFiles('package-lock.json')` with no `restore-keys` (a prefix fallback would restore a tree
+  built from a different lockfile), and its comment puts the tree at **~1.2 GB** — so migrating it
+  to the reusables is a measurable build-time regression. Worth an opt-in
+  `cache_node_modules` input. Note the key must include the Node version, and it is only sound
+  because `npm ci` is deterministic.
 - [ ] `deploy-cloudflare-pages.yml` — **add a post-deploy smoke check** (`smoke_path` + bounded
   retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `Realm-ID/ui`
   hand-rolls exactly this after the **2026-06-29 `/device` outage**, where a stale bundle went
