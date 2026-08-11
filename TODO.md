@@ -242,6 +242,13 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   why that repo has not migrated to the reusable. **Six consumers**: the five current callers
   (`AutoMahn/{ui,admin-ui,website}`, `Traide-Co/{webapp,website}`) plus `eazyupdates-ui`. Lift the
   logic from `Realm-ID/ui`'s `deploy.yml` rather than reinventing it.
+- [ ] **Repin the three GAR callers onto `v2.0.0`** (release-relative retention). `Realm-ID/project`
+      is on `@v1.21.1`; **`Traide-Co/project` and `AutoMahn/project` are still on `@v1.15.0`**, which
+      predates the retention window entirely, so today they run on `keep_semver_count` + age alone.
+      Per repo: dry-run BOTH pins, diff the plans, then repin. Expect a larger first sweep — v1 was
+      silently retaining a backlog. `realm-id` takes `grace_period_days: 1` (it is the one doing
+      build-once promotion). Fold `Traide-Co/project#65`'s pin-comment fix and incident record into
+      the Traide-Co repin PR rather than merging it separately — same file, guaranteed conflict.
 - [ ] **`Realm-ID/ui` + `Realm-ID/website` are the unmigrated Cloudflare Pages tail.** `ui` pins
   `cloudflare/wrangler-action@v4` — a **mutable tag**, which is precisely what this repo's SHA-pin
   CI rule exists to prevent, on a workflow holding a Pages deploy token; `website` shells out to

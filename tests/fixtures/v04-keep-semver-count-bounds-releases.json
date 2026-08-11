@@ -1,0 +1,36 @@
+{
+  "name": "V4 \u2014 releases beyond keep_semver_count are deleted (ports t22)",
+  "why": "keep_semver_count=2 keeps v3 and v2; v1 falls outside and, with grace 0, is older than the oldest retained image, so it goes.",
+  "env": {
+    "KEEP_SEMVER_COUNT": "2"
+  },
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel3",
+      "tags": [
+        "v3.0.0"
+      ],
+      "days_ago": 5
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel2",
+      "tags": [
+        "v2.0.0"
+      ],
+      "days_ago": 10
+    },
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 20
+    }
+  ],
+  "expect_delete": [
+    "api@sha256:rel1"
+  ]
+}

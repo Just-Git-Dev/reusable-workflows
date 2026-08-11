@@ -1,0 +1,18 @@
+{
+  "name": "V11 \u2014 an uncompilable release_tag_pattern aborts (ports t15)",
+  "why": "Silently treating it as 'no releases' would look identical to a healthy inert repo. Fail loudly instead.",
+  "env": {
+    "RELEASE_TAG_PATTERN": "^v(\\d+$"
+  },
+  "images": [
+    {
+      "package": "api",
+      "version": "sha256:rel1",
+      "tags": [
+        "v1.0.0"
+      ],
+      "days_ago": 10
+    }
+  ],
+  "expect_exit": 1
+}

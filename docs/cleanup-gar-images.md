@@ -1,67 +1,101 @@
 # cleanup-gar-images
 
-Age-sweeps every image in a Google Artifact Registry Docker repo.
+Sweeps a Google Artifact Registry Docker repo on a **release-relative** policy:
+what survives is decided by your release history, not by the calendar.
 
-The keep-set is built from digests that are live on **all** Cloud Run Services
-*and* Jobs in-region (cron and migration containers commonly live on Jobs, not
-Services), plus the most-recent N semver tags per image, plus any tag listed in
-`keep_tags` or matching a prefix in `keep_tag_prefixes`, plus commit-sha-tagged
-images inside the [sha retention window](#sha-retention-build-once-promote-to-prod).
-Everything else is deleted once it exceeds the untagged/tagged age limits.
+> **v2.0.0 is a breaking change.** `sha_tag_pattern`, `sha_retention_releases`,
+> `untagged_max_age_days` and `tagged_max_age_days` are **gone**. See
+> [Migrating from v1](#migrating-from-v1) — and read
+> [DECISIONS.md](../DECISIONS.md) for why the age model was retired.
+
+## The model
+
+Per image name, every artifact is one of two things:
+
+- **RELEASE** — carries a tag matching `release_tag_pattern` (default `vX.Y.Z`)
+- **BUILD** — everything else: commit-sha tags, `:latest`-only images, other tag
+  schemes, and untagged manifests including buildx index children
+
+There is no third category, so there is no artifact the policy cannot see. That
+is the fix for v1's worst trait: its window only recognised images whose tag
+matched `sha_tag_pattern`, so on a repo that tags no commit shas the window
+protected *nothing* and age silently made every decision.
+
+An artifact is **kept** if any of these holds:
+
+1. its digest is live on a Cloud Run Service or Job
+2. it carries a tag in `keep_tags` or matching `keep_tag_prefixes`
+3. it is among the most-recent `keep_semver_count` **releases**
+4. it is a **build newer than the boundary** — the `build_retention_releases`-th
+   most recent release. That is your pending builds plus a rollback window, and
+   it is what protects the `:<sha>` promotion source under build-once
+5. it is an untagged **child of a release being kept** (see below)
+
+Everything else is deleted once it is more than `grace_period_days` **older than
+the oldest image kept by rules 3–4**.
 
 If **zero** live digests resolve, the workflow aborts rather than treating the
 whole repo as garbage.
 
-### Precedence
+### The fail-safe: no releases means nothing is deleted
 
-An image is kept if **any** of these holds, checked in this order:
+Fewer than `build_retention_releases` releases for an image ⇒ no boundary ⇒
+**every build is kept, at any age**. A repo that has never released, or one whose
+`release_tag_pattern` is wrong, is left completely alone.
 
-1. its digest is live on a Cloud Run Service or Job
-2. it carries a tag in `keep_tags` or matching `keep_tag_prefixes`
-3. it is among the most-recent `keep_semver_count` semver-tagged digests
-4. it is sha-tagged and inside the sha retention window
+That is deliberate, and it is the direction a destructive workflow should fail
+in. The cost is that a *misconfigured* repo looks exactly like a healthy
+pre-release one, so the run **warns** when an image has no release-tagged
+artifacts at all. Silence is the thing to be afraid of: `traide-in` ran green at
+`deleted=0` for six consecutive days while its registry grew to 580 MB.
 
-Otherwise it is deleted **only if** it also exceeds `untagged_max_age_days` /
-`tagged_max_age_days`. Window membership is *sufficient* to keep (it overrides
-`tagged_max_age_days`); falling outside the window is *not* sufficient to
-delete — age is still required. That asymmetry is what keeps the rule from ever
-widening the delete-set.
+### The cutoff is anchored to your artifacts, not to `now`
 
-### Age is measured from `createTime`
+`grace_period_days` is measured back from the oldest image the release policy
+retained — not from the current time. At the default `0` the cutoff *is* that
+image, so anything older goes on the next sweep.
 
-Not `updateTime`. GAR bumps `updateTime` whenever a tag is **moved off** a digest, so
-an image reads as "days since the last tag churn" rather than its real age, and the
-effective retention is *threshold + churn interval*. A digest pushed on 2026-06-30
-still reported 28d on 2026-08-11 — under a 30d limit — because `latest` had moved off
-it two weeks after the push.
+This is what makes a plan reproducible. Under v1's `age >= 15d` rule, two dry
+runs 2m27s apart legitimately produced different plans, because two untagged
+digests crossed the 15-day line in between — and the difference was read as a
+behaviour change in the workflow. Nothing here depends on the wall clock, so two
+sweeps minutes apart agree.
 
-How bad that is depends on the repo's release cadence, and it is worth being precise
-rather than alarming: measured across three fleet registries, switching to
-`createTime` newly deleted **one** image on `auto-mahn`, **two** on `realm-id` and
-**one** on `traide-in` — all 31–42 days old and outside the keep-set. A repo whose
-tags churn *faster* than `tagged_max_age_days` is the pathological case: there,
-nothing tagged ever reaches the threshold at all.
+**Deliberately excluded from the anchor:** live digests and `keep_tags`
+protections. They still keep their own digest, but they do not move the cutoff —
+otherwise one service pinned to a year-old image, or an ancient `buildcache` tag,
+would drag the cutoff back with it and quietly disable the sweep for the whole
+repo.
 
-`createTime` is used first, falling back to `uploadTime` then `updateTime` for the
-rare record that omits it.
+### Age comes from `createTime`
 
-### Multi-arch indexes: children are not swept independently
+Not `updateTime`. GAR bumps `updateTime` whenever a tag is **moved off** a
+digest, so an image reads as "days since the last tag churn" rather than its real
+age. A digest pushed 2026-06-30 still reported 28d on 2026-08-11 because
+`latest` had moved off it two weeks after the push.
 
-A `docker buildx` push is an **index**, not an image. The tag names a manifest list
-whose children — `linux/amd64`, plus the `unknown/unknown` attestation manifest —
-are untagged manifests in their own right, so they trip `untagged_max_age_days`
-while their parent is still a current release.
+v2 uses one clock everywhere — ranking releases, placing the boundary, measuring
+the cutoff. v1 used three different notions of time in adjacent blocks, so its
+keep-set and its window could disagree about which release was second-most-recent.
+`createTime` first, falling back to `uploadTime` then `updateTime` for the rare
+record that omits it.
 
-GAR refuses to delete a child while its parent index exists (`referenced by parent
-manifests`), so those digests are **reported, not queued**: the plan lists them
-under `blocked_by_parent` with the parent that holds them. They are freed by
-deleting the parent tag, which cascades — so a child *is* queued when its own
-parent is also being deleted in the same run.
+### Multi-arch indexes: children of kept releases are kept
 
-This matters because the two rules interact: a repo whose tagged images never age
-out (see above) has every untagged child permanently pinned, and the sweep deletes
-nothing at all while reporting success. If a run plans deletions and removes none,
-it now emits a workflow warning rather than passing quietly.
+A `docker buildx` push is an **index**, not an image. The tag names a manifest
+list whose children — `linux/amd64`, plus the `unknown/unknown` attestation
+manifest — are untagged manifests in their own right, and therefore *builds*.
+
+GAR refuses to delete a child while its parent index exists (`referenced by
+parent manifests`). So a child of a release we are keeping is **kept**, not
+queued: attempting it every run is guaranteed waste, and it is what made these
+plans ~95% impossible candidates fleet-wide. A child whose parent is being
+deleted in the same run **is** queued — phase 1 removes tagged indexes first and
+`--delete-tags` cascades.
+
+Anything still blocked at execution time is reported under `blocked_by_parent`
+with the parent holding it. If a run plans deletions and removes none, it emits a
+warning rather than passing quietly.
 
 ## Inputs
 
@@ -72,12 +106,11 @@ it now emits a workflow warning rather than passing quietly.
 | `wif_provider` / `service_account` | yes | — | |
 | `gcp_region` | no | `asia-southeast1` | region of both the GAR repo and Cloud Run |
 | `keep_semver_count` | no | `5` | most-recent `vX.Y.Z` digests kept per image |
-| `untagged_max_age_days` | no | `15` | |
-| `tagged_max_age_days` | no | `30` | |
+| `release_tag_pattern` | no | `^v\d+\.\d+\.\d+$` | regex (Python `re.match`); an artifact carrying a matching tag is a RELEASE, everything else is a BUILD |
+| `build_retention_releases` | no | `2` | keep builds newer than the Nth-most-recent release. Must be ≥1 and ≤ `keep_semver_count` |
+| `grace_period_days` | no | `0` | reprieve for artifacts outside the keep-set, measured back from the oldest release-policy-retained image |
 | `keep_tags` | no | `latest,buildcache` | exact tags never deleted |
 | `keep_tag_prefixes` | no | `hotfix-,rc-,debug-` | tag prefixes never deleted |
-| `sha_tag_pattern` | no | `^[0-9a-f]{40}$` | regex (Python `re.search`) matching commit-sha tags; empty ⇒ sha retention off |
-| `sha_retention_releases` | no | `1` | keep sha images newer than the Nth-most-recent release; `0` ⇒ off |
 | `relock_immutable_tags` | `true` | re-enable immutable tags after the sweep — **on by default**; see [Immutable tags](#immutable-tags) |
 | `dry_run` | no | `true` | `true` prints the plan and deletes nothing |
 
@@ -129,52 +162,31 @@ repository, **only if** immutability is enabled. Repos without it need nothing e
 which also means IAM, not a workflow input, is the real gate on whether this workflow can
 change a repository's settings at all.
 
-## sha retention (build-once, promote-to-prod)
+## Migrating from v1
 
-Under [build-once](deploy-cloud-run.md#build_only-buildonce-promote-to-prod), a
-merge to `main` publishes `image:<commit-sha>` and a release only **retags** that
-digest — `promote-image` never rebuilds. The `:<sha>` image is therefore the
-promotion source, not a disposable build artifact, and an age-only sweep would
-silently destroy it on a slow release cycle.
+`v2.0.0` removes four inputs. A caller passing any of them fails at startup with
+GitHub's "unexpected input" error — deliberately, rather than accepting and
+ignoring them, because a caller who believes they still have a 15-day grace
+period and does not is worse off than one whose run refuses to start.
 
-Per package, this workflow keeps every sha-tagged image **newer than the
-`sha_retention_releases`-th most recent release**:
+| v1 input | v2 |
+|---|---|
+| `sha_tag_pattern` | **gone.** Classification is "carries a release tag" vs not, so build tags need no pattern of their own |
+| `sha_retention_releases: 1` | `build_retention_releases: 2` — same boundary, counted as "how many releases of builds do I keep" rather than an offset |
+| `untagged_max_age_days: 15` | `grace_period_days` — one knob for both, and relative to your releases rather than to `now` |
+| `tagged_max_age_days: 30` | as above |
 
-```
-       ...older releases...      v1.0.0            v2.0.0        HEAD
-  ──────────────────────────────────┼──────────────────┼───────────────▶ time
-                                 boundary
-     sha images here: deletable  │  sha images here: KEPT (window)
-                                 │  ├─ one release of rollback headroom
-                                 └─ ranked[sha_retention_releases]
-```
+**What changes on the ground.** v2 deletes *more* than v1 on an actively-released
+repo — v1's real behaviour was "delete things older than 15/30 days", and a repo
+whose tags churn faster than that deleted nothing at all. Under v2, everything
+outside the release window goes at the default `grace_period_days: 0`.
 
-With the default `1`, that is "everything built since the previous release" —
-unreleased-but-pending builds plus one release worth of rollback window.
+**So dry-run both pins before repinning**, per [AGENTS.md](../AGENTS.md) §5, and
+read the diff. Expect a larger first sweep that drains a backlog v1 had been
+silently retaining, then a small steady state.
 
-Three properties worth knowing:
-
-- **Releases are ordered by time, not semver precedence.** A sha image carries no
-  semver, so the comparison is time-based regardless — and semver ordering breaks
-  on backports (a `v2.9.0` cut today after a long-released `v3.0.0` would put the
-  boundary at *today* and delete genuine pending builds).
-- **Keep-only.** The pass can only add to the keep-set. Enabling it, or raising
-  `sha_retention_releases`, can only ever delete **less** than before — so it is
-  on by default. `sha_retention_releases: 0` reproduces the previous behaviour
-  exactly.
-- **`keep_semver_count` is floored at `sha_retention_releases + 1`**, so the
-  releases that define the window cannot themselves age out and move the boundary
-  between sweeps.
-
-> **Caveat — a package with fewer than `sha_retention_releases + 1` releases has
-> no boundary, so *every* sha image is kept regardless of age.** This is
-> deliberate (there is nothing to prove a sha was superseded), but a package that
-> never cuts a release will accumulate sha images indefinitely. Set
-> `sha_retention_releases: 0` for packages that are not on the build-once flow.
-
-The dry-run plan and step summary carry a `sha_retention` block per package —
-the boundary timestamp and tags, release count, and how many sha images were
-kept. That is the only review surface for this rule; read it on the first sweep.
+**Set `grace_period_days: 1` (or more) on a repo doing build-once/promote**, so a
+digest that is mid-promotion when the sweep runs is not removed underneath it.
 
 ## Outputs
 
@@ -189,9 +201,9 @@ and `roles/run.viewer` (to enumerate live Services and Jobs).
 
 If you use a BuildKit **registry** cache (`cache-to:
 type=registry,ref=...:buildcache`), that cache is an ordinary tagged image in
-the same repo. It is in the default `keep_tags` for exactly this reason — with
-it removed, a repo that goes `tagged_max_age_days` without a release would have
-its build cache age-deleted and the next build would be a cold rebuild.
+the same repo. It is in the default `keep_tags` for exactly this reason — with it removed, the
+cache would be classified as a BUILD, fall outside the release window as soon as
+two releases passed, and be deleted, making the next build a cold rebuild.
 
 ## Always dry-run first
 
@@ -237,7 +249,7 @@ jobs:
 
   cleanup:
     needs: resolve
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v1.24.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.0.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -263,10 +275,11 @@ python3 tests/run_plan_tests.py     # also runs in CI on every PR
 ```
 
 Fixtures live in `tests/fixtures/*.json` and declare image ages relative to now.
-Beyond each fixture's expected delete-set, the runner re-runs every fixture with
-`sha_retention_releases: 0` and asserts the window run never deletes anything the
-legacy run would not — checking the keep-only invariant structurally rather than
-case by case.
+Beyond each fixture's expected delete-set, the runner re-runs every fixture twice
+more — once with a longer `build_retention_releases`, once with a large
+`grace_period_days` — and asserts neither plan deletes anything the default does
+not. Both are monotonicity claims the policy makes, checked structurally on every
+fixture rather than case by case.
 
 ## Concurrency
 
