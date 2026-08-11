@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [README badges on by default; the badge job stops dictating caller permissions](#2026-08-11--readme-badges-on-by-default-the-badge-job-stops-dictating-caller-permissions)
 - `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11-private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
 - `2026-07-28` — [`promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)](#2026-07-28-promote-image-races-the-build-it-promotes-from-bounded-source_wait_seconds-plus-the-first-executable-run-body-tests-bug-fix)
 - `2026-07-28` — [`run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out](#2026-07-28-run-db-job-built-docker_target-added-the-runner-side-prebuild-hook-deliberately-left-out)
@@ -47,6 +48,41 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — README badges on by default; the badge job stops dictating caller permissions
+
+**Context.** `update_badges` shipped opt-in (v1.16.0/v1.17.0) with the badge job declaring
+`permissions: contents: write`. That declaration is static — permissions cannot be
+conditional — and GitHub validates a **called** workflow's permissions against the caller
+**at startup, before any job-level `if:` is evaluated**. So a caller granting
+`contents: read` failed the entire run with `startup_failure` and no logs, *even with
+`update_badges: false`*. `Traide-Co/webapp` hit this on a real upgrade and froze at
+`v1.15.0` with a comment explaining why; the copy-paste example shipped in `v1.20.0` had
+the same defect, patched in `v1.20.1`.
+
+**Decision.** Badges default to **on** (opt out with `update_badges: false`), and the
+permission trap is removed first — flipping the default before fixing it would have broken
+every caller that had not granted write, which is most of them.
+
+**Three changes make default-on safe.** The workflow-level `permissions: contents: read`
+is gone and the badge job declares nothing, so it **inherits whatever the caller granted**;
+the build/test jobs declare `contents: read` explicitly, so least privilege is unchanged
+where it matters. The push then degrades: a permissions rejection emits a `::warning::`
+naming both the fix and the opt-out, and exits 0. And a missing `readme_path` became a
+warning-and-skip instead of `::error::` + exit 1 — defensible when someone opted in,
+unacceptable when the feature runs against repos that never asked.
+
+**Insert, not update-only** (user's call). Badges are inserted after the first `# ` heading
+when absent, so the first upgrade lands a `github-actions[bot]` commit on callers' default
+branches. Update-only was the conservative alternative and was rejected: it would mean the
+feature never reaches anyone who has not already opted in, which defeats defaulting it on.
+
+**The degradation is tested, not asserted.** `tests/run_step_tests.py` gained cases that
+execute the shipped `Commit + push` body against a stubbed git: clean push, read-only token
+(exits 0, warns, names `contents: write` and the opt-out, does not retry), concurrent-push
+rebase-and-retry, genuine failure (still exits 1, error surfaced), and no-change. It also
+asserts the `ci-node` and `ci-go` bodies are byte-identical, since the two silently drifting
+is the likely way this regresses.
 
 ## 2026-08-11 — Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`
 
