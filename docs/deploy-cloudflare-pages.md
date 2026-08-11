@@ -16,10 +16,12 @@ cannot hold deploy credentials, so those runs would only fail noisily.
 | `account_id` | input (req) | — | Cloudflare account id — not a credential, pass a repo/org variable |
 | `working_directory` | input | `.` | build and deploy from here |
 | `build_command` | input | `npm ci && npm run build` | run in `working_directory` |
+| `install_command` | input | `''` | optional install run *before* `build_command`. Empty ⇒ today's behaviour (`build_command` installs too). Required by `cache_node_modules` |
 | `output_dir` | input | `dist` | static assets, relative to `working_directory` |
 | `node_version` | input | `24` | any setup-node spec: `24`, `22`, `lts/*`. Defaults to the **active LTS**; Node 20 is EOL (2026-04-30) |
 | `node_cache` | input | `npm` | `npm`/`yarn`/`pnpm`; empty string disables caching |
 | `cache_dependency_path` | input | `<working_directory>/package-lock.json` | lockfile the cache keys on |
+| `cache_node_modules` | input | `false` | cache the installed tree and skip `install_command` on an exact hit — see [Caching node_modules](#caching-node_modules) |
 | `npm_registry_url` | input | `''` | private npm registry the build authenticates against. Empty ⇒ untouched — see [Private registries](#private-registries) |
 | `npm_registry_scope` | input | `''` | package scope routed there, e.g. `@acme`. Optional for GitHub Packages |
 | `npm_auth_token` | **secret** | — | optional; token for `npm_registry_url`, exposed to the build step as `NODE_AUTH_TOKEN` |
@@ -37,6 +39,33 @@ cannot hold deploy credentials, so those runs would only fail noisily.
 
 `deployment_url` — the URL of the deployment this run produced.
 
+## Caching node_modules
+
+`node_cache` is `setup-node`'s cache of the **npm download cache** (`~/.npm`); npm
+still unpacks and links the whole tree on every run, which for a large app is most
+of the build time.
+
+Caching the tree itself takes two inputs, because the default `build_command`
+installs *and* builds — and `npm ci` **deletes `node_modules` before installing**, so
+a restored tree would be thrown away. Split the install out first:
+
+```yaml
+    with:
+      install_command: npm ci
+      build_command: npm run build      # no longer installs
+      cache_node_modules: true
+```
+
+Setting `cache_node_modules` without `install_command` **fails the run immediately**
+rather than deploying a build that silently never used the cache.
+
+On an exact lockfile hit the install is skipped entirely, which is the point and also
+the risk — the same trade-offs as [`ci-node`](ci-node.md#caching-node_modules):
+lifecycle scripts (`postinstall`, `prisma generate`, `husky`) do not run; the key is
+exact-match only (no `restore-keys`) and includes the Node version `setup-node`
+resolved; only the top-level `node_modules` under `working_directory` is cached. A
+skipped install prints a `::notice::`.
+
 ## Private registries
 
 If the build installs a scoped package from a private registry, point
@@ -44,7 +73,8 @@ If the build installs a scoped package from a private registry, point
 inputs are not masked in logs. `actions/setup-node` writes
 `$RUNNER_TEMP/.npmrc` with `//<registry>/:_authToken=${NODE_AUTH_TOKEN}` and
 `@scope:registry=<url>`; the token is exposed to the **build** step, since the
-default `build_command` is what installs.
+default `build_command` is what installs — and to the **install** step as well, for
+callers who split the install out via `install_command`.
 
 ```yaml
     with:
