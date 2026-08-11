@@ -95,6 +95,10 @@ def run_plan(source, fixture, env_overrides, tmp):
     images_path.write_text(json.dumps(images))
     live_path = tmp / "live-digests.txt"
     live_path.write_text("\n".join(fixture.get("live_digests", [])) + "\n")
+    # Always written, even when empty: otherwise the plan would fall through to the
+    # real /tmp/manifest-children.json and the suite would stop being hermetic.
+    child_path = tmp / "manifest-children.json"
+    child_path.write_text(json.dumps(fixture.get("child_map", {})))
     src_path = tmp / "plan.py"
     src_path.write_text(source)
 
@@ -104,6 +108,7 @@ def run_plan(source, fixture, env_overrides, tmp):
     env.update(env_overrides)
     env["PLAN_FIXTURE"] = str(images_path)
     env["LIVE_DIGESTS_FILE"] = str(live_path)
+    env["CHILD_MAP_FILE"] = str(child_path)
 
     proc = subprocess.run(
         [sys.executable, str(src_path)], env=env, capture_output=True, text=True
@@ -159,6 +164,16 @@ def main():
                     "%s: delete-set mismatch\n    want: %s\n    got:  %s" % (name, want, got)
                 )
                 continue
+
+            if "expect_blocked" in fixture:
+                got_blocked = sorted(i["image"] for i in plan.get("blocked_by_parent", []))
+                want_blocked = sorted(fixture["expect_blocked"])
+                if got_blocked != want_blocked:
+                    failures.append(
+                        "%s: blocked-set mismatch\n    want: %s\n    got:  %s"
+                        % (name, want_blocked, got_blocked)
+                    )
+                    continue
 
             # Structural invariant, checked on EVERY fixture: the sha-retention pass
             # is keep-only, so turning it off can only ever delete MORE. If some

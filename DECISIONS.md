@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [`cleanup-gar-images` deleted nothing for six green runs: age read from `updateTime`, and undeletable children queued (bug fix)](#2026-08-11--cleanup-gar-images-deleted-nothing-for-six-green-runs-age-read-from-updatetime-and-undeletable-children-queued-bug-fix)
 - `2026-08-11` — [`badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice](#2026-08-11--badge_insert-default-on-badges-may-still-be-given-to-a-repo-but-it-is-now-a-nameable-choice)
 - `2026-08-11` — [Hard-error audit: a badge push failure could fail a caller's CI (bug fix)](#2026-08-11--hard-error-audit-a-badge-push-failure-could-fail-a-callers-ci-bug-fix)
 - `2026-08-11` — [The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)](#2026-08-11--the-gar-105-vs-103-delta-is-a-wall-clock-boundary-crossing-not-a-logic-change-root-cause-corrects-the-earlier-correction)
@@ -59,6 +60,59 @@ archived by age only; nothing is deleted, and both files are greppable.
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-08-11 — `cleanup-gar-images` deleted nothing for six green runs: age read from `updateTime`, and undeletable children queued (bug fix)
+
+**Symptom.** A caller (`Traide-Co/project`, pinned `@v1.15.0`) ran the daily sweep for six
+consecutive days at `deleted=0`, `failed=0`, exit 0 — a green check every morning while its
+GAR repo grew to 580 MB / 78 image versions. The plan was never empty: it queued 8, then 8,
+8, 12, 14, 16 candidates. Every one was skipped at execution.
+
+**Root cause — two defects that lock together.**
+
+1. **Age came from `updateTime`.** GAR bumps `updateTime` when a tag is *moved off* a
+   digest, so each new release re-ages the previous ones. `v0.4.0`, pushed 2026-06-30, read
+   as 28d on 2026-08-11 against a 30d limit because `latest` left it on 07-14. On a repo
+   that releases regularly no tagged image ever ages out — the threshold is unreachable, not
+   merely generous.
+2. **Untagged children of a surviving index were queued.** A buildx push is an OCI index:
+   the tag names a manifest list whose `linux/amd64` and `unknown/unknown` (attestation)
+   children are untagged manifests. They trip `untagged_max_age_days` immediately, but GAR
+   refuses to delete a child while its parent exists (`referenced by parent manifests`).
+   Measured on the caller's repo: **52 untagged versions, 52 child links, zero orphans** —
+   every "untagged" image the sweep saw was structurally undeletable.
+
+Together they are absorbing: (1) keeps every parent index alive forever, so (2) pins every
+child forever, so the sweep can only ever delete things that do not exist.
+
+**Why it wasn't caught.** The executor classifies `referenced by parent manifests` as
+`OK skipped(kept-parent)` — correct for the cascade case, but it made a plan that was 100%
+impossible indistinguishable from a healthy run. Nothing compared *planned* against
+*achieved*. The 12 existing fixtures all built images with `days_ago`, which writes
+`createTime`/`uploadTime`/`updateTime` to the *same* stamp, so no test could see which field
+the age rule read, and no fixture modelled the index/child relationship at all.
+
+**Fix.**
+- Age from `createTime` (then `uploadTime`, then `updateTime`) — the field that answers the
+  question the rule is asking.
+- A new step resolves index → child links from the registry v2 API and the plan drops any
+  candidate held by a **surviving** parent, reporting it under `blocked_by_parent`. A child
+  whose parent is doomed in the same run stays queued, because phase 1 cascades.
+- Best-effort by design: an unreachable registry yields an empty map and the previous
+  behaviour (queue, absorb the error) — this must never become a new way for a sweep to fail.
+- `planned > 0 && deleted == 0` now emits a workflow warning.
+
+**Measured, not reasoned** (AGENTS.md §5, and the correction entry below it). Both plan
+builders were run against a real 78-image dump of the caller's registry: **before — 20
+candidates, 18 of them impossible; after — 3 candidates, all deletable (`v0.4.0` plus the
+two children its own deletion frees), 18 correctly reported as held.** The net effect on
+that repo is *more* deletion, so this is a behaviour change, not a bug fix that can only
+delete less: callers should dry-run before repinning.
+
+**Tested.** `t26` gives one image divergent per-field timestamps (created 90d, updated 3d)
+and requires it to be deleted; `t25` models the buildx shape — index + amd64 + attestation
+across a kept, a doomed and an orphan case — and asserts the split between `to_delete` and
+`blocked_by_parent`. Both fail against the pre-fix source and pass after. `run_plan_tests.py`
+now always writes the child map, so the suite cannot read a stray `/tmp` file from the host.
 ## 2026-08-11 — `badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice
 
 **The open question from the hard-error audit, now decided.** The badge job *inserts* badges
