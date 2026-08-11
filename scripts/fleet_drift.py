@@ -11,12 +11,19 @@ Two failure modes are reported:
   * MUTABLE — pinned to a branch or a moving alias (`@main`, `@v1`), so the caller is
               running whatever that ref points at today
 
-The org list comes from `fleet.json`, deliberately committed rather than typed at the call
-site: the first manual sweep silently omitted an entire org.
+**This is an operator tool, not consumer monitoring, and it is not run on a schedule.**
+This repository is public: most callers are private and none of them are ours to watch.
+The only honest channels to a consumer are the release notes and their own Dependabot —
+see AGENTS.md. Point this at orgs you already administer, when you want an inventory of
+your own callers; it can see nothing else.
 
-    python3 scripts/fleet_drift.py                 # human table
-    python3 scripts/fleet_drift.py --format md     # job-summary markdown
-    python3 scripts/fleet_drift.py --json          # machine-readable
+Orgs are an explicit argument on purpose. There is no committed list, because a list
+shipped in a public repo would assert an ownership relationship over those orgs that this
+project does not have.
+
+    python3 scripts/fleet_drift.py --orgs my-org,other-org
+    python3 scripts/fleet_drift.py --orgs my-org --format md
+    python3 scripts/fleet_drift.py --orgs my-org --json
 """
 from __future__ import annotations
 
@@ -28,7 +35,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FLEET = ROOT / "fleet.json"
 SELF = "Just-Git-Dev/reusable-workflows"
 
 USES = re.compile(
@@ -135,15 +141,18 @@ def render_md(rows: list[dict], latest: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--orgs", required=True,
+                    help="Comma-separated orgs you administer. No default: this tool "
+                         "must never imply ownership of orgs it was merely pointed at.")
     ap.add_argument("--format", choices=["text", "md"], default="text")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--max-minors-behind", type=int, default=1)
     ap.add_argument("--fail-on-drift", action="store_true")
     args = ap.parse_args(argv)
 
-    orgs = json.loads(FLEET.read_text())["orgs"]
+    orgs = [o.strip() for o in args.orgs.split(",") if o.strip()]
     if not orgs:
-        print("::error::fleet.json lists no orgs — nothing would be scanned")
+        print("::error::--orgs was empty — nothing would be scanned")
         return 1
 
     gh = GH()

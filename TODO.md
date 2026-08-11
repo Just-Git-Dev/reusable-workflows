@@ -135,7 +135,13 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   the suite, `nolint_count` reads **57** (down from the frozen 78 — the narrower grep,
   measured against the real tree), **and a second push produces no new commit.** Only
   then tag `v1.16.0` and flip #2045's pin to the tag.
-- [x] **caller pin-drift is invisible — build a drift report. BUILT 2026-08-11** (`scripts/fleet_drift.py` + `.github/workflows/caller-drift.yml`, weekly + dispatch, org list in `fleet.json`). First real run: **24 of 32 caller pins need attention**, incl. nine in `AutoMahn/project` nobody had looked at. Needs `FLEET_READ_TOKEN` (cross-org read) before the schedule is useful. Original entry:  The 2026-07-27 repin sweep
+- [x] **caller pin-drift — reframed 2026-08-11.** Built as a weekly scan over a committed
+  list of four orgs, then **de-scoped the same day**: this repo is public, so most callers are
+  private and none are ours to watch. Shipping an org list in a public repo also asserts an
+  ownership relationship the project does not have. The scheduled workflow and `fleet.json`
+  are **removed**; `scripts/fleet_drift.py` survives as an operator tool requiring an explicit
+  `--orgs`. **The consumer-facing answer is Dependabot** (documented in AGENTS.md + README) —
+  it reaches private callers, which nothing we run can. Original entry:  (`scripts/fleet_drift.py` + `.github/workflows/caller-drift.yml`, weekly + dispatch, org list in `fleet.json`). First real run: **24 of 32 caller pins need attention**, incl. nine in `AutoMahn/project` nobody had looked at. Needs `FLEET_READ_TOKEN` (cross-org read) before the schedule is useful. Original entry:  The 2026-07-27 repin sweep
   (see DECISIONS.md) found 18 of the fleet's 27 caller lines stranded on `@v1.4.0`/`@v1.5.0`, six-plus
   releases behind, and only noticed because someone manually read check-run *annotations*
   across every caller. Nothing detects this. Wanted: a scheduled workflow in this repo that
@@ -187,6 +193,15 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   job *inserts* badges after the first `# ` heading when none exist, so every caller's README
   gets an unsolicited commit on first upgrade. Decide whether default-on should insert or only
   update badges that already exist.
+- [ ] **Tell callers, in their own run, when they are on an old version.** The obvious
+  mechanism does not exist: a **probe run on 2026-08-11 proved** that inside a called workflow
+  `GITHUB_WORKFLOW_REF` / `GITHUB_WORKFLOW_SHA` describe the **caller's** workflow, and the
+  `github` context contains **no `job_workflow_sha` key at all** (actionlint's model does not
+  know it either, and it gates CI). So a reusable cannot discover which version of *itself* is
+  running. The workable design is to **stamp the version into each workflow at release time**
+  (`WORKFLOW_VERSION: v1.22.0` in `env:`) and have a cheap, never-failing step compare it to
+  the latest release. That wants the same release automation as the pin sweep below — one
+  script stamping both, with CI asserting all stamps agree.
 - [ ] **Automate the doc example pin sweep at release time.** Every release since `v1.20.0`
   has needed a manual `perl -pi` pass over `docs/` + `README.md`, and it is exactly the kind of
   chore that gets skipped — which is how 39 pins ended up spread over twelve tags in the first

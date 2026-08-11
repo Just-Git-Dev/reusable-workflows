@@ -1,9 +1,0 @@
-{
-  "$comment": "Orgs scanned by scripts/fleet_drift.py. Committed rather than passed at the call site: the first manual sweep (2026-07-27) silently omitted the entire Realm-ID org, which is exactly the failure a hand-typed list at the call site invites. TODO.md tracks deriving this from infra-provisioning/projects instead.",
-  "orgs": [
-    "Just-Git-Dev",
-    "Realm-ID",
-    "AutoMahn",
-    "Traide-Co"
-  ]
-}
