@@ -117,7 +117,10 @@ auth setup entirely, writing no `.npmrc` and exporting no `NPM_CONFIG_USERCONFIG
 > **README badges are on by default** (since `v1.21.0`). To let the badge commit
 > land, grant `permissions: contents: write` on the job that calls this workflow.
 > Without it nothing breaks — the badges are generated and the push degrades to a
-> `::warning::`. Set `update_badges: false` to turn the feature off entirely.
+> `::warning::`. **No badge failure can fail your run**: a rejected push, a failed
+> rebase, a missing `readme_path` — all warn and exit 0. The feature is cosmetic and
+> on by default, so it must never gate a build. Set `update_badges: false` to turn it
+> off entirely.
 >
 > This workflow declares **no workflow-level `permissions:`**, so the badge job
 > inherits whatever you granted. That is deliberate: a reusable workflow declaring

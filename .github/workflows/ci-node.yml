@@ -627,11 +627,20 @@ jobs:
           fi
 
           echo "::notice::push rejected — rebasing once and retrying"
-          git pull --rebase origin "${BRANCH}"
-          if push; then exit 0; fi
-          if readonly_token; then
-            echo "::warning::README badges were generated but not pushed — the workflow token cannot write to '${BRANCH}'."
+          # Guarded: an unguarded `git pull --rebase` failing would abort this step
+          # under `set -e` and fail the caller's CI, which is the same unfairness the
+          # readonly_token branch below exists to avoid.
+          if ! git pull --rebase origin "${BRANCH}" 2>"$ERR"; then
+            echo "::warning::README badges were generated but not pushed — could not rebase onto '${BRANCH}'."
+            cat "$ERR" >&2
             exit 0
           fi
+          if push; then exit 0; fi
+
+          # No push failure may fail the run. Badges are cosmetic AND on by default,
+          # so this job executes for callers that never asked for them; failing their
+          # CI over a README commit is not a trade they agreed to. The reason is still
+          # surfaced — as a warning and on stderr — it just does not gate the build.
+          echo "::warning::README badges were generated but not pushed. See the error below; set 'update_badges: false' to stop trying."
           cat "$ERR" >&2
-          exit 1
+          exit 0

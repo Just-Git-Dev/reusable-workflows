@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [Hard-error audit: a badge push failure could fail a caller's CI (bug fix)](#2026-08-11--hard-error-audit-a-badge-push-failure-could-fail-a-callers-ci-bug-fix)
 - `2026-08-11` — [The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)](#2026-08-11--the-gar-105-vs-103-delta-is-a-wall-clock-boundary-crossing-not-a-logic-change-root-cause-corrects-the-earlier-correction)
 - `2026-08-11` — [Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`](#2026-08-11--opt-in-node_modules-caching-on-ci-node-and-deploy-cloudflare-pages-pages-gains-a-separate-install_command)
 - `2026-08-11` — [Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice](#2026-08-11--release-version-sweep-automated-doc-pins--a-workflow_version-stamp-enforced-twice)
@@ -56,6 +57,50 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — Hard-error audit: a badge push failure could fail a caller's CI (bug fix)
+
+Result of the hard-error audit `TODO.md` asked for before any future default flip. Every
+`::error::` site in the 21 reusables (133 emissions across 68 steps) was classified by its
+guard chain: is this reachable by a caller who never opted into the feature?
+
+**Symptom.** None observed in the wild — found by audit. `ci-go`/`ci-node`'s `badges` job
+ended `cat "$ERR" >&2; exit 1` for any push failure that did not match the read-only-token
+regex (`403|permission|denied|not authorized|read-only|protected branch`). Badges are **on by
+default** since `v1.21.0`, so a caller that never asked for them, but did grant
+`contents: write`, gets a **red CI run over a cosmetic README commit** whenever the push fails
+for any other reason: a protected branch whose rejection message doesn't match those words, a
+required status check, a second concurrent push after the one rebase retry. The
+`git pull --rebase` on the retry path was also unguarded, so under `set -e` a rebase conflict
+failed the step outright before reaching any of the handling.
+
+**Root cause.** The `v1.21.0` flip to default-on re-triaged the *permission* error path — the
+one that was already known — into a warning, and stopped there. Every other failure branch in
+that step kept the semantics it was written with when badges were opt-in, where failing loudly
+was the right call because the caller had explicitly asked for the feature.
+
+**Why it wasn't caught.** The badge job's failure paths need a real push to a real branch to
+exercise; nothing in CI does that, and `run_step_tests.py` stubs commands rather than a remote.
+It is also invisible in review: each branch reads as reasonable on its own, and the
+default-on-ness is a property of an input default declared 400 lines away.
+
+**Fix.** No badge failure fails the run. The rebase is guarded, and the terminal branch warns,
+prints the underlying error on stderr, and exits 0. The information is preserved; it just
+stops gating the build. Docs for both workflows now state this as a property, not a footnote.
+
+**Prevention.** The generalisable rule, now stated in both docs: **a cosmetic, default-on
+feature may never fail a caller's build.** The wider audit found no other fatal path reachable
+without opting in — the 22 always-reachable fatal steps are all core-purpose (resolve an image
+ref, validate inputs, apply the alerts you asked to apply), and the remaining fatal paths are
+gated by a caller's own configuration (`dry_run`, `deploy_target`, `deploy_method`,
+`wif_provider`). The audit script is not shipped: it is a one-off structural pass, and a
+permanent version would need to model guard semantics well enough to avoid false confidence.
+
+**Left open, deliberately (needs a decision, not a fix).** The badge job *inserts* badges after
+the first `# ` heading when none exist, so the first default-branch build after upgrading
+commits `chore(ci): update README badges` to a repo that never asked. That is live today for
+every caller with `contents: write`. Changing it is a behaviour change for existing callers,
+so it is recorded in `TODO.md` rather than decided here.
 
 ## 2026-08-11 — The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)
 
