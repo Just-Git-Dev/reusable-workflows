@@ -111,10 +111,11 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
 - [ ] `.github/workflows/manage-config-secrets.yml` — implement the reserved `eso`
   backend (currently errors "not implemented"): emit an `ExternalSecret` CR
   referencing the GSM secret written by the `gsm` backend.
-- [ ] `docs/ci-go.md` / `docs/ci-node.md` — every `Example caller` block still pins
-  `@v1.4.0` while the repo is at `v1.15.0`; the new README-badges examples pin
-  `@v1.16.0`, so the two docs now contradict themselves. Sweep all example pins to
-  the current tag (and check the other `docs/*.md` for the same staleness).
+- [x] `docs/*.md` / `README.md` — **example pins swept to `v1.20.0` (2026-08-11).** All 39
+  `uses: …@vX.Y.Z` lines across the docs were spread over twelve different tags, the oldest
+  `v1.4.0`, so most copy-paste examples silently gave the reader a stale contract. Now uniform.
+  **This will rot again** — the drift-report entry below is the durable fix; until it exists,
+  sweep as part of each release.
 - [ ] `ci-go.yml` / `ci-node.yml` — **`update_badges` is not yet dogfooded; this gates
   the `v1.16.0` tag.** Nothing about `contents: write`, caller permission-capping, or
   the commit-back push is testable locally. Dogfood is **quizzing-pro/api#2045**

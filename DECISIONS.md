@@ -89,6 +89,23 @@ install step — its `build_command` defaults to `npm ci && npm run build` — s
 goes on the build step. Narrower is better: a token on a step that never installs is
 exposure without purpose.
 
+**Shipped alongside, in the same tag:** a copy-paste **CI + stage + prod** example in
+`docs/deploy-cloudflare-pages.md`, and a sweep of **every** example pin in `docs/` and
+`README.md` to `v1.20.0`. The sweep is the more consequential of the two: all 39
+`uses: …@vX.Y.Z` lines were spread across twelve tags, the oldest `v1.4.0` — six-plus
+releases behind — so a reader copying almost any example silently adopted a stale input
+contract. That is the same drift the 2026-07-27 caller repin found in real repos, and the
+docs were quietly teaching it. The example is checked, not just written: its YAML block is
+extracted, parsed and run through `actionlint` clean.
+
+The single-workflow shape it documents is deliberate. Callers wanting "one workflow for
+CI/CD" get it by composing `ci-node` and `deploy-cloudflare-pages` as two jobs joined by
+`needs:` — **not** by adding test/lint inputs to the deploy workflow. Gates chained into
+`build_command` (as two fleet callers do today) collapse into one opaque step with no
+coverage gate, no service containers and no per-stage reporting, and do nothing on pull
+requests, where you want the gates but must not deploy. `needs:` is a real dependency;
+`&&` in a shell string is not.
+
 **Known limits, documented rather than engineered around.** `setup-node` writes exactly one
 registry line, so a repo pulling scoped packages from two private registries must still
 hand-roll `.npmrc`; and because its file is the npm *user* config, a repo-committed

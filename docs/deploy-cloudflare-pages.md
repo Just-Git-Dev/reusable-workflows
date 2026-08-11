@@ -64,7 +64,89 @@ permission, minted in the Cloudflare dashboard by a human. See
 [rotate-cloudflare-token](rotate-cloudflare-token.md) for the rotation runbook
 and an expiry nag you can schedule.
 
+## Copy-paste: one workflow for CI + stage + prod
+
+The complete pipeline in a single file — gates run on every pull request, and a
+deploy cannot start unless they pass, because `needs:` is a real job dependency
+rather than a `&&` inside a build command. Change the four `CHANGE ME` values and
+it works as-is.
+
+```yaml
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]          # CHANGE ME — your integration branch
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs on every PR, every push and every tag. Nothing deploys without it.
+  ci:
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
+    with:
+      node_version: '20'
+      # Chain extra gates with && — each is a plain shell command.
+      lint_command: npm run lint && npm run prettier:check
+      test_command: npm test
+      # Optional: fail under a line-coverage floor (needs an Istanbul
+      # json-summary reporter). 0, the default, means measure but never gate.
+      coverage_threshold: 0
+
+  stage:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'   # CHANGE ME
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.20.0
+    with:
+      project_name: myapp-stage                       # CHANGE ME
+      account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      build_command: npm ci && npm run build
+      output_dir: dist
+      node_version: '20'
+    secrets:
+      cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  prod:
+    needs: ci
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.20.0
+    with:
+      project_name: myapp-prod                        # CHANGE ME
+      account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      build_command: npm ci && npm run build
+      output_dir: dist
+      node_version: '20'
+      # Deploy the tag itself, not whatever the default branch points at.
+      ref: ${{ github.ref_name }}
+    secrets:
+      cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+**Why one workflow and not one per environment.** The environments differ by
+*trigger*, not by parameters, so splitting the file means duplicating the `ci`
+block and letting the two drift. One file also means the whole pipeline reads
+top to bottom.
+
+**Why not a matrix over environments.** `strategy` *is* allowed on a job that
+calls a reusable workflow, but each matrix entry would still need its own `if:`
+for its trigger — more machinery, less clarity. Reach for a matrix when the same
+target is deployed several times under **one** trigger (say three Pages projects
+for three brands).
+
+**Note the deploy jobs build again.** `needs:` does not share an artifact between
+jobs. For a static bundle from a pinned lockfile that rebuild is deterministic;
+see the rejected build-once entry in `TODO.md` for why we do not plumb artifacts
+between them.
+
+Private registry, coverage gating and README badges are all opt-in on top of
+this — see [ci-node](ci-node.md) and [Private registries](#private-registries).
+
 ## Example caller
+
+Deploy only, when CI already lives elsewhere:
 
 ```yaml
 name: Deploy website
@@ -78,7 +160,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.20.0
     with:
       project_name: my-website
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -109,7 +191,7 @@ on:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.5.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-pages.yml@v1.20.0
     with:
       project_name: my-app
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

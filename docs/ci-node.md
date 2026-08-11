@@ -79,6 +79,11 @@ Two limits worth knowing before you reach for this:
 Leaving `npm_registry_url` empty (the default) is a true no-op: setup-node skips
 auth setup entirely, writing no `.npmrc` and exporting no `NPM_CONFIG_USERCONFIG`.
 
+**Running CI and deploy from one workflow?** The copy-paste
+[CI + stage + prod example](deploy-cloudflare-pages.md#copy-paste-one-workflow-for-ci--stage--prod)
+wires this workflow to `deploy-cloudflare-pages` with `needs:`, so a deploy cannot
+start unless the gates pass.
+
 **Service containers are language-agnostic** — the same `enable_services` inputs
 exist on [`ci-go`](ci-go.md). Set `enable_services: true` for a DB-backed Node
 backend and all three containers start; `install`/`lint`/`build` stay in the
@@ -98,7 +103,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.4.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
     with:
       node_version: '22'
       test_command: 'npm test -- --run'
@@ -165,7 +170,7 @@ separator.
 ```yaml
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.16.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-node.yml@v1.20.0
     permissions:
       contents: write        # REQUIRED — caller permissions cap the called workflow
     with:
