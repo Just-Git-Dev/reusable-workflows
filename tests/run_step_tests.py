@@ -31,6 +31,7 @@ PROMOTE = ROOT / ".github" / "workflows" / "promote-image.yml"
 CI_NODE = ROOT / ".github" / "workflows" / "ci-node.yml"
 CI_GO = ROOT / ".github" / "workflows" / "ci-go.yml"
 GAR = ROOT / ".github" / "workflows" / "cleanup-gar-images.yml"
+PAGES = ROOT / ".github" / "workflows" / "deploy-cloudflare-pages.yml"
 
 FAILURES = []
 
@@ -217,6 +218,46 @@ exit 0
                 "calls": calls.read_text()}
 
 
+def run_smoke_step(body: str, *, base="https://x.pages.dev", path="/", expect="",
+                   want="200", attempts=3, statuses=None, bodies=None):
+    """Execute the Pages smoke body against a stubbed curl.
+
+    statuses/bodies: per-attempt responses, last value repeats.
+    """
+    statuses = statuses or ["200"]
+    bodies = bodies or ["<div id=\"root\"></div>"]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"; stub.mkdir()
+        n = tmp / "n"; n.write_text("0")
+        (stub / "curl").write_text(f"""#!/usr/bin/env bash
+i=$(cat {n}); i=$((i+1)); echo "$i" > {n}
+statuses=({" ".join(statuses)})
+idx=$((i-1)); last=$(( ${{#statuses[@]}} - 1 )); [ $idx -gt $last ] && idx=$last
+# -o <file> is the 3rd arg in the shipped invocation
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+bodies_dir={tmp}/bodies
+cp "$bodies_dir/$((idx+1))" "$out" 2>/dev/null || cp "$bodies_dir/$(ls $bodies_dir | tail -1)" "$out"
+echo -n "${{statuses[$idx]}}"
+""")
+        (stub / "curl").chmod(0o755)
+        (stub / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")  # no real waiting
+        (stub / "sleep").chmod(0o755)
+        bd = tmp / "bodies"; bd.mkdir()
+        for i, b in enumerate(bodies, 1):
+            (bd / str(i)).write_text(b)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(BASE=base, SMOKE_PATH=path, EXPECT=expect, WANT=want,
+                   ATTEMPTS=str(attempts), INTERVAL="1", RUNNER_TEMP=str(tmp),
+                   GITHUB_STEP_SUMMARY=str(tmp / "summary"))
+        proc = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+                              capture_output=True, text=True, env=env, cwd=tmp)
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "attempts": int(n.read_text().strip() or 0)}
+
+
 def check(name, cond, detail=""):
     if cond:
         print(f"  ok   {name}")
@@ -374,6 +415,38 @@ def main():
     check("opt-out exits 0", r["rc"] == 0, r["out"])
     check("opt-out warns it is left unlocked", "LEFT UNLOCKED" in r["out"], r["out"])
     check("opt-out touches nothing", r["calls"].strip() == "", r["calls"])
+
+    # ---- Pages smoke check: a green deploy is not a working site ----
+    smoke = extract_step(PAGES, "deploy", "Smoke check")
+    print("\ndeploy-cloudflare-pages · Smoke check")
+
+    r = run_smoke_step(smoke)
+    check("healthy first response passes", r["rc"] == 0, r["out"])
+    check("healthy first response stops at one request", r["attempts"] == 1, r["attempts"])
+
+    # Pages is eventually consistent: a 404 then a 200 must not fail the deploy.
+    r = run_smoke_step(smoke, statuses=["404", "404", "200"], attempts=5)
+    check("retries through propagation", r["rc"] == 0, r["out"])
+    check("stops as soon as it is healthy", r["attempts"] == 3, r["attempts"])
+
+    r = run_smoke_step(smoke, statuses=["500"], attempts=3)
+    check("persistent bad status fails", r["rc"] == 1, r["out"])
+    check("persistent bad status exhausts attempts", r["attempts"] == 3, r["attempts"])
+    check("failure names the URL", "https://x.pages.dev/" in r["out"], r["out"])
+
+    # The outage case: 200, but the wrong bundle is being served.
+    r = run_smoke_step(smoke, expect='<title>RealmID</title>',
+                       bodies=["<div id=\"root\"></div>"], attempts=2)
+    check("200 with a missing marker FAILS", r["rc"] == 1, r["out"])
+    check("missing marker is named", "RealmID" in r["out"], r["out"])
+
+    r = run_smoke_step(smoke, expect='id="root"\n<title>RealmID</title>',
+                       bodies=['<div id="root"></div><title>RealmID</title>'])
+    check("all markers present passes", r["rc"] == 0, r["out"])
+
+    r = run_smoke_step(smoke, base="", attempts=1)
+    check("no URL to test fails clearly", r["rc"] == 1, r["out"])
+    check("no URL explains why", "no deployment URL" in r["out"], r["out"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

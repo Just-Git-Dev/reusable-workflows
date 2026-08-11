@@ -938,6 +938,42 @@
           "required": false,
           "type": "string"
         },
+        "smoke_attempts": {
+          "default": 8,
+          "description": "How many times to try before failing. Cloudflare Pages deploys are eventually consistent, so a single request would false-fail on slow propagation.",
+          "required": false,
+          "type": "number"
+        },
+        "smoke_expect": {
+          "default": "",
+          "description": "Newline-separated substrings that must ALL appear in the response body. Use stable markers such as a root element id or the <title>; never hashed asset filenames, which change every build. Empty \u21d2 status code only.",
+          "required": false,
+          "type": "string"
+        },
+        "smoke_interval_seconds": {
+          "default": 5,
+          "description": "Seconds between smoke attempts.",
+          "required": false,
+          "type": "number"
+        },
+        "smoke_path": {
+          "default": "",
+          "description": "Path to fetch after deploying, e.g. \"/\" or \"/device\". Empty (the default) skips the check entirely. A deploy that succeeded is not the same as a working site; this is the difference.",
+          "required": false,
+          "type": "string"
+        },
+        "smoke_status": {
+          "default": "200",
+          "description": "HTTP status the smoke request must return.",
+          "required": false,
+          "type": "string"
+        },
+        "smoke_url_base": {
+          "default": "",
+          "description": "Origin to run smoke_path against. Empty \u21d2 the deployment URL produced by THIS run, which is what you want: it tests the bundle just uploaded. Point it at a custom domain only for production-branch deploys \u2014 a preview deploy does not update the custom domain, so checking it would test the previous release and pass regardless.",
+          "required": false,
+          "type": "string"
+        },
         "working_directory": {
           "default": ".",
           "description": "Directory to build and deploy from.",

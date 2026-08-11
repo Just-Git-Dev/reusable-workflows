@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-11` — [`deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check](#2026-08-11--deploy-cloudflare-pages-gains-an-opt-in-blocking-post-deploy-smoke-check)
 - `2026-08-11` — [`cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends](#2026-08-11--cleanup-gar-images-unlocks-and-relocks-immutable-tags-and-fails-closed-on-both-ends)
 - `2026-08-11` — [Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest](#2026-08-11--onboarding-retrospective-a-generated-contract-file-an-agent-guide-and-ci-that-keeps-both-honest)
 - `2026-08-11` — [The `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
@@ -52,6 +53,39 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-11 — `deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check
+
+**Context.** A successful `wrangler pages deploy` means the upload succeeded. It says
+nothing about whether the site works. `Realm-ID/ui` learned this on **2026-06-29**, when a
+stale bundle sat in production with a broken client-routed path and nothing noticed; it
+hand-rolled a polling check afterwards, and that check is part of why the repo never
+migrated onto this reusable. Six callers had the same gap.
+
+**Decision.** Lift it: `smoke_path` (opt-in), `smoke_expect`, `smoke_status`, and a bounded
+retry. Blocking when set — a check that reports without failing would not have caught the
+original outage.
+
+**Retry is not optional.** Pages deploys are eventually consistent, so a single request
+false-fails on slow propagation. Defaults are 8 attempts at 5s, exiting the moment the
+response is healthy rather than always spending the budget.
+
+**The URL default matters more than it looks.** It tests **this run's deployment URL**, so
+it verifies the bundle just uploaded. Pointing it at a custom domain is supported but only
+correct for production-branch deploys: a preview deploy does not move the custom domain, so
+a check against it would test the *previous* release and pass regardless of what shipped —
+a check that cannot fail is worse than no check.
+
+**Markers, not hashes.** Documented to use a root element id or `<title>`; hashed asset
+filenames change every build.
+
+**Tested.** `run_step_tests.py` runs the shipped body against a stubbed curl: healthy first
+response (one request only), 404→404→200 propagation (passes, stops at three), persistent
+bad status (fails, exhausts attempts, names the URL), **200 with a missing marker** — the
+outage case — and a missing deployment URL failing with an explanation.
+
+**Unblocks** migrating `Realm-ID/ui` off `cloudflare/wrangler-action@v4`, a mutable tag on a
+workflow holding a Pages deploy token.
 
 ## 2026-08-11 — `cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends
 
