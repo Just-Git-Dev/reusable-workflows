@@ -35,8 +35,16 @@ name: Cleanup GAR images (reusable)
 # exactly what dry_run says. Run with dry_run: true first and read the plan.
 #
 # Required IAM on service_account:
-#   roles/artifactregistry.repoAdmin  (on the target repo)
+#   roles/artifactregistry.admin      (on the target repo). repoAdmin is NOT
+#                                     enough: it manages ARTIFACTS, not
+#                                     repository settings, so it lacks
+#                                     artifactregistry.repositories.update and
+#                                     immutable_tags_policy cannot take effect.
 #   roles/run.viewer                  (to enumerate live Services + Jobs)
+#
+# Missing the update permission never fails the run. On an unlocked repo the
+# sweep warns and proceeds; on a LOCKED one it degrades to untagged manifests
+# only — tagged images are undeletable while immutable — and says so loudly.
 
 on:
   workflow_call:
@@ -158,7 +166,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v2.1.0
+  WORKFLOW_VERSION: v2.1.1
 
 jobs:
   cleanup:
@@ -691,17 +699,22 @@ jobs:
 
           echo "can_update=false" >> "$GITHUB_OUTPUT"
 
-          # Locked repo: the sweep cannot do its job at all, and finding out
-          # mid-run leaves partial deletions AND an unlocked repository.
+          # Locked repo: tagged images cannot be deleted without unlocking, but
+          # UNTAGGED manifests still can. Degrade to those rather than failing —
+          # losing the permission must not take the whole sweep down with it, and
+          # a registry that keeps collecting untagged buildx children is the
+          # growth this job exists to stop. The run stays green but says exactly
+          # what it could not do; it is never silently complete.
           if [ "$STARTED" = "true" ]; then
+            echo "degraded=true" >> "$GITHUB_OUTPUT"
             {
-              echo "::error::${SERVICE_ACCOUNT:-the deploy service account} cannot toggle immutable tags on"
-              echo "::error::${GCP_PROJECT}/${GAR_REPO}, but the repository has them enabled and this sweep"
-              echo "::error::would need to unlock it to delete tagged images. Nothing has been deleted."
-              echo "::error::Grant artifactregistry.repositories.update (roles/artifactregistry.admin),"
-              echo "::error::or run with dry_run: true to see the plan without deleting."
+              echo "::warning::${SERVICE_ACCOUNT:-the deploy service account} cannot toggle immutable tags on"
+              echo "::warning::${GCP_PROJECT}/${GAR_REPO}, which has them enabled. This sweep will delete only"
+              echo "::warning::UNTAGGED manifests — every tagged image stays, whatever the plan says, because"
+              echo "::warning::an immutable repository refuses to delete them. Retention is NOT being applied."
+              echo "::warning::Grant artifactregistry.repositories.update (roles/artifactregistry.admin)."
             } >&2
-            exit 1
+            exit 0
           fi
 
           # Unlocked repo under `enforce`: the sweep itself is unaffected, and a
@@ -716,7 +729,9 @@ jobs:
           } >&2
 
       - name: Unlock immutable tags
-        if: steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false
+        if: >-
+          steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false &&
+          steps.perm.outputs.can_update == 'true'
         run: |
           gcloud artifacts repositories update "$GAR_REPO" \
             --location="$GCP_REGION" --project="$GCP_PROJECT" --no-immutable-tags
@@ -725,6 +740,8 @@ jobs:
       - name: Execute deletions
         id: exec
         if: inputs.dry_run == false
+        env:
+          DEGRADED: ${{ steps.perm.outputs.degraded }}
         run: |
           set -uo pipefail
 
@@ -749,8 +766,19 @@ jobs:
           : > /tmp/exec.log
 
           # Phase 1: tagged indexes first (cascades free orphaned children).
-          jq -r '.to_delete[] | select((.tags|length) > 0) | .image' /tmp/delete-plan.json \
-            | xargs -r -P 8 -I {} bash -c 'del_one "$@"' _ {} | tee -a /tmp/exec.log
+          # Skipped entirely on a degraded run: the repository is immutable and we
+          # could not unlock it, so every one of these would fail. Attempting them
+          # would turn a known limitation into a wall of red delete errors.
+          TAGGED_SKIPPED=0
+          if [ "${DEGRADED:-false}" = "true" ]; then
+            TAGGED_SKIPPED=$(jq '[.to_delete[] | select((.tags|length) > 0)] | length' /tmp/delete-plan.json)
+            echo "::warning::DEGRADED SWEEP — skipping $TAGGED_SKIPPED tagged image(s); the repository is"
+            echo "::warning::immutable and this service account cannot unlock it. Only untagged manifests"
+            echo "::warning::are being deleted, so retention is not being enforced on releases or builds."
+          else
+            jq -r '.to_delete[] | select((.tags|length) > 0) | .image' /tmp/delete-plan.json \
+              | xargs -r -P 8 -I {} bash -c 'del_one "$@"' _ {} | tee -a /tmp/exec.log
+          fi
 
           # Phase 2: untagged manifests.
           jq -r '.to_delete[] | select((.tags|length) == 0) | .image' /tmp/delete-plan.json \
@@ -771,13 +799,19 @@ jobs:
             echo "- Deleted: $DELETED"
             echo "- Skipped (kept-parent child / already gone): $SKIPPED"
             echo "- Failed: $FAILED"
+            if [ "${DEGRADED:-false}" = "true" ]; then
+              echo "- **Skipped (degraded, tagged): $TAGGED_SKIPPED** — the repository is immutable"
+              echo "  and this service account cannot unlock it. Retention is not being enforced."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           # A plan that deletes nothing is not a quiet success. Between 2026-08-06 and
           # 2026-08-11 a caller ran six green sweeps at deleted=0/skipped=8..16, because
           # every candidate was an undeletable child — nothing in the run said so.
+          # Not on a degraded run: "planned N, deleted 0" is fully explained there,
+          # and this warning would read as a plan/keep-set bug instead of a grant.
           CAND=$(jq '.to_delete | length' /tmp/delete-plan.json)
-          if [ "$CAND" -gt 0 ] && [ "$DELETED" -eq 0 ]; then
+          if [ "$CAND" -gt 0 ] && [ "$DELETED" -eq 0 ] && [ "${DEGRADED:-false}" != "true" ]; then
             echo "::warning::Planned $CAND deletion(s) and removed none — this sweep was a no-op. Check the plan's parent/child resolution and the keep-set."
           fi
 

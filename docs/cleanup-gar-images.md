@@ -141,9 +141,12 @@ This workflow handles it automatically, in this order:
    `:testIamPermissions` for `artifactregistry.repositories.update` (there is no
    `gcloud artifacts repositories test-iam-permissions` subcommand). The verdict is
    **asymmetric**, because the two cases risk different things:
-   - Repository **started locked** ⇒ missing permission **fails the run with nothing
-     deleted**. The sweep cannot do its job, and discovering that halfway through would
-     leave the repo unlocked and the sweep partial.
+   - Repository **started locked** ⇒ missing permission **degrades the sweep** rather
+     than failing it (since v2.1.1). Tagged images cannot be deleted while the repository
+     is immutable, but untagged manifests can — so the run deletes those, skips every
+     tagged candidate, and warns that retention is not being enforced. Losing the grant
+     must not take the whole sweep down with it, and untagged buildx children are exactly
+     the growth this job exists to stop.
    - Repository **started unlocked**, under `enforce` ⇒ missing permission **warns and
      the sweep proceeds**. Enforcement is a gain that cannot be made; no protection is
      lost, so failing here would turn a missing nice-to-have into a red pipeline.
@@ -186,9 +189,14 @@ to re-enable protection.
 ### What the service account needs
 
 `artifactregistry.repositories.update`, i.e. `roles/artifactregistry.admin` on the
-repository. Under the default `enforce` this is now needed on **every** repository, not
-only ones that already have immutability enabled — without it the sweep still runs and
-still deletes, but warns that the policy is not in effect. IAM therefore remains the real
+repository — **not** `roles/artifactregistry.repoAdmin`, which manages *artifacts* rather
+than the repository and does not carry `artifactregistry.repositories.update`. Under the
+default `enforce` this is needed on **every** repository, not only ones that already have
+immutability enabled.
+
+**The permission being absent never fails the run.** On an unlocked repository the sweep
+warns and proceeds normally; on a locked one it degrades to untagged-only and says so. The
+cost of losing the grant is protection and retention, never a red pipeline. IAM therefore remains the real
 gate on whether this workflow can change a repository's settings: a repository that must
 never be touched simply does not grant the permission, and no caller-side input can
 override that.
@@ -225,8 +233,14 @@ digest that is mid-promotion when the sweep runs is not removed underneath it.
 
 ## Required IAM
 
-On `service_account`: `roles/artifactregistry.repoAdmin` (on the target repo)
-and `roles/run.viewer` (to enumerate live Services and Jobs).
+On `service_account`: **`roles/artifactregistry.admin`** (on the target repo) and
+`roles/run.viewer` (to enumerate live Services and Jobs).
+
+`repoAdmin` is not enough — it is *"access to manage artifacts in repositories"*, so it
+carries `repositories.deleteArtifacts` but not `repositories.update`, and
+`immutable_tags_policy` silently cannot take effect. See
+[What the service account needs](#what-the-service-account-needs) for what happens when the
+permission is absent (short version: the run never fails because of it).
 
 ## `buildcache` and registry build caches
 
@@ -280,7 +294,7 @@ jobs:
 
   cleanup:
     needs: resolve
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.1.1
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
