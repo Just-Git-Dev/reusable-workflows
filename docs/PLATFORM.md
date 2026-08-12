@@ -140,7 +140,7 @@ full input/secret contract. Grant `id-token: write` for any WIF workflow. Cross-
 
 ### Backup · cleanup · alerts
 - **[`neon-backup`](neon-backup.md)** — `pg_dump` a Postgres DB → private artifact + sha256 manifest. Keys: `db_host`, `db_user`, `db_name`. *Auth: WIF; DB password read from a Secret Manager bundle.* `pg_major` ≥ server major; provider PITR is still the stronger DR story.
-- **[`cleanup-gar-images`](cleanup-gar-images.md)** — age-sweep GAR, protecting live Cloud Run Service **and** Job digests + recent semver + `keep_tags`. *Auth: WIF.* **`dry_run` defaults true** — run the plan first; aborts if zero live digests resolve.
+- **[`cleanup-gar-images`](cleanup-gar-images.md)** — **release-relative** GAR sweep (not age-based since v2.0.0), protecting live Cloud Run Service **and** Job digests + recent semver + `keep_tags`. *Auth: WIF, and it needs `roles/artifactregistry.admin` — `repoAdmin` manages artifacts, not repository settings.* **`dry_run` defaults true** — run the plan first; aborts if zero live digests resolve. ⚠️ **Since v2.1.0 an applied sweep also LOCKS the repository** (`immutable_tags_policy: enforce`, the default), and an immutable repo rejects any push that *moves* a tag — retire `:latest`/`buildcache`-style moving tags first, or set `immutable_tags_policy: preserve`. That failure lands in your *build*, not in the sweep.
 - **[`bootstrap-alerts`](bootstrap-alerts.md)** — apply a Monitoring channel + alert policies from **your** repo's `infra/alerts/`. *Auth: WIF.* Idempotent by `displayName`; `force_update` is destructive.
 
 ---
