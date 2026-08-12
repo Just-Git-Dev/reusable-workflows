@@ -30,6 +30,31 @@
       contract, so nothing is stale in behaviour — but `fleet_drift.py` will report them a
       minor behind until a fleet-wide repin sweep.
 
+## Secret Manager
+
+- [ ] **A GSM version cleanup workflow.** Four reusables add Secret Manager versions and
+      none ever removes one: `manage-config-secrets`, `rotate-signing-keypair`,
+      `rotate-worker-signing-secret`, `sync-bundle-key`. Versions accumulate for the life of
+      the secret, every one of them still holding retrievable plaintext, so the exposure grows
+      monotonically with rotation frequency — the opposite of what rotating is for. The same
+      shape as the GAR sweep before `cleanup-gar-images` existed.
+
+      Design notes, from what the rotators already do:
+      - **`disable` before `destroy`, and never destroy the version a service mounts.**
+        `rotate-signing-keypair` already disables a superseded version
+        (`rotate-signing-keypair.yml:281`), so the primitive and its failure modes are proven
+        here; the missing piece is the sweep, and it must resolve every consumer's mounted
+        version first. Cloud Run mounts by `:latest` in several services, which resolves at
+        *deploy* time — so "not `:latest`" is NOT the same as "not in use". This is the
+        keep-set problem, and getting it wrong takes prod down rather than filling a disk.
+      - **Retain by count and by age, like the GAR sweep learned to** — keep the N most recent
+        ENABLED versions, and never destroy one newer than the rollback window. `DESTROYED` is
+        irreversible: there is no undelete, unlike a container image that can be rebuilt.
+      - **Dry-run default, and abort if zero consumers resolve** — the same fail-safe as
+        `cleanup-gar-images`, for the same reason.
+      - Ownership: the sweep is an ops body here; the schedule and the secret names are the
+        caller's, as ever.
+
 ## Build-once, promote-to-prod
 
 Reusable-side work is **done** (`v1.17.0`): `deploy-cloud-run` gained `build_only`,
