@@ -30,6 +30,28 @@
       contract, so nothing is stale in behaviour — but `fleet_drift.py` will report them a
       minor behind until a fleet-wide repin sweep.
 
+## Build attestations
+
+- [ ] **Decide a `provenance` policy for the build reusables — right now it is inherited, not
+      chosen.** Neither `deploy-cloud-run.yml` nor `promote-image.yml` sets `provenance:` or
+      `sbom:` anywhere (verified by grep), so buildx's default applies and every push adds an
+      attestation manifest beside the image. Those are the `unknown/unknown` children
+      `cleanup-gar-images` already has to reason about — its own header comment names them, and
+      the Traide RCA found all 52 untagged manifests were index children of exactly this shape.
+
+      Surfaced 2026-08-12 while closing `Realm-ID/issuer#2`, which carried `provenance: false`
+      on a local build step that no longer exists (build-once moved the build into
+      `deploy-cloud-run`). Its stated reason was that Cloud Run consumes a plain image —
+      **that claim is unverified here**, and both `issuer` and `api` deploy fine today, so this
+      is registry clutter and an unmade decision, not a bug.
+
+      It is genuinely a decision, not a cleanup: provenance is SLSA supply-chain metadata, and
+      this repo SHA-pins every third-party action precisely because that class of guarantee
+      matters. Turning it off to tidy the registry trades a real thing for a cosmetic one.
+      Options: keep the default and document why; set `provenance: false` and say what is lost;
+      or expose it as a `workflow_call` input and let the caller choose. Whichever, the
+      keep-set/attestation interaction in `cleanup-gar-images` should be re-read alongside it.
+
 ## Secret Manager
 
 - [ ] **A GSM version cleanup workflow.** Four reusables add Secret Manager versions and
