@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-12` — [A locked repo the sweep cannot unlock degrades to untagged-only instead of failing](#2026-08-12--a-locked-repo-the-sweep-cannot-unlock-degrades-to-untagged-only-instead-of-failing)
 - `2026-08-12` — [`cleanup-gar-images` v2.1.0: the sweep now ENABLES immutable tags, it does not merely restore them](#2026-08-12--cleanup-gar-images-v210-the-sweep-now-enables-immutable-tags-it-does-not-merely-restore-them)
 - `2026-08-11` — [`cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)](#2026-08-11--cleanup-gar-images-plans-are-mostly-impossible-fleet-wide-one-caller-stalled-completely-bug-fix)
 - `2026-08-11` — [`badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice](#2026-08-11--badge_insert-default-on-badges-may-still-be-given-to-a-repo-but-it-is-now-a-nameable-choice)
@@ -61,6 +62,44 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-12 — A locked repo the sweep cannot unlock degrades to untagged-only instead of failing
+
+**Context.** v2.1.0 (entry below) kept the 2026-08-11 rule that a repository which *started*
+locked fails the run when the SA cannot unlock it. For `realm-id/backend` and
+`traide-in/backend` that branch had never been reachable — they were never locked. Enforcing
+immutability makes it reachable, so a permission the platform did not need yesterday becomes
+load-bearing for every future sweep: revoke `artifactregistry.admin` and both nightly sweeps
+go red.
+
+**Decision.** On a locked repository with no update permission, **delete the untagged
+manifests and skip every tagged candidate**, warning loudly, exit 0. Immutability blocks
+deleting tagged images, not untagged ones, so there is real work still available.
+
+**Why this is not the "half-succeed" outcome the 2026-08-11 entry rejected.** That entry was
+about a sweep discovering the problem *mid-flight* — partial deletions, an unlocked repo, and
+nothing in the run saying so. Here the limitation is known **before** anything is deleted, the
+tagged phase is skipped wholesale rather than attempted and failing one error at a time, and
+both the log and the step summary name the count and the missing grant. The failure mode being
+guarded against was silence, not partiality.
+
+**Why not fail closed anyway.** The thing a locked, un-sweepable repository actually does is
+accumulate untagged buildx children — which is the growth this job exists to stop, and which
+degrading still handles. Trading that for a red pipeline buys nothing except an outage.
+
+**Why not exit 0 doing nothing.** A green no-op is what hid `traide-in` growing to 580 MB over
+six days. The degraded run is explicitly not that: it does the available work and reports the
+gap in the summary, and the pre-existing "planned N, deleted 0" warning is suppressed here
+because on a degraded run it would read as a keep-set bug rather than a missing grant.
+
+**Consequence for IAM.** `infra-provisioning` moved both `github-cleaner` SAs from
+`artifactregistry.repoAdmin` to `artifactregistry.admin` the same day — repoAdmin manages
+artifacts, not repository settings, and lacks `repositories.update`. That grant buys
+enforcement; this change means losing it degrades protection rather than breaking cleanup.
+
+**Tested.** The executor is now driven directly in `run_step_tests.py` against a stubbed
+gcloud with a 2-tagged/2-untagged plan: a normal run deletes all four, a degraded run deletes
+exactly the two untagged ones, stays green, warns, and reports the skip count.
 
 ## 2026-08-12 — `cleanup-gar-images` v2.1.0: the sweep now ENABLES immutable tags, it does not merely restore them
 

@@ -223,6 +223,46 @@ exit 0
                 "calls": calls.read_text()}
 
 
+def run_exec_step(body: str, *, degraded="false"):
+    """Execute the deletion body against a stubbed gcloud, with a 2-tagged /
+    2-untagged plan. Returns which images gcloud was actually asked to delete."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        deleted = tmp / "deleted"
+        deleted.write_text("")
+        gcloud = stub / "gcloud"
+        gcloud.write_text(f'#!/usr/bin/env bash\nfor a in "$@"; do case "$a" in *@sha256:*) '
+                          f'echo "$a" >> {deleted} ;; esac; done\nexit 0\n')
+        gcloud.chmod(0o755)
+        plan = {"to_delete": [
+            {"image": "r/img@sha256:t1", "tags": ["v1.0.0"]},
+            {"image": "r/img@sha256:t2", "tags": ["v1.1.0"]},
+            {"image": "r/img@sha256:u1", "tags": []},
+            {"image": "r/img@sha256:u2", "tags": []},
+        ]}
+        (tmp / "delete-plan.json").write_text(json.dumps(plan))
+        out = tmp / "gh_output"
+        out.write_text("")
+        summary = tmp / "gh_summary"
+        summary.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(DEGRADED=degraded, GCP_PROJECT="p", GITHUB_OUTPUT=str(out),
+                   GITHUB_STEP_SUMMARY=str(summary))
+        # the step reads /tmp/delete-plan.json; point it at the fixture
+        body = body.replace("/tmp/delete-plan.json", str(tmp / "delete-plan.json"))
+        body = body.replace("/tmp/exec.log", str(tmp / "exec.log"))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "deleted": deleted.read_text().split(),
+                "output": out.read_text(), "summary": summary.read_text()}
+
+
 def run_perm_step(body: str, *, started="true", granted=True):
     """Execute the immutability permission pre-flight against a stubbed curl.
 
@@ -480,11 +520,18 @@ def main():
     check("granted exits 0", r["rc"] == 0, r["out"])
     check("granted records can_update=true", "can_update=true" in r["output"], r["output"])
 
-    # Locked repo, no permission: the sweep cannot work — fail before deleting.
     r = run_perm_step(perm, started="true", granted=False)
-    check("locked + denied FAILS before any deletion", r["rc"] == 1, r["out"])
-    check("locked + denied says nothing was deleted", "Nothing has been deleted" in r["out"], r["out"])
     check("locked + denied records can_update=false", "can_update=false" in r["output"], r["output"])
+
+    # Locked repo, no permission: DEGRADE rather than fail. Tagged images are
+    # undeletable under immutability, but untagged manifests are not — so the
+    # sweep does what it still can and names what it could not.
+    r = run_perm_step(perm, started="true", granted=False)
+    check("locked + denied degrades instead of failing", r["rc"] == 0, r["out"])
+    check("locked + denied marks the run degraded",
+          "degraded=true" in r["output"], r["output"])
+    check("locked + denied says tagged images are skipped",
+          "tagged" in r["out"].lower(), r["out"])
 
     # Unlocked repo under enforce: warn, but let the sweep do its real job.
     r = run_perm_step(perm, started="false", granted=False)
@@ -493,6 +540,24 @@ def main():
           "LEFT UNLOCKED" in r["out"] and "::warning::" in r["out"], r["out"])
     check("unlocked + denied names the fix",
           "artifactregistry.repositories.update" in r["out"], r["out"])
+
+    # ---- GAR executor: a degraded run deletes what it still can ----
+    execstep = extract_step(GAR, "cleanup", "Execute deletions")
+    print("\ncleanup-gar-images · Execute deletions")
+
+    r = run_exec_step(execstep, degraded="false")
+    check("normal run deletes tagged and untagged", len(r["deleted"]) == 4, r["deleted"])
+    check("normal run exits 0", r["rc"] == 0, r["out"])
+
+    r = run_exec_step(execstep, degraded="true")
+    check("degraded run deletes ONLY untagged",
+          sorted(r["deleted"]) == ["r/img@sha256:u1", "r/img@sha256:u2"], r["deleted"])
+    check("degraded run does not fail the job", r["rc"] == 0, r["out"])
+    check("degraded run warns", "::warning::" in r["out"], r["out"])
+    check("degraded run names how many it skipped",
+          "2" in r["out"] and "tagged" in r["out"].lower(), r["out"])
+    check("degraded run reports it in the summary",
+          "tagged" in r["summary"].lower(), r["summary"])
 
     # ---- GAR end-state: the repo must end an applied run LOCKED by default ----
     relock = extract_step(GAR, "cleanup", "Ensure immutable-tag end-state")
