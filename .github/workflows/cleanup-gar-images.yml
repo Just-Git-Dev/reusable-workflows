@@ -108,13 +108,24 @@ on:
         type: string
         required: false
         default: 'hotfix-,rc-,debug-'
+      immutable_tags_policy:
+        description: >-
+          What state the repository is left in after an applied sweep.
+          `enforce` (DEFAULT) — the repository ends LOCKED whether or not it
+          started that way; the sweep is the thing that makes immutable tags
+          true everywhere. `preserve` — relock only if it was already locked
+          (the pre-v2.1.0 behaviour); use this for a repository whose build
+          still pushes a moving tag such as :latest, which an immutable
+          repository rejects. `unlock` — leave it unlocked, warning loudly.
+        type: string
+        required: false
+        default: enforce
       relock_immutable_tags:
         description: >-
-          Re-enable immutable tags after the sweep. DEFAULT TRUE — leave it alone
-          unless you deliberately want the repository left unlocked (a maintenance
-          window, or debugging a failed sweep). Setting it false removes the
-          protection that stops a tag being moved to a different digest, and the
-          run will say so loudly.
+          DEPRECATED — use `immutable_tags_policy`. Kept so existing callers do
+          not break: setting it false still means "leave the repository
+          unlocked" and is folded into `immutable_tags_policy: unlock`. Its
+          default (true) no longer means anything on its own.
         type: boolean
         required: false
         default: true
@@ -147,7 +158,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v2.0.0
+  WORKFLOW_VERSION: v2.1.0
 
 jobs:
   cleanup:
@@ -168,7 +179,8 @@ jobs:
       KEEP_TAGS:             ${{ inputs.keep_tags }}
       KEEP_TAG_PREFIXES:     ${{ inputs.keep_tag_prefixes }}
       DRY_RUN:               ${{ inputs.dry_run }}
-      RELOCK:                ${{ inputs.relock_immutable_tags }}
+      POLICY_IN:             ${{ inputs.immutable_tags_policy }}
+      RELOCK_IN:             ${{ inputs.relock_immutable_tags }}
     outputs:
       candidates: ${{ steps.plan.outputs.candidates }}
       deleted: ${{ steps.exec.outputs.deleted }}
@@ -612,6 +624,29 @@ jobs:
       # and tagged images cannot be deleted." Untagged versions are still deletable,
       # so without this the sweep would half-succeed — untagged gone, every aged-out
       # tagged image failing — which is the worst outcome for a destructive job.
+      # One enum decides the end state. The deprecated boolean is folded in here
+      # rather than being consulted at the end, so exactly one value flows on and
+      # no step has to reason about two half-overlapping knobs.
+      - name: Resolve immutable-tag policy
+        id: policy
+        run: |
+          p="$POLICY_IN"
+          case "$p" in
+            enforce|preserve|unlock) ;;
+            *)
+              echo "::error::immutable_tags_policy must be enforce, preserve or unlock (got '$p')" >&2
+              exit 1
+              ;;
+          esac
+          # Only an explicit false is distinguishable from the default, and it
+          # has exactly one meaning, so it wins over an unset policy.
+          if [ "$RELOCK_IN" = "false" ]; then
+            p=unlock
+            echo "::warning::relock_immutable_tags is deprecated — use immutable_tags_policy: unlock"
+          fi
+          echo "policy=$p" >> "$GITHUB_OUTPUT"
+          echo "::notice::immutable-tag policy: $p"
+
       - name: Check tag immutability
         id: immutable
         run: |
@@ -631,15 +666,34 @@ jobs:
       # halfway through leaves the repo unlocked and the sweep half-done.
       # `gcloud artifacts repositories` has no test-iam-permissions subcommand, so
       # this goes through the REST endpoint.
+      # Two callers now: unlocking a locked repo (mandatory — without it the sweep
+      # can only half-succeed) and enforcing a lock on an unlocked one (desirable,
+      # but nothing is lost by skipping it). Hence one probe, two verdicts below.
       - name: Verify permission to toggle immutability
-        if: steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false
+        id: perm
+        if: >-
+          inputs.dry_run == false &&
+          (steps.immutable.outputs.immutable == 'true' ||
+           steps.policy.outputs.policy == 'enforce')
+        env:
+          STARTED: ${{ steps.immutable.outputs.immutable }}
         run: |
           res=$(curl -sS -X POST \
             -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
             -d '{"permissions":["artifactregistry.repositories.update"]}' \
             "https://artifactregistry.googleapis.com/v1/projects/${GCP_PROJECT}/locations/${GCP_REGION}/repositories/${GAR_REPO}:testIamPermissions")
-          if ! printf '%s' "$res" | grep -q 'artifactregistry.repositories.update'; then
+          if printf '%s' "$res" | grep -q 'artifactregistry.repositories.update'; then
+            echo "can_update=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::permission to toggle immutable tags confirmed"
+            exit 0
+          fi
+
+          echo "can_update=false" >> "$GITHUB_OUTPUT"
+
+          # Locked repo: the sweep cannot do its job at all, and finding out
+          # mid-run leaves partial deletions AND an unlocked repository.
+          if [ "$STARTED" = "true" ]; then
             {
               echo "::error::${SERVICE_ACCOUNT:-the deploy service account} cannot toggle immutable tags on"
               echo "::error::${GCP_PROJECT}/${GAR_REPO}, but the repository has them enabled and this sweep"
@@ -649,7 +703,17 @@ jobs:
             } >&2
             exit 1
           fi
-          echo "::notice::permission to toggle immutable tags confirmed"
+
+          # Unlocked repo under `enforce`: the sweep itself is unaffected, and a
+          # protection that was never there cannot be lost. Warn, sweep, move on
+          # — failing here would turn a missing nice-to-have into a red pipeline.
+          {
+            echo "::warning::immutable_tags_policy is 'enforce' but ${SERVICE_ACCOUNT:-the deploy service account}"
+            echo "::warning::cannot set immutable tags on ${GCP_PROJECT}/${GAR_REPO}. The sweep will run and the"
+            echo "::warning::repository will be LEFT UNLOCKED — it already was, so nothing is lost, but the"
+            echo "::warning::policy is not in effect. Grant artifactregistry.repositories.update"
+            echo "::warning::(roles/artifactregistry.admin), or set immutable_tags_policy: preserve."
+          } >&2
 
       - name: Unlock immutable tags
         if: steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false
@@ -726,32 +790,62 @@ jobs:
       # ALWAYS. The deletion step above exits 1 on any unexpected failure, and a repo
       # left unlocked because a sweep failed is a silent loss of the protection the
       # setting exists to provide. Runs even if the job is cancelled mid-sweep.
-      - name: Relock immutable tags
-        if: always() && steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false
+      # Under `enforce` this is no longer a restore step: an applied sweep is the
+      # thing that makes immutable tags true, so a repository that has never been
+      # locked ends its first sweep locked. Still `always()` — a repo left
+      # unlocked by a FAILED sweep is the silent loss this step exists to prevent.
+      - name: Ensure immutable-tag end-state
+        if: >-
+          always() && inputs.dry_run == false &&
+          (steps.immutable.outputs.immutable == 'true' ||
+           steps.policy.outputs.policy == 'enforce')
+        env:
+          POLICY:     ${{ steps.policy.outputs.policy }}
+          STARTED:    ${{ steps.immutable.outputs.immutable }}
+          CAN_UPDATE: ${{ steps.perm.outputs.can_update }}
         run: |
-          if [ "${RELOCK}" != "true" ]; then
-            echo "::warning::relock_immutable_tags is false — ${GCP_PROJECT}/${GAR_REPO} is being LEFT UNLOCKED."
+          fix_cmd="gcloud artifacts repositories update ${GAR_REPO} --location=${GCP_REGION} --project=${GCP_PROJECT} --immutable-tags"
+
+          if [ "$POLICY" = "unlock" ]; then
+            echo "::warning::immutable_tags_policy is 'unlock' — ${GCP_PROJECT}/${GAR_REPO} is being LEFT UNLOCKED."
             echo "::warning::Tags can now be moved to a different digest. Re-enable with:"
-            echo "::warning::  gcloud artifacts repositories update ${GAR_REPO} --location=${GCP_REGION} --project=${GCP_PROJECT} --immutable-tags"
+            echo "::warning::  ${fix_cmd}"
+            exit 0
+          fi
+
+          if [ "$POLICY" = "preserve" ] && [ "$STARTED" != "true" ]; then
+            echo "::notice::policy 'preserve' and ${GCP_PROJECT}/${GAR_REPO} started unlocked — leaving it as it was"
+            exit 0
+          fi
+
+          # The pre-flight already decided, and already spoke. A locked repo that
+          # failed it was never unlocked (that step exits 1 before any deletion),
+          # so there is nothing here to restore and nothing alarming to report.
+          if [ "$CAN_UPDATE" != "true" ]; then
+            echo "::notice::no permission to change immutability on ${GCP_PROJECT}/${GAR_REPO} — left as found"
             exit 0
           fi
 
           gcloud artifacts repositories update "$GAR_REPO" \
             --location="$GCP_REGION" --project="$GCP_PROJECT" --immutable-tags || true
 
-          # Trust the readback, not the exit code: the whole point is that the
-          # repository ends this run as protected as it started.
+          # Trust the readback, not the exit code: the whole point is the state
+          # the repository is actually in when this run ends.
           state=$(gcloud artifacts repositories describe "$GAR_REPO" \
                     --location="$GCP_REGION" --project="$GCP_PROJECT" \
                     --format="value(dockerConfig.immutableTags)" 2>/dev/null || echo "")
           if [ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
-            echo "::notice::immutable tags re-enabled on ${GCP_PROJECT}/${GAR_REPO}"
+            if [ "$STARTED" = "true" ]; then
+              echo "::notice::immutable tags re-enabled on ${GCP_PROJECT}/${GAR_REPO}"
+            else
+              echo "::notice::immutable tags ENABLED on ${GCP_PROJECT}/${GAR_REPO} (policy: enforce; it started unlocked)"
+            fi
             exit 0
           fi
 
           {
-            echo "::error::FAILED TO RE-LOCK ${GCP_PROJECT}/${GAR_REPO}. The repository is UNLOCKED:"
+            echo "::error::FAILED TO LOCK ${GCP_PROJECT}/${GAR_REPO}. The repository is UNLOCKED:"
             echo "::error::tags can be moved to a different digest until this is fixed. Run:"
-            echo "::error::  gcloud artifacts repositories update ${GAR_REPO} --location=${GCP_REGION} --project=${GCP_PROJECT} --immutable-tags"
+            echo "::error::  ${fix_cmd}"
           } >&2
           exit 1

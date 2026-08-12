@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-12` — [`cleanup-gar-images` v2.1.0: the sweep now ENABLES immutable tags, it does not merely restore them](#2026-08-12--cleanup-gar-images-v210-the-sweep-now-enables-immutable-tags-it-does-not-merely-restore-them)
 - `2026-08-11` — [`cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)](#2026-08-11--cleanup-gar-images-plans-are-mostly-impossible-fleet-wide-one-caller-stalled-completely-bug-fix)
 - `2026-08-11` — [`badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice](#2026-08-11--badge_insert-default-on-badges-may-still-be-given-to-a-repo-but-it-is-now-a-nameable-choice)
 - `2026-08-11` — [`cleanup-gar-images` v2.0.0: retention is release-relative, not age-based](#2026-08-11--cleanup-gar-images-v200-retention-is-release-relative-not-age-based)
@@ -60,6 +61,59 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-12 — `cleanup-gar-images` v2.1.0: the sweep now ENABLES immutable tags, it does not merely restore them
+
+**Context.** The 2026-08-11 entry below built detect → unlock → sweep → relock, and stated
+the principle as *"a repository without immutability never has its settings touched."*
+That principle had an unnoticed consequence: **a repository that was never locked is never
+protected, and nothing in the platform ever locks it.** It surfaced when the `realm-id/backend`
+GAR console still showed immutability disabled after the 2026-08-12 sweep. Nothing was
+broken — run `31573158323` shows detection returning false and both toggle steps skipped
+(zero occurrences of `--immutable-tags` in the run log) — but "relock is on by default" had
+been read as "the platform makes repositories immutable", and it never did.
+
+**Decision.** Make the sweep the enforcement point. `immutable_tags_policy` (default
+`enforce`) replaces the `relock_immutable_tags` boolean: an applied run ends with the
+repository **locked whether or not it started that way**. `preserve` is the old behaviour;
+`unlock` is the old opt-out. `relock_immutable_tags: false` still resolves to `unlock`, so
+no caller breaks — only an explicit `false` is distinguishable from a boolean default,
+which is exactly the value with an unambiguous meaning.
+
+**Why the sweep, rather than provisioning.** It is the one job that already holds
+`artifactregistry.repositories.update`, already knows how to work around the lock, and
+already runs on a schedule against every repository worth protecting. Putting enforcement
+in `infra-provisioning` would mean granting a second identity the same power to satisfy the
+ownership split, for a setting that is a property of the artifact lifecycle this workflow
+already owns.
+
+**The permission verdict is deliberately asymmetric**, and this is the subtle part:
+
+- **Started locked, permission missing ⇒ fail, nothing deleted.** Unchanged. The sweep
+  genuinely cannot work, and half-doing it is the worst outcome.
+- **Started unlocked, permission missing, policy `enforce` ⇒ warn, sweep anyway.**
+  Enforcement is a guarantee being *gained*; failing to gain it loses nothing that existed
+  a minute ago. Failing the run would convert every repository whose SA lacks
+  `roles/artifactregistry.admin` from "sweeps fine, unprotected" to "red pipeline" — a
+  self-inflicted outage in exchange for no additional safety.
+
+Symmetric fail-closed was the tempting choice, since the 2026-08-11 design is built on
+failing closed. It is wrong here because the two failures are not the same event.
+
+**The real cost, and why the fleet needed three edits first.** An immutable repository
+rejects *any* push that moves an existing tag — which includes `:latest`. Three pipelines
+push `:latest` into the two repositories being locked (`Realm-ID/api` `deploy.yml`,
+`Traide-Co/api` `deploy.yml`, and `Realm-ID/issuer` via `promote-image`'s `also_tag_latest`).
+Turning enforcement on without removing them would have failed the *builds*, not the sweep,
+and only on the second push. Nothing consumes those tags — Cloud Run deploys reference
+semver/sha — so they were retired rather than the policy weakened. **This is documented as
+the way the new default bites**, because the failure appears in an unrelated repository's
+deploy job.
+
+**Tested.** `run_step_tests.py` gained the policy resolver (enum validation, deprecated-alias
+folding), the pre-flight's two verdicts, and the end-state matrix — including the case that
+motivated the asymmetry (missing permission on a repo that started unlocked must not fail)
+and the one that must never regress (a readback saying "still unlocked" fails the job).
 
 ## 2026-08-11 — `cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)
 
@@ -449,6 +503,10 @@ outage case — and a missing deployment URL failing with an explanation.
 workflow holding a Pages deploy token.
 
 ## 2026-08-11 — `cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends
+
+> **Partly superseded 2026-08-12** (see the v2.1.0 entry above). "A repository without
+> immutability never has its settings touched" is no longer true under the default
+> `immutable_tags_policy: enforce`; everything else here still holds.
 
 **Context.** GAR repositories can enforce **immutable tags**, which is how a `:v1.2.3` tag
 stays a trustworthy deploy target — nothing can move it to a different digest. Verified

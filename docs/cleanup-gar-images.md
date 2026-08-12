@@ -111,7 +111,8 @@ warning rather than passing quietly.
 | `grace_period_days` | no | `0` | reprieve for artifacts outside the keep-set, measured back from the oldest release-policy-retained image |
 | `keep_tags` | no | `latest,buildcache` | exact tags never deleted |
 | `keep_tag_prefixes` | no | `hotfix-,rc-,debug-` | tag prefixes never deleted |
-| `relock_immutable_tags` | `true` | re-enable immutable tags after the sweep — **on by default**; see [Immutable tags](#immutable-tags) |
+| `immutable_tags_policy` | no | `enforce` | state the repository is left in after an applied sweep: `enforce` \| `preserve` \| `unlock`; see [Immutable tags](#immutable-tags) |
+| `relock_immutable_tags` | no | `true` | **deprecated** — `false` still means "leave it unlocked" and folds into `immutable_tags_policy: unlock` |
 | `dry_run` | no | `true` | `true` prints the plan and deletes nothing |
 
 The repo path is derived as `<gcp_region>-docker.pkg.dev/<gcp_project>/<gar_repo>`.
@@ -125,31 +126,58 @@ If the Artifact Registry repository has **immutable tags** enabled, tagged image
 cannot be deleted."* Untagged versions can still be deleted, so without handling this
 a sweep half-succeeds: untagged versions gone, every aged-out tagged image failing.
 
+Since **v2.1.0 the sweep is also what turns immutability ON**. An applied run ends with
+the repository locked whether or not it started that way — the sweep is the one job that
+already holds `artifactregistry.repositories.update` and already knows how to work around
+the lock, so making it the enforcement point means no repository quietly stays unprotected
+just because nobody enabled the setting when it was created.
+
 This workflow handles it automatically, in this order:
 
-1. **Detect.** `describe` the repository. If immutability is off, nothing below runs —
-   no repository setting is ever touched on a repo that does not need it.
-2. **Pre-flight the permission**, *before deleting anything*. It POSTs to
+1. **Resolve the policy.** `immutable_tags_policy` (default `enforce`), with a deprecated
+   `relock_immutable_tags: false` folded in as `unlock`. An unrecognised value fails the run.
+2. **Detect.** `describe` the repository, recording whether it *started* locked.
+3. **Pre-flight the permission**, *before deleting anything*. It POSTs to
    `:testIamPermissions` for `artifactregistry.repositories.update` (there is no
-   `gcloud artifacts repositories test-iam-permissions` subcommand). Missing ⇒ the run
-   **fails with nothing deleted**, naming the permission and the role that grants it.
-   Discovering this halfway through would leave the repo unlocked and the sweep partial.
-3. **Unlock**, emitting a `::warning::` that protection is off for the duration.
-4. **Sweep.**
-5. **Relock — always.** The step runs under `if: always()`, so it fires even when the
-   deletion step fails or the job is cancelled mid-sweep. It then **verifies by reading
+   `gcloud artifacts repositories test-iam-permissions` subcommand). The verdict is
+   **asymmetric**, because the two cases risk different things:
+   - Repository **started locked** ⇒ missing permission **fails the run with nothing
+     deleted**. The sweep cannot do its job, and discovering that halfway through would
+     leave the repo unlocked and the sweep partial.
+   - Repository **started unlocked**, under `enforce` ⇒ missing permission **warns and
+     the sweep proceeds**. Enforcement is a gain that cannot be made; no protection is
+     lost, so failing here would turn a missing nice-to-have into a red pipeline.
+4. **Unlock** (only if it started locked), emitting a `::warning::` that protection is off
+   for the duration.
+5. **Sweep.**
+6. **Ensure the end-state — always.** The step runs under `if: always()`, so it fires even
+   when the deletion step fails or the job is cancelled mid-sweep. It **verifies by reading
    the setting back** rather than trusting the exit code, and **fails the job** if the
-   repository is still unlocked, printing the exact `gcloud` command to fix it. A repo
-   left unlocked by a failed sweep is a silent loss of the guarantee.
+   repository is still unlocked, printing the exact `gcloud` command to fix it. A repo left
+   unlocked by a failed sweep is a silent loss of the guarantee.
 
 **`dry_run: true` never toggles anything.** The plan is printed and the repository is
 left exactly as found.
 
-### Opting out of the relock
+### Choosing a policy
 
-`relock_immutable_tags: false` leaves the repository unlocked after the sweep. The only
-legitimate uses are a maintenance window or debugging a failed sweep. The run warns
-loudly and prints the command to re-enable protection.
+| Value | Started locked | Started unlocked |
+|---|---|---|
+| `enforce` (default) | relocked | **locked** |
+| `preserve` | relocked | left unlocked, untouched |
+| `unlock` | left unlocked (loud warning) | left unlocked |
+
+> **`enforce` will break a build that pushes a moving tag.** An immutable repository
+> rejects any push that moves an existing tag to a new digest — `:latest`, a BuildKit
+> `buildcache` tag, a rolling `:stage`. If images in this repository are tagged that way,
+> either retire the moving tag first or set `immutable_tags_policy: preserve`. This is the
+> single most likely way the default bites, and it bites the *build*, not the sweep.
+
+`preserve` is the pre-v2.1.0 behaviour: restore what was there, never add protection.
+
+`unlock` leaves the repository unlocked after the sweep. The only legitimate uses are a
+maintenance window or debugging a failed sweep. The run warns loudly and prints the command
+to re-enable protection.
 
 > **Leaving it unlocked means any actor can move a tag to a different digest** — which is
 > precisely what immutable tags exist to prevent, and what makes a `:v1.2.3` tag a
@@ -158,9 +186,12 @@ loudly and prints the command to re-enable protection.
 ### What the service account needs
 
 `artifactregistry.repositories.update`, i.e. `roles/artifactregistry.admin` on the
-repository, **only if** immutability is enabled. Repos without it need nothing extra —
-which also means IAM, not a workflow input, is the real gate on whether this workflow can
-change a repository's settings at all.
+repository. Under the default `enforce` this is now needed on **every** repository, not
+only ones that already have immutability enabled — without it the sweep still runs and
+still deletes, but warns that the policy is not in effect. IAM therefore remains the real
+gate on whether this workflow can change a repository's settings: a repository that must
+never be touched simply does not grant the permission, and no caller-side input can
+override that.
 
 ## Migrating from v1
 
@@ -249,7 +280,7 @@ jobs:
 
   cleanup:
     needs: resolve
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.1.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

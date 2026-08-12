@@ -649,6 +649,12 @@
           "required": false,
           "type": "string"
         },
+        "immutable_tags_policy": {
+          "default": "enforce",
+          "description": "What state the repository is left in after an applied sweep. `enforce` (DEFAULT) \u2014 the repository ends LOCKED whether or not it started that way; the sweep is the thing that makes immutable tags true everywhere. `preserve` \u2014 relock only if it was already locked (the pre-v2.1.0 behaviour); use this for a repository whose build still pushes a moving tag such as :latest, which an immutable repository rejects. `unlock` \u2014 leave it unlocked, warning loudly.",
+          "required": false,
+          "type": "string"
+        },
         "keep_semver_count": {
           "default": "5",
           "description": "Per image, keep this many of the most recent RELEASES. Minimum 2 \u2014 the boundary that protects your builds is itself a release, so a policy that keeps fewer than two cannot express one.",
@@ -675,7 +681,7 @@
         },
         "relock_immutable_tags": {
           "default": true,
-          "description": "Re-enable immutable tags after the sweep. DEFAULT TRUE \u2014 leave it alone unless you deliberately want the repository left unlocked (a maintenance window, or debugging a failed sweep). Setting it false removes the protection that stops a tag being moved to a different digest, and the run will say so loudly.",
+          "description": "DEPRECATED \u2014 use `immutable_tags_policy`. Kept so existing callers do not break: setting it false still means \"leave the repository unlocked\" and is folded into `immutable_tags_policy: unlock`. Its default (true) no longer means anything on its own.",
           "required": false,
           "type": "boolean"
         },
