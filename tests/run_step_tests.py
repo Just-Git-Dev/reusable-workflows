@@ -185,11 +185,15 @@ def run_coverage_step(body: str, *, summary_pct=None, threshold=0):
                 "output": out.read_text()}
 
 
-def run_relock_step(body: str, *, relock="true", update_ok=True, readback="true"):
-    """Execute the GAR relock body against a stubbed gcloud.
+def run_relock_step(body: str, *, policy="enforce", started="true", can_update="true",
+                    update_ok=True, readback="true"):
+    """Execute the GAR end-state body against a stubbed gcloud.
 
-    update_ok: does `repositories update --immutable-tags` succeed
-    readback:  what `describe` reports afterwards ("true" = protected again)
+    policy:     resolved immutable_tags_policy (enforce | preserve | unlock)
+    started:    was the repository immutable BEFORE the sweep
+    can_update: did the permission pre-flight pass
+    update_ok:  does `repositories update --immutable-tags` succeed
+    readback:   what `describe` reports afterwards ("true" = protected)
     """
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -209,13 +213,62 @@ exit 0
         gcloud.chmod(0o755)
         env = dict(os.environ)
         env["PATH"] = f"{stub}:{env['PATH']}"
-        env.update(RELOCK=relock, GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo")
+        env.update(POLICY=policy, STARTED=started, CAN_UPDATE=can_update,
+                   GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo")
         proc = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
             capture_output=True, text=True, env=env, cwd=tmp,
         )
         return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
                 "calls": calls.read_text()}
+
+
+def run_perm_step(body: str, *, started="true", granted=True):
+    """Execute the immutability permission pre-flight against a stubbed curl.
+
+    granted: does :testIamPermissions echo the permission back
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        body_json = ('{"permissions":["artifactregistry.repositories.update"]}'
+                     if granted else "{}")
+        for name, script in {
+            "curl": f'#!/usr/bin/env bash\necho \'{body_json}\'\n',
+            "gcloud": '#!/usr/bin/env bash\necho token\n',
+        }.items():
+            p = stub / name
+            p.write_text(script)
+            p.chmod(0o755)
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(STARTED=started, GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo",
+                   GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "output": out.read_text()}
+
+
+def run_policy_step(body: str, *, policy_in="enforce", relock_in="true"):
+    """Execute the policy resolver, which folds the deprecated boolean in."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env.update(POLICY_IN=policy_in, RELOCK_IN=relock_in, GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "output": out.read_text()}
 
 
 def run_smoke_step(body: str, *, base="https://x.pages.dev", path="/", expect="",
@@ -394,14 +447,67 @@ def main():
     check("clean fleet renders a clean report",
           "are current" in fd.render_md([{"repo": "o/a", "file": "c", "workflow": "w",
                                           "ref": "v1.21.1", "status": "OK", "detail": ""}], "v1.21.1"))
-    # ---- GAR relock: the repo must end the run as protected as it started ----
-    relock = extract_step(GAR, "cleanup", "Relock immutable tags")
-    print("\ncleanup-gar-images · Relock immutable tags")
+    # ---- GAR policy resolver: one enum, with the deprecated boolean folded in ----
+    resolver = extract_step(GAR, "cleanup", "Resolve immutable-tag policy")
+    print("\ncleanup-gar-images · Resolve immutable-tag policy")
+
+    r = run_policy_step(resolver)
+    check("default resolves to enforce", "policy=enforce" in r["output"], r["output"])
+    check("default exits 0", r["rc"] == 0, r["out"])
+
+    for p in ("enforce", "preserve", "unlock"):
+        r = run_policy_step(resolver, policy_in=p)
+        check(f"{p} passes through", f"policy={p}" in r["output"], r["output"])
+
+    r = run_policy_step(resolver, policy_in="lock-it-please")
+    check("an unknown policy FAILS the job", r["rc"] == 1, r["out"])
+    check("an unknown policy names the valid values", "enforce" in r["out"], r["out"])
+
+    # Back-compat: the deprecated boolean still means "leave it unlocked".
+    r = run_policy_step(resolver, relock_in="false")
+    check("relock_immutable_tags:false maps to unlock",
+          "policy=unlock" in r["output"], r["output"])
+    check("the deprecated boolean warns", "deprecated" in r["out"].lower(), r["out"])
+    r = run_policy_step(resolver, policy_in="preserve", relock_in="true")
+    check("the boolean's default does not override the policy",
+          "policy=preserve" in r["output"], r["output"])
+
+    # ---- GAR permission pre-flight: one probe, two verdicts ----
+    perm = extract_step(GAR, "cleanup", "Verify permission to toggle immutability")
+    print("\ncleanup-gar-images · Verify permission to toggle immutability")
+
+    r = run_perm_step(perm, granted=True)
+    check("granted exits 0", r["rc"] == 0, r["out"])
+    check("granted records can_update=true", "can_update=true" in r["output"], r["output"])
+
+    # Locked repo, no permission: the sweep cannot work — fail before deleting.
+    r = run_perm_step(perm, started="true", granted=False)
+    check("locked + denied FAILS before any deletion", r["rc"] == 1, r["out"])
+    check("locked + denied says nothing was deleted", "Nothing has been deleted" in r["out"], r["out"])
+    check("locked + denied records can_update=false", "can_update=false" in r["output"], r["output"])
+
+    # Unlocked repo under enforce: warn, but let the sweep do its real job.
+    r = run_perm_step(perm, started="false", granted=False)
+    check("unlocked + denied does NOT fail the sweep", r["rc"] == 0, r["out"])
+    check("unlocked + denied warns the policy is not in effect",
+          "LEFT UNLOCKED" in r["out"] and "::warning::" in r["out"], r["out"])
+    check("unlocked + denied names the fix",
+          "artifactregistry.repositories.update" in r["out"], r["out"])
+
+    # ---- GAR end-state: the repo must end an applied run LOCKED by default ----
+    relock = extract_step(GAR, "cleanup", "Ensure immutable-tag end-state")
+    print("\ncleanup-gar-images · Ensure immutable-tag end-state")
 
     r = run_relock_step(relock)
     check("happy path exits 0", r["rc"] == 0, r["out"])
     check("happy path re-enables", "--immutable-tags" in r["calls"], r["calls"])
     check("happy path verifies by readback", "describe" in r["calls"], r["calls"])
+
+    # The new behaviour: a repo that was NEVER locked ends the run locked.
+    r = run_relock_step(relock, started="false")
+    check("enforce locks a repo that started unlocked", r["rc"] == 0, r["out"])
+    check("enforce actually calls update", "--immutable-tags" in r["calls"], r["calls"])
+    check("enforce readback-verifies too", "describe" in r["calls"], r["calls"])
 
     # The dangerous case: gcloud says OK but the repo is still unlocked.
     r = run_relock_step(relock, update_ok=True, readback="false")
@@ -409,6 +515,8 @@ def main():
     check("unlocked-after-relock says UNLOCKED", "UNLOCKED" in r["out"], r["out"])
     check("unlocked-after-relock gives the fix command",
           "--immutable-tags" in r["out"], r["out"])
+    r = run_relock_step(relock, started="false", update_ok=True, readback="false")
+    check("failed ENFORCE fails the job too", r["rc"] == 1, r["out"])
 
     # Trust the readback, not the exit code: update fails but repo is protected.
     r = run_relock_step(relock, update_ok=False, readback="true")
@@ -417,11 +525,29 @@ def main():
     r = run_relock_step(relock, update_ok=False, readback="false")
     check("genuine relock failure exits 1", r["rc"] == 1, r["out"])
 
+    # preserve = the pre-v2.1.0 contract: restore what was there, nothing more.
+    r = run_relock_step(relock, policy="preserve", started="true")
+    check("preserve relocks a repo that started locked",
+          r["rc"] == 0 and "--immutable-tags" in r["calls"], r["calls"])
+    r = run_relock_step(relock, policy="preserve", started="false")
+    check("preserve leaves an unlocked repo alone", r["rc"] == 0, r["out"])
+    check("preserve touches nothing", r["calls"].strip() == "", r["calls"])
+
     # Opt-out: warn loudly, change nothing, do not fail.
-    r = run_relock_step(relock, relock="false")
+    r = run_relock_step(relock, policy="unlock")
     check("opt-out exits 0", r["rc"] == 0, r["out"])
     check("opt-out warns it is left unlocked", "LEFT UNLOCKED" in r["out"], r["out"])
     check("opt-out touches nothing", r["calls"].strip() == "", r["calls"])
+
+    # Missing permission is asymmetric: enforcing cannot lose a guarantee that
+    # was never there, so it warns; a repo that STARTED locked was never
+    # unlocked either (the pre-flight fails the job before any deletion).
+    r = run_relock_step(relock, started="false", can_update="false")
+    check("enforce without permission does not fail the job", r["rc"] == 0, r["out"])
+    check("enforce without permission touches nothing", r["calls"].strip() == "", r["calls"])
+    r = run_relock_step(relock, started="true", can_update="false")
+    check("no-permission + started-locked does not cry UNLOCKED",
+          r["rc"] == 0 and "FAILED TO RE-LOCK" not in r["out"], r["out"])
 
     # ---- Pages smoke check: a green deploy is not a working site ----
     smoke = extract_step(PAGES, "deploy", "Smoke check")

@@ -48,11 +48,11 @@ expressed in the caller with `needs:`, the same way pre-deploy gates already are
 ```yaml
 jobs:
   migrate:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/run-db-job.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/run-db-job.yml@v2.1.0
     # ...
   api:
     needs: migrate
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.1.0
     # ...
 ```
 
@@ -117,7 +117,7 @@ permissions:
 
 jobs:
   build:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.1.0
     with:
       build_only: true
       gcp_project: auto-mahn
@@ -128,7 +128,7 @@ jobs:
 
   migrate:
     needs: build
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/run-db-job.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/run-db-job.yml@v2.1.0
     permissions:
       contents: read
       id-token: write
@@ -145,7 +145,7 @@ jobs:
 
   api:
     needs: [build, migrate]
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.1.0
     # ... rolls the service, only reached if migrate exited 0
 ```
 
@@ -158,7 +158,7 @@ migration runner is a no-op on nothing-pending.
 
 ```yaml
   nightly-reconcile:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/run-db-job.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/run-db-job.yml@v2.1.0
     with:
       gcp_project: auto-mahn
       job: nightly-reconcile

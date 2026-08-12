@@ -48,7 +48,7 @@ permissions:
 
 jobs:
   run:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-alerts.yml@v2.0.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-alerts.yml@v2.1.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
