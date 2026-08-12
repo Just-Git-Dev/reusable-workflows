@@ -1,5 +1,35 @@
 # TODO — reusable-workflows
 
+## Fallout from immutable-tag enforcement (opened 2026-08-12, v2.1.1)
+
+- [ ] **`retire-gar-packages` has no immutability handling and will fail on a locked repo.**
+      It calls `gcloud artifacts packages delete`, which refuses to remove a package holding
+      tagged images while the repository is immutable — and it `exit 1`s on failure
+      (`retire-gar-packages.yml:206`). `realm-id/backend` and `traide-in/backend` are now
+      locked, so this is real but **latent: no repo in either org calls this workflow today**
+      (verified by grepping all 50 workflow files across Realm-ID + Traide-Co). Either give it
+      the same detect → unlock → act → relock treatment as `cleanup-gar-images`, or make it
+      fail with a message that names immutability instead of a raw gcloud error. Its header
+      comment also still advertises `roles/artifactregistry.repoAdmin`.
+
+- [ ] **`keep_tags` defaults to `latest,buildcache` — both are MOVING tags, which the default
+      `immutable_tags_policy: enforce` makes impossible to push.** The default keep-set
+      therefore advertises a workflow the default policy forbids. Nothing is broken (keeping a
+      tag that can no longer move is harmless), but the two defaults tell a new caller opposite
+      stories. Decide whether `keep_tags` should default to empty, or whether the docs should
+      simply say these entries are for `preserve`-mode repos.
+
+- [ ] **Stale `:latest` tags are now frozen in both backend repos.** `Realm-ID/api`,
+      `Traide-Co/api` and `Realm-ID/issuer` stopped pushing `:latest` (2026-08-12), but the
+      last-pushed tag is still there, pinning its digest alive and shielded by `keep_tags`.
+      Removing it now needs an unlock → `gcloud artifacts docker tags delete` → relock. Not
+      urgent, not a one-way door — just permanent until someone does it.
+
+- [ ] **13 of 15 fleet call sites are still pinned `@v2.0.0`** (only the two
+      `cleanup-gar-images` callers moved to `@v2.1.1`). v2.1.x changed exactly one workflow's
+      contract, so nothing is stale in behaviour — but `fleet_drift.py` will report them a
+      minor behind until a fleet-wide repin sweep.
+
 ## Build-once, promote-to-prod
 
 Reusable-side work is **done** (`v1.17.0`): `deploy-cloud-run` gained `build_only`,
