@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-13` — [`delete_tags` (v2.2.0): stranded moving tags are removed by the sweep that strands them, not by a new workflow](#2026-08-13--delete_tags-v220-stranded-moving-tags-are-removed-by-the-sweep-that-strands-them-not-by-a-new-workflow)
 - `2026-08-13` — [Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately](#2026-08-13--fleet-repinned-to-v212-drift-is-closed-to-zero-on-a-behaviour-neutral-tag-deliberately)
 - `2026-08-13` — [`retire-gar-packages` handles immutability, and preserves it rather than deciding it](#2026-08-13--retire-gar-packages-handles-immutability-and-preserves-it-rather-than-deciding-it)
 - `2026-08-12` — [A locked repo the sweep cannot unlock degrades to untagged-only instead of failing](#2026-08-12--a-locked-repo-the-sweep-cannot-unlock-degrades-to-untagged-only-instead-of-failing)
@@ -64,6 +65,74 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-13 — `delete_tags` (v2.2.0): stranded moving tags are removed by the sweep that strands them, not by a new workflow
+
+**Context.** `Realm-ID/api`, `Traide-Co/api` and `Realm-ID/issuer` stopped pushing `:latest`
+on 2026-08-12 so that `realm-id/backend` and `traide-in/backend` could be locked with immutable
+tags. The builds changed, but the **last-pushed `:latest` tag stayed**. In a locked repository
+that is permanent: the tag pins its digest alive, `keep_tags` (default `latest,buildcache`)
+shields it from the sweep, and an immutable repository refuses to move or remove it. Nothing
+converges — every future sweep keeps it, forever.
+
+**Discovered while scoping this: the premise could not be verified with anything that existed.**
+The raw `images list --include-tags` output is captured into a Python variable and never
+printed, and the plan JSON enumerates only `to_delete` and `blocked_by_parent` — a keep-set
+digest appears nowhere. `akshat@revvup.ai` gets `IAM_PERMISSION_DENIED` on
+`artifacts repositories describe` for **both** projects, and only `github-cleaner` holds
+`artifactregistry.admin`, reachable exclusively via WIF inside Actions. So there was no read
+path to confirm the tags were still there. That shaped the design: **`dry_run: true` is now the
+read path**, reporting which named tags exist and on which digests, mutating nothing.
+
+**Decision.** Add a `delete_tags` input to `cleanup-gar-images` (default empty, inert for all
+15 call sites) rather than build a separate `delete-gar-tags` reusable.
+
+**Why fold it in rather than build a new workflow.** The sweep already owns everything the job
+needs: WIF auth as the SA with `artifactregistry.admin`, the `--include-tags` listing, and the
+whole detect → pre-flight → unlock → act → `always()` re-lock window. A new reusable would have
+duplicated that immutability sequence — the exact duplication `retire-gar-packages` was careful
+about. Decisively, **both callers are already wired and dispatchable**: `workflow_dispatch`
+only fires from a repo's default branch, so a standalone workflow (or even a throwaway
+diagnostic) would have cost two PRs of churn per repo before it could run once.
+
+**It deletes a tag reference, never a digest — and that is the whole point.** The apparent
+shortcut, dropping `latest` from `keep_tags` and letting the sweep take the digest, is **not
+equivalent**. Under build-once/promote a released digest carries both a `:<sha>` tag and
+`vX.Y.Z`, so deleting it would take a release with it. `gcloud artifacts docker tags delete`
+removes only the pointer.
+
+**Three design calls, each a deliberate divergence:**
+
+1. **It runs after the sweep, before the re-lock.** After, because the plan is computed long
+   before any tag is touched — that is what preserves plan/apply parity, the property that
+   lets a reviewed dry-run digest set be trusted against the applied run (the "byte-identical
+   digest set" result on both repos in the v2.0.0 migration). The consequence is intended and
+   documented: once the tag is gone its digest is untagged and is reclaimed by the **next**
+   sweep, not this one. Before the re-lock, because deleting a tag in a locked repository is
+   refused exactly like deleting a tagged image, and needs the same unlock window.
+2. **It fails rather than degrades.** The sweep's pre-flight degrades on locked+no-permission —
+   skip tagged images, exit green — which is right for a retention policy, where losing
+   retention on some images beats failing the job. It is the wrong trade for a tag the caller
+   named outright: exiting green having silently deleted nothing is the "green tick means it
+   did not run" failure. Same reasoning that gave `retire-gar-packages` no degraded mode.
+3. **It is ignored on a scheduled run.** RI sweeps weekly and Traide **daily**. A `delete_tags`
+   value left behind in a caller's `with:` block would otherwise arm a recurring tag deleter.
+   `github.event_name` inside a called workflow is the caller's event — already relied on at
+   `ci-node.yml:523` and `ci-go.yml:395`.
+
+**Tests first, RED confirmed** (`step 'Delete named tags' not found`), then green: 26 checks
+covering the dry-run read path, apply, idempotence on an absent tag, multi-tag CSV with
+whitespace, the degraded failure, the schedule guard, and two structural assertions that pin
+the step's **position** between `Execute deletions` and `Ensure immutable-tag end-state` —
+because the ordering is the load-bearing part and a future edit could silently move it.
+
+**Not yet applied.** This ships the capability; the two repos still have their stranded tags.
+The next step is a dispatch with `dry_run: true` on each caller to confirm the tags are
+actually there — which is the first time anyone will have been able to see them.
+
+**Noted, not fixed (scope):** `SERVICE_ACCOUNT` is referenced in three messages in this
+workflow but never set, so the two pre-existing uses always print the generic fallback. Wired
+it in the new step; the other two are in `TODO.md`.
 
 ## 2026-08-13 — Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately
 

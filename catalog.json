@@ -619,6 +619,12 @@
           "required": false,
           "type": "string"
         },
+        "delete_tags": {
+          "default": "",
+          "description": "Comma-separated exact tags to DELETE outright \u2014 a one-shot cleanup, not a retention rule. This removes the TAG REFERENCE only; the digest stays and is judged on its own merits by the NEXT sweep. It exists for a moving tag (`latest`, `buildcache`) stranded in a repository that has since been locked: the tag pins its digest alive and `keep_tags` shields it, so no sweep can ever reclaim it. Deleting the digest instead is NOT equivalent \u2014 under build-once/promote a released digest carries both a sha tag and vX.Y.Z, so removing it would take a release with it. IGNORED on a scheduled run, so a value left behind in a caller's `with:` block cannot arm a recurring tag deleter. Unlike the sweep, this FAILS rather than degrades when the repository is locked and the service account cannot unlock it. Empty (DEFAULT) = the step never runs.",
+          "required": false,
+          "type": "string"
+        },
         "dry_run": {
           "default": true,
           "description": "true = print the plan only, delete nothing.",
