@@ -10,10 +10,11 @@
       deleted). Header IAM corrected to `roles/artifactregistry.admin`. 17 step-body tests.
       See DECISIONS.md 2026-08-13.
 
-- [ ] **`retire-gar-packages` has no `docs/` page and no README catalog row** — every other
-      workflow has both (`docs/<workflow>.md`, a README table row). Noticed 2026-08-13 while
-      adding immutability handling; the new IAM requirement and the unlock/re-lock behaviour
-      are documented only in the workflow's own header comment.
+- [x] **`retire-gar-packages` has no `docs/` page and no README catalog row.** Done
+      2026-08-13 — `docs/retire-gar-packages.md` + README row under "Backups, alerts &
+      housekeeping". Covers the live-reference safety rule, the immutability sequence and why
+      it has no policy input and no degraded mode, and the `artifactregistry.admin`-not-
+      repoAdmin requirement.
 
 - [ ] **`keep_tags` defaults to `latest,buildcache` — both are MOVING tags, which the default
       `immutable_tags_policy: enforce` makes impossible to push.** The default keep-set
