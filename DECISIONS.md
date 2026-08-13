@@ -166,6 +166,32 @@ verified behaviour-neutral grounds, **this one changes behaviour on upgrade** fo
 the default `enforce` policy: their next sweep removes `:latest`. That is the intent, but it
 means a v2.2.0 repin is not a no-op and should not be described as one.
 
+**Outcome (same day).** Released v2.2.0, repinned both GAR callers (`Realm-ID/project#10`,
+`Traide-Co/project#72`), and applied. **The tags were real** — the first `dry_run: true`
+dispatch was the first time anyone had ever observed them:
+
+| package | `:latest` digest |
+|---|---|
+| `realm-id/backend/api` | `sha256:54efb487939aefb9f477bbdc5362e0244a2ee699de7dfb5b5fd942952ae08b53` |
+| `realm-id/backend/bff-api` | `sha256:ef66703bf2122144f73b30702813fd390e3afeffbd8bf01851107e4d2672f2b6` |
+| `traide-in/backend/api` | `sha256:4a751f54654ba40e1b61058888c6881cc3669930dcf71794fc1cfd44fe094366` |
+
+Applied runs `31701095105` (RI) / `31701099146` (TC), both green. Both emitted
+`immutable-tag policy: enforce`, `repository has immutable tags enabled`, `permission to toggle
+immutable tags confirmed` and `immutable tags re-enabled` — so the policy gate acted rather than
+declining, and the unlock/re-lock window closed correctly on both. That is also a **fresh
+independent confirmation that both repositories are locked**, which until now rested only on the
+2026-08-12 workflow readback.
+
+**Convergence proven on live infrastructure, not just in tests.** Verification dry runs
+`31701325700` / `31701329799` report `not present, nothing to do` for all three packages. The
+step is now a permanent no-op on both repos.
+
+**Still not verified:** whether those three digests are live on Cloud Run, i.e. whether the next
+sweep reclaims them or holds them as live. The delete-set summary goes to
+`$GITHUB_STEP_SUMMARY`, not stdout, so it is absent from `gh run view --log` — a real gap in the
+log-based read path worth knowing about.
+
 **Noted, not fixed (scope):** `SERVICE_ACCOUNT` is referenced in three messages in this
 workflow but never set, so the two pre-existing uses always print the generic fallback. Wired
 it in the new step (and test-pinned); the other two are in `TODO.md`.

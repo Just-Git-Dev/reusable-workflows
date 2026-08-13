@@ -23,21 +23,15 @@
       stories. Decide whether `keep_tags` should default to empty, or whether the docs should
       simply say these entries are for `preserve`-mode repos.
 
-- [ ] **Stale `:latest` tags are now frozen in both backend repos.** `Realm-ID/api`,
-      `Traide-Co/api` and `Realm-ID/issuer` stopped pushing `:latest` (2026-08-12), but the
-      last-pushed tag is still there, pinning its digest alive and shielded by `keep_tags`.
-      Removing it now needs an unlock → `gcloud artifacts docker tags delete` → relock. Not
-      urgent, not a one-way door — just permanent until someone does it.
-
-      **Capability shipped 2026-08-13 (v2.2.0): `cleanup-gar-images` gained
-      `cleanup_latest_tag`, default `true`.** Still OPEN because nothing has been applied.
-      It is a convergence rule, not a one-shot: **no caller change is needed and no manual
-      dispatch is required** — once both callers are repinned to `v2.2.0`, the next scheduled
-      sweep clears the tag by itself, then finds nothing forever.
-      Recommended anyway before relying on that: dispatch each caller (`Realm-ID/project`,
-      `Traide-Co/project`) with `dry_run: true` first — that is the ONLY read path for a
-      keep-set digest, so it is the first confirmation these tags are really still there.
-      Note the digest is reclaimed on the NEXT sweep, not the same run, by design.
+- [x] **Stale `:latest` tags are now frozen in both backend repos.** **DONE 2026-08-13.**
+      Shipped `cleanup_latest_tag` (v2.2.0), repinned both GAR callers, and applied.
+      **All three stranded tags are gone** — `realm-id/backend/{api,bff-api}` and
+      `traide-in/backend/api`. Applied runs `31701095105` / `31701099146`, both green, both
+      repos re-locked by readback. Verification dry runs `31701325700` / `31701329799` report
+      `not present, nothing to do` on all three: converged.
+      The tags had **never been observed before** — there was no read path — and the first
+      `dry_run: true` dispatch on v2.2.0 was the first confirmation they existed at all.
+      See DECISIONS.md 2026-08-13.
 
 - [ ] **`SERVICE_ACCOUNT` is referenced but never set in `cleanup-gar-images.yml`.** Two
       messages in the immutability pre-flight (`:728`, `:741`) interpolate
