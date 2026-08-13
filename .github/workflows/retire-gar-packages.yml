@@ -12,8 +12,19 @@ name: Retire GAR packages (reusable)
 #
 # The caller owns the package list + the dry_run decision. Run dry_run: true first.
 #
+# IMMUTABLE TAGS: a locked repository refuses to delete any package holding a
+# tagged image. An applied run therefore unlocks it, retires, and re-locks it —
+# and leaves it exactly as it was found, whichever way that was. See the steps
+# below for why there is no policy knob and no degraded half-run here.
+#
 # Required IAM on service_account:
-#   roles/artifactregistry.repoAdmin  (delete packages)
+#   roles/artifactregistry.admin      (on the target repo). repoAdmin is NOT
+#                                     enough: it manages ARTIFACTS, not
+#                                     repository settings, so it lacks
+#                                     artifactregistry.repositories.update and
+#                                     cannot unlock a repo with immutable tags.
+#                                     repoAdmin alone still works on a repo that
+#                                     has never been locked.
 #   roles/run.viewer                  (enumerate live Services + Jobs)
 
 on:
@@ -63,7 +74,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v2.1.1
+  WORKFLOW_VERSION: v2.1.2
 
 jobs:
   retire:
@@ -79,6 +90,7 @@ jobs:
       REPO_PATH:   ${{ inputs.gcp_region }}-docker.pkg.dev/${{ inputs.gcp_project }}/${{ inputs.gar_repo }}
       PACKAGES_IN: ${{ inputs.packages }}
       DRY_RUN:     ${{ inputs.dry_run }}
+      SERVICE_ACCOUNT: ${{ inputs.service_account }}
     outputs:
       retired: ${{ steps.exec.outputs.retired }}
 
@@ -190,6 +202,78 @@ jobs:
           fi
           echo "count=$(wc -l < /tmp/retire.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
+      # Immutable tags do not make this workflow a no-op, they make it a trap:
+      # `gcloud artifacts packages delete` refuses to remove a package holding a
+      # tagged image while the repository is locked, and the executor exits 1 on
+      # that. So retirement does what the image sweep does — detect, pre-flight,
+      # unlock, act, restore.
+      #
+      # Deliberately NO policy input, unlike cleanup-gar-images' enforce /
+      # preserve / unlock enum. That workflow OWNS a repository's retention
+      # posture and runs on a schedule; this one is a one-off surgical delete,
+      # and nothing about retiring a dead service is an argument for changing
+      # whether a repo is protected. One end state: exactly as it was found.
+      - name: Check tag immutability
+        id: immutable
+        run: |
+          state=$(gcloud artifacts repositories describe "$GAR_REPO" \
+                    --location="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format="value(dockerConfig.immutableTags)" 2>/dev/null || echo "")
+          case "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" in
+            true) on=true ;;
+            *)    on=false ;;
+          esac
+          echo "immutable=$on" >> "$GITHUB_OUTPUT"
+          if [ "$on" = "true" ]; then
+            echo "::notice::repository has immutable tags enabled — it will be unlocked for the deletion and re-locked afterwards"
+          fi
+
+      # BEFORE anything is deleted. Finding the permission missing partway
+      # through leaves some packages retired and the rest not, with no way to
+      # tell from the outside which. `gcloud artifacts repositories` has no
+      # test-iam-permissions subcommand, so this goes through the REST endpoint.
+      #
+      # No degraded mode here, and that is the difference from the image sweep:
+      # that one can still delete UNTAGGED manifests under a lock, so half a
+      # sweep beats none. A package delete takes every tag with it or fails —
+      # there is no partial version to fall back to. Hence fail closed, naming
+      # immutability, because the raw gcloud error names neither cause nor fix.
+      - name: Verify permission to toggle immutability
+        id: perm
+        if: >-
+          inputs.dry_run == false && steps.immutable.outputs.immutable == 'true'
+        run: |
+          res=$(curl -sS -X POST \
+            -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+            -H "Content-Type: application/json" \
+            -d '{"permissions":["artifactregistry.repositories.update"]}' \
+            "https://artifactregistry.googleapis.com/v1/projects/${GCP_PROJECT}/locations/${GCP_REGION}/repositories/${GAR_REPO}:testIamPermissions")
+          if printf '%s' "$res" | grep -q 'artifactregistry.repositories.update'; then
+            echo "can_update=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::permission to toggle immutable tags confirmed"
+            exit 0
+          fi
+
+          echo "can_update=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "::error::${GCP_PROJECT}/${GAR_REPO} has IMMUTABLE TAGS enabled, so a package holding any"
+            echo "::error::tagged image cannot be deleted — and ${SERVICE_ACCOUNT:-the service account} cannot"
+            echo "::error::turn immutability off. NOTHING HAS BEEN DELETED; this run stopped before the"
+            echo "::error::destructive step rather than retiring some packages and failing on the rest."
+            echo "::error::Grant artifactregistry.repositories.update (roles/artifactregistry.admin), or"
+            echo "::error::unlock the repository out-of-band for the duration of this run."
+          } >&2
+          exit 1
+
+      - name: Unlock immutable tags
+        if: >-
+          steps.immutable.outputs.immutable == 'true' && inputs.dry_run == false &&
+          steps.perm.outputs.can_update == 'true'
+        run: |
+          gcloud artifacts repositories update "$GAR_REPO" \
+            --location="$GCP_REGION" --project="$GCP_PROJECT" --no-immutable-tags
+          echo "::warning::immutable tags are OFF for ${GCP_PROJECT}/${GAR_REPO} while this retirement runs"
+
       - name: Execute retirement
         id: exec
         if: inputs.dry_run == false
@@ -199,11 +283,23 @@ jobs:
           while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
             echo "deleting package: $pkg"
-            if gcloud artifacts packages delete "$pkg" \
-                 --repository="$GAR_REPO" --location="$GCP_REGION" --project="$GCP_PROJECT" --quiet; then
+            # stderr is captured rather than streamed so the immutability case
+            # can be recognised and named; it is re-emitted either way.
+            if err=$(gcloud artifacts packages delete "$pkg" \
+                 --repository="$GAR_REPO" --location="$GCP_REGION" --project="$GCP_PROJECT" --quiet 2>&1); then
               RETIRED=$((RETIRED+1)); echo "OK retired $pkg"
             else
-              echo "::error::Failed to delete package $pkg"; exit 1
+              printf '%s\n' "$err" >&2
+              if printf '%s' "$err" | grep -qi 'immutab'; then
+                {
+                  echo "::error::Failed to delete package $pkg: ${GCP_PROJECT}/${GAR_REPO} still has IMMUTABLE"
+                  echo "::error::TAGS enabled. The unlock step did not run or did not take effect. Re-run after:"
+                  echo "::error::  gcloud artifacts repositories update ${GAR_REPO} --location=${GCP_REGION} --project=${GCP_PROJECT} --no-immutable-tags"
+                } >&2
+              else
+                echo "::error::Failed to delete package $pkg" >&2
+              fi
+              exit 1
             fi
           done < /tmp/retire.txt
           echo "retired=$RETIRED" >> "$GITHUB_OUTPUT"
@@ -211,3 +307,53 @@ jobs:
             echo ""
             echo "### Retired: $RETIRED package(s)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # ALWAYS. The step above exits 1 on the first package it cannot delete,
+      # and a repository left unlocked because a retirement failed is a silent
+      # loss of the protection the setting exists to provide — worse than the
+      # failure itself, because nothing else will notice. Runs even if the job
+      # is cancelled mid-retirement.
+      - name: Ensure immutable-tag end-state
+        if: >-
+          always() && inputs.dry_run == false &&
+          steps.immutable.outputs.immutable == 'true'
+        env:
+          STARTED:    ${{ steps.immutable.outputs.immutable }}
+          CAN_UPDATE: ${{ steps.perm.outputs.can_update }}
+        run: |
+          fix_cmd="gcloud artifacts repositories update ${GAR_REPO} --location=${GCP_REGION} --project=${GCP_PROJECT} --immutable-tags"
+
+          # Preserve, unconditionally: a repository that was not locked when
+          # this started is not something a retirement gets to lock.
+          if [ "$STARTED" != "true" ]; then
+            echo "::notice::${GCP_PROJECT}/${GAR_REPO} started unlocked — leaving it as it was"
+            exit 0
+          fi
+
+          # The pre-flight already decided, and already spoke: a locked repo
+          # that failed it exits 1 before the unlock, so there is nothing here
+          # to restore and nothing alarming to report.
+          if [ "$CAN_UPDATE" != "true" ]; then
+            echo "::notice::no permission to change immutability on ${GCP_PROJECT}/${GAR_REPO} — left as found"
+            exit 0
+          fi
+
+          gcloud artifacts repositories update "$GAR_REPO" \
+            --location="$GCP_REGION" --project="$GCP_PROJECT" --immutable-tags || true
+
+          # Trust the readback, not the exit code: the whole point is the state
+          # the repository is actually in when this run ends.
+          state=$(gcloud artifacts repositories describe "$GAR_REPO" \
+                    --location="$GCP_REGION" --project="$GCP_PROJECT" \
+                    --format="value(dockerConfig.immutableTags)" 2>/dev/null || echo "")
+          if [ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+            echo "::notice::immutable tags re-enabled on ${GCP_PROJECT}/${GAR_REPO}"
+            exit 0
+          fi
+
+          {
+            echo "::error::FAILED TO RE-LOCK ${GCP_PROJECT}/${GAR_REPO}. The repository is UNLOCKED:"
+            echo "::error::tags can be moved to a different digest until this is fixed. Run:"
+            echo "::error::  ${fix_cmd}"
+          } >&2
+          exit 1
