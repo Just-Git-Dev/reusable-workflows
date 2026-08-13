@@ -111,6 +111,7 @@ warning rather than passing quietly.
 | `grace_period_days` | no | `0` | reprieve for artifacts outside the keep-set, measured back from the oldest release-policy-retained image |
 | `keep_tags` | no | `latest,buildcache` | exact tags never deleted |
 | `keep_tag_prefixes` | no | `hotfix-,rc-,debug-` | tag prefixes never deleted |
+| `cleanup_latest_tag` | no | `true` | delete a **stranded** `:latest` tag. Removes the tag reference only, never a digest, and only where `:latest` cannot be live. See [Stranded `:latest`](#stranded-latest) |
 | `immutable_tags_policy` | no | `enforce` | state the repository is left in after an applied sweep: `enforce` \| `preserve` \| `unlock`; see [Immutable tags](#immutable-tags) |
 | `relock_immutable_tags` | no | `true` | **deprecated** — `false` still means "leave it unlocked" and folds into `immutable_tags_policy: unlock` |
 | `dry_run` | no | `true` | `true` prints the plan and deletes nothing |
@@ -250,6 +251,65 @@ the same repo. It is in the default `keep_tags` for exactly this reason — with
 cache would be classified as a BUILD, fall outside the release window as soon as
 two releases passed, and be deleted, making the next build a cold rebuild.
 
+## Stranded `:latest`
+
+A moving `:latest` left behind in a repository that has since been **locked** is
+permanent otherwise. It pins its digest alive, `keep_tags` shields it from the
+sweep, and an immutable repository refuses to move or remove it. Nothing
+converges: every future sweep keeps it, forever.
+
+`cleanup_latest_tag` (**default `true`**) removes it.
+
+**It deletes the tag reference, never a digest.** That distinction is the whole
+point. Dropping `latest` from `keep_tags` instead would let the sweep delete the
+*digest* — and under build-once/promote a released digest carries both a `:<sha>`
+tag and `vX.Y.Z`, so that would take a release with it. `gcloud artifacts docker
+tags delete` removes only the pointer.
+
+### Why defaulting to true is safe
+
+It only acts where `:latest` **cannot be a live tag**:
+
+| policy | repo state | `:latest` cleaned? |
+|---|---|---|
+| `enforce` (default) | either | **yes** — a moving tag is unpushable, so any `:latest` is stranded by definition |
+| `preserve` | already locked | **yes** — it stays locked, so the tag can never move again |
+| `preserve` | unlocked | no — the build may still be pushing `:latest`; this is the case `preserve` exists for |
+| `unlock` | either | no — the repository is deliberately left writable |
+
+So `keep_tags: latest,buildcache` and `cleanup_latest_tag: true` are not in
+conflict, despite reading that way: **`keep_tags` protects the digest during the
+sweep; `cleanup_latest_tag` removes the stranded pointer after it.** Set it to
+`false` to opt out entirely.
+
+### It is a convergence rule, not a one-shot
+
+It deletes `:latest`, then finds nothing, forever — idempotent, and green either
+way. That is why it runs on the schedule like the rest of the sweep rather than
+being restricted to a manual dispatch: a stranded tag clears itself on the next
+scheduled run with no human action.
+
+Two more behaviours worth knowing:
+
+- **It runs after the sweep, inside the unlock window.** The plan is computed
+  before any tag is touched, so a reviewed dry-run digest set still matches the
+  applied run. The consequence is intended: once the tag is gone its digest is
+  untagged, and it is reclaimed by the **next** sweep, not this one.
+- **`dry_run: true` is the read path.** It reports which packages carry `:latest`
+  and which digests it points at, and deletes nothing. This is the only way to
+  see a keep-set digest at all — the plan JSON enumerates `to_delete` and
+  `blocked_by_parent`, never the kept.
+
+Matching is **exact**: a repository carrying `latest-rc` but no `latest` has
+nothing to clean. (Deliberately not `--filter=tag:latest` — gcloud's `:` is a
+has/contains operator, not equality.)
+
+Unlike the sweep, it **fails rather than degrades**. If the repository is locked
+and the service account cannot unlock it, the sweep skips tagged images and stays
+green — the right trade for a retention policy. It is the wrong trade for a
+cleanup the caller asked for, where exiting green having removed nothing is the
+failure mode. So that case exits 1 and names the missing permission.
+
 ## Always dry-run first
 
 `dry_run: true` prints the full plan to the step summary. Read it before you let
@@ -294,7 +354,7 @@ jobs:
 
   cleanup:
     needs: resolve
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.1.2
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.2.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

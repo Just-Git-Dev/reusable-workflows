@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-13` — [`cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule](#2026-08-13--cleanup_latest_tag-v220-a-stranded-latest-is-cleaned-by-the-sweep-that-strands-it-as-a-convergence-rule)
 - `2026-08-13` — [Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately](#2026-08-13--fleet-repinned-to-v212-drift-is-closed-to-zero-on-a-behaviour-neutral-tag-deliberately)
 - `2026-08-13` — [`retire-gar-packages` handles immutability, and preserves it rather than deciding it](#2026-08-13--retire-gar-packages-handles-immutability-and-preserves-it-rather-than-deciding-it)
 - `2026-08-12` — [A locked repo the sweep cannot unlock degrades to untagged-only instead of failing](#2026-08-12--a-locked-repo-the-sweep-cannot-unlock-degrades-to-untagged-only-instead-of-failing)
@@ -64,6 +65,110 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-13 — `cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule
+
+**Context.** `Realm-ID/api`, `Traide-Co/api` and `Realm-ID/issuer` stopped pushing `:latest`
+on 2026-08-12 so that `realm-id/backend` and `traide-in/backend` could be locked with immutable
+tags. The builds changed, but the **last-pushed `:latest` tag stayed**. In a locked repository
+that is permanent: the tag pins its digest alive, `keep_tags` (default `latest,buildcache`)
+shields it from the sweep, and an immutable repository refuses to move or remove it. Nothing
+converges — every future sweep keeps it, forever.
+
+**Discovered while scoping this: the premise could not be verified with anything that existed.**
+The raw `images list --include-tags` output is captured into a Python variable and never
+printed, and the plan JSON enumerates only `to_delete` and `blocked_by_parent` — a keep-set
+digest appears nowhere. `akshat@revvup.ai` gets `IAM_PERMISSION_DENIED` on
+`artifacts repositories describe` for **both** projects, and only `github-cleaner` holds
+`artifactregistry.admin`, reachable exclusively via WIF inside Actions. So there was no read
+path to confirm the tags were still there. That shaped the design: **`dry_run: true` is now the
+read path**, reporting which packages carry `:latest` and on which digests, mutating nothing.
+As of this entry **the tags have still never been observed.**
+
+**Decision.** Add a `cleanup_latest_tag` boolean to `cleanup-gar-images`, **default `true`**,
+rather than build a separate `delete-gar-tags` reusable.
+
+**Why fold it into the sweep.** It already owns everything the job needs: WIF auth as the SA
+with `artifactregistry.admin`, the `--include-tags` listing, and the whole detect → pre-flight →
+unlock → act → `always()` re-lock window. A new reusable would have duplicated that immutability
+sequence — the exact duplication `retire-gar-packages` was careful about. Decisively, **both
+callers are already wired**: `workflow_dispatch` only fires from a repo's default branch, so a
+standalone workflow (or even a throwaway read-only diagnostic) would have cost two PRs of churn
+per repo before it could run once.
+
+**It deletes a tag reference, never a digest — and that is the whole point.** The apparent
+shortcut, dropping `latest` from `keep_tags` and letting the sweep take the digest, is **not
+equivalent**. Under build-once/promote a released digest carries both a `:<sha>` tag and
+`vX.Y.Z`, so deleting it would take a release with it. `gcloud artifacts docker tags delete`
+removes only the pointer.
+
+**Why a default of `true` is safe, and why it is gated rather than trusted.** `:latest` is
+legitimately live in some repositories — that is exactly what `immutable_tags_policy: preserve`
+exists for ("a repository whose build still pushes a moving tag such as `:latest`"). An
+ungated default-true would delete a working tag there. So the step acts only where `:latest`
+**cannot** be live: under `enforce` (a moving tag is unpushable, so any `:latest` present is
+stranded by definition), or under `preserve` on an already-locked repository. Under `unlock`,
+or `preserve` on an unlocked repository, it declines and says so.
+
+That gate also dissolves the apparent contradiction with `keep_tags: latest,buildcache`:
+**`keep_tags` protects the digest during the sweep; `cleanup_latest_tag` removes the stranded
+pointer after it.** They operate on different things, in that order.
+
+**Reframed from one-shot to convergence rule — a correction to the first design.** This began
+as a CSV `delete_tags` input defaulting to empty, ignored on `schedule` so that a value left in
+a caller's `with:` block could not arm a recurring tag deleter. As a purpose-named boolean
+gated on the policy, that guard became wrong: the step deletes `:latest`, then finds nothing,
+forever. It is idempotent and self-limiting, so it belongs on the schedule like the rest of the
+sweep. The practical consequence is that **the two stranded tags will clear themselves on the
+next scheduled sweep after the repin, with no caller change and no manual dispatch.**
+
+**The CSV was dropped as speculative.** The only same-class candidate is `buildcache`, the other
+entry in the default `keep_tags` — but the PR that would have introduced it
+(`Realm-ID/issuer#2`, registry build cache) was closed as obsolete on 2026-08-12, so it was
+probably never pushed. That could not be confirmed: a `gh search code` sweep of both orgs
+returned nothing for `buildcache`, but a control query for `cleanup-gar-images` also returned
+nothing, so the search does not index these private repos and **proves nothing either way**.
+Adding a second boolean if `buildcache` ever appears beats carrying a free-form input nobody
+uses.
+
+**Two further deliberate divergences:**
+
+1. **It runs after the sweep, before the re-lock.** After, because the plan is computed long
+   before any tag is touched — that is what preserves plan/apply parity, the property that let
+   both repos' applied runs match their reviewed dry-run digest sets byte-for-byte during the
+   v2.0.0 migration. The consequence is intended and documented: once the tag is gone its
+   digest is untagged and is reclaimed by the **next** sweep, not this one. Before the re-lock,
+   because deleting a tag in a locked repository is refused exactly like deleting a tagged
+   image, and needs the same unlock window.
+2. **It fails rather than degrades.** The sweep's pre-flight degrades on locked+no-permission —
+   skip tagged images, exit green — which is right for a retention policy, where losing
+   retention on some images beats failing the job. It is the wrong trade for a cleanup the
+   caller asked for: exiting green having removed nothing is the "green tick means it did not
+   run" failure. Same reasoning that gave `retire-gar-packages` no degraded mode.
+
+**Matching is exact, deliberately not `--filter=tag:latest`.** gcloud's `:` is a has/contains
+operator, not equality, so a repository carrying `latest-rc` could read as having `latest` —
+and the delete would then fail on a tag that never existed. Nothing would be destroyed (the
+delete targets the literal `pkg:latest`, never the digest the lookup returned), but a confusing
+red run is not an acceptable substitute for a clean no-op. Uses `value(tag,version)` + `awk`
+string equality instead.
+
+**Tests first, RED confirmed** (`step 'Clean up stranded :latest tag' not found`), then 30
+green: the dry-run read path, apply, convergence on a second run, exact-match rejection of
+`latest-rc`, multi-package sweep, all four policy/lock combinations, the degraded failure, and
+structural assertions pinning the input's default and type, the absence of the old CSV input,
+that the step is **not** restricted to `workflow_dispatch`, and its **position** between
+`Execute deletions` and `Ensure immutable-tag end-state` — the ordering is load-bearing and a
+future edit could silently move it.
+
+**Release note.** Unlike the last several fleet repins, which were adopted on explicitly
+verified behaviour-neutral grounds, **this one changes behaviour on upgrade** for callers using
+the default `enforce` policy: their next sweep removes `:latest`. That is the intent, but it
+means a v2.2.0 repin is not a no-op and should not be described as one.
+
+**Noted, not fixed (scope):** `SERVICE_ACCOUNT` is referenced in three messages in this
+workflow but never set, so the two pre-existing uses always print the generic fallback. Wired
+it in the new step (and test-pinned); the other two are in `TODO.md`.
 
 ## 2026-08-13 — Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately
 
