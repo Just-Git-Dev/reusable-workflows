@@ -111,23 +111,27 @@ on:
         type: string
         required: false
         default: 'latest,buildcache'
-      delete_tags:
+      cleanup_latest_tag:
         description: >-
-          Comma-separated exact tags to DELETE outright — a one-shot cleanup, not
-          a retention rule. This removes the TAG REFERENCE only; the digest stays
-          and is judged on its own merits by the NEXT sweep. It exists for a
-          moving tag (`latest`, `buildcache`) stranded in a repository that has
-          since been locked: the tag pins its digest alive and `keep_tags` shields
-          it, so no sweep can ever reclaim it. Deleting the digest instead is NOT
-          equivalent — under build-once/promote a released digest carries both a
-          sha tag and vX.Y.Z, so removing it would take a release with it.
-          IGNORED on a scheduled run, so a value left behind in a caller's `with:`
-          block cannot arm a recurring tag deleter. Unlike the sweep, this FAILS
-          rather than degrades when the repository is locked and the service
-          account cannot unlock it. Empty (DEFAULT) = the step never runs.
-        type: string
+          Delete a STRANDED `:latest` tag (DEFAULT true). A moving `:latest` left
+          in a repository that has since been locked is otherwise permanent: the
+          tag pins its digest alive, `keep_tags` shields it from the sweep, and an
+          immutable repository refuses to move or remove it, so nothing ever
+          converges. This removes the TAG REFERENCE only — the digest stays and is
+          judged on its own merits by the NEXT sweep. Dropping `latest` from
+          `keep_tags` instead is NOT equivalent: under build-once/promote a
+          released digest carries both a sha tag and vX.Y.Z, so deleting the
+          digest would take a release with it.
+          Defaulting to true is safe because it only acts where `:latest` CANNOT
+          be a live tag — under `enforce` (a moving tag is unpushable), or under
+          `preserve` on an already-locked repository. Under `unlock`, or
+          `preserve` on an unlocked repository, `:latest` may be a live updating
+          tag and is left alone. Set false to opt out entirely.
+          Unlike the sweep, this FAILS rather than degrades when the repository is
+          locked and the service account cannot unlock it.
+        type: boolean
         required: false
-        default: ''
+        default: true
       keep_tag_prefixes:
         description: 'Comma-separated tag prefixes that are never deleted.'
         type: string
@@ -849,38 +853,40 @@ jobs:
       #
       # Before, because deleting a tag in a locked repository is refused exactly
       # like deleting a tagged image; it needs the same unlock window.
-      - name: Delete named tags
-        id: deltags
-        if: inputs.delete_tags != ''
+      - name: Clean up stranded :latest tag
+        id: latest
+        if: inputs.cleanup_latest_tag
         env:
-          DELETE_TAGS: ${{ inputs.delete_tags }}
-          DEGRADED:    ${{ steps.perm.outputs.degraded }}
+          DEGRADED:        ${{ steps.perm.outputs.degraded }}
+          POLICY:          ${{ steps.policy.outputs.policy }}
+          STARTED:         ${{ steps.immutable.outputs.immutable }}
           SERVICE_ACCOUNT: ${{ inputs.service_account }}
-          EVENT_NAME:  ${{ github.event_name }}
-          DRY_RUN:     ${{ inputs.dry_run }}
+          DRY_RUN:         ${{ inputs.dry_run }}
         run: |
-          # `github.event_name` inside a called workflow is the CALLER's event.
-          if [ "$EVENT_NAME" = "schedule" ]; then
-            {
-              echo "::warning::delete_tags is set to '${DELETE_TAGS}' but this is a scheduled run —"
-              echo "::warning::ignoring it. Named tag deletion is a one-shot cleanup and only runs on"
-              echo "::warning::a manual dispatch, so a value left in a caller's with: block cannot arm"
-              echo "::warning::a recurring tag deleter. Dispatch the workflow by hand to apply it."
-            } >&2
+          # This is what makes defaulting to true safe. Act only where :latest
+          # CANNOT be a live tag: under `enforce` a moving tag is unpushable, so
+          # any :latest present is stranded by definition; under `preserve` that
+          # holds only if the repository is already locked. Under `unlock`, or
+          # `preserve` on an unlocked repository, the build may still be pushing
+          # :latest — which is exactly what those modes exist for.
+          if [ "$POLICY" = "enforce" ] || { [ "$POLICY" = "preserve" ] && [ "$STARTED" = "true" ]; }; then
+            :
+          else
+            echo "::notice::policy '${POLICY}' leaves ${GCP_PROJECT}/${GAR_REPO} writable, so :latest may be a live tag — leaving it alone"
             echo "tags_deleted=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           # The sweep degrades here (skip tagged images, stay green) because losing
           # retention on some images beats failing the whole job. That trade is wrong
-          # for a tag the caller named outright: exiting green having silently not
-          # deleted it is precisely the "green tick means it did not run" failure.
+          # for a cleanup the caller asked for outright: exiting green having removed
+          # nothing is precisely the "green tick means it did not run" failure.
           if [ "${DEGRADED:-false}" = "true" ]; then
             {
-              echo "::error::delete_tags was requested but ${GCP_PROJECT}/${GAR_REPO} has immutable tags"
-              echo "::error::enabled and ${SERVICE_ACCOUNT:-the deploy service account} cannot toggle them,"
-              echo "::error::so the tags cannot be removed. Failing rather than reporting a success that"
-              echo "::error::did not happen. Grant artifactregistry.repositories.update"
+              echo "::error::cleanup_latest_tag is enabled but ${GCP_PROJECT}/${GAR_REPO} has immutable"
+              echo "::error::tags enabled and ${SERVICE_ACCOUNT:-the deploy service account} cannot toggle"
+              echo "::error::them, so :latest cannot be removed. Failing rather than reporting a cleanup"
+              echo "::error::that did not happen. Grant artifactregistry.repositories.update"
               echo "::error::(roles/artifactregistry.admin), then re-run."
             } >&2
             exit 1
@@ -891,53 +897,52 @@ jobs:
           # it cannot enumerate manifests.
           PKGS=$(jq -r '.per_package // empty | keys[]' /tmp/delete-plan.json)
           if [ -z "$PKGS" ]; then
-            echo "::warning::no packages in the plan — nothing to delete tags from" >&2
+            echo "::warning::no packages in the plan — nothing to clean up" >&2
             echo "tags_deleted=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           DELETED=0
           FOUND=0
-          IFS=',' read -ra REQUESTED <<< "$DELETE_TAGS"
           for pkg in $PKGS; do
-            for raw in "${REQUESTED[@]}"; do
-              tag="$(printf '%s' "$raw" | tr -d '[:space:]')"
-              [ -n "$tag" ] || continue
+            # EXACT match, deliberately not `--filter=tag:latest`: gcloud's `:` is a
+            # has/contains operator, so a repository carrying `latest-rc` would read
+            # as having `latest` and the delete would then fail on a tag that never
+            # existed. awk gives string equality.
+            digest=$(gcloud artifacts docker tags list "$pkg" \
+                       --format='value(tag,version)' 2>/dev/null \
+                       | awk -F'\t' '$1 == "latest" { print $2; exit }')
 
-              digest=$(gcloud artifacts docker tags list "$pkg" \
-                         --filter="tag:${tag}" --format='value(version)' 2>/dev/null | head -1)
+            if [ -z "$digest" ]; then
+              echo "  ${pkg}:latest — not present, nothing to do"
+              continue
+            fi
+            FOUND=$((FOUND + 1))
 
-              if [ -z "$digest" ]; then
-                echo "  ${pkg}:${tag} — not present, nothing to do"
-                continue
-              fi
-              FOUND=$((FOUND + 1))
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  ${pkg}:latest — WOULD DELETE the tag (digest ${digest} would survive this run)"
+              continue
+            fi
 
-              if [ "$DRY_RUN" = "true" ]; then
-                echo "  ${pkg}:${tag} — WOULD DELETE the tag (digest ${digest} would survive this run)"
-                continue
-              fi
-
-              echo "  ${pkg}:${tag} — deleting tag (digest ${digest} survives; swept next run)"
-              gcloud artifacts docker tags delete "${pkg}:${tag}" --quiet
-              DELETED=$((DELETED + 1))
-            done
+            echo "  ${pkg}:latest — deleting tag (digest ${digest} survives; swept next run)"
+            gcloud artifacts docker tags delete "${pkg}:latest" --quiet
+            DELETED=$((DELETED + 1))
           done
 
           echo "tags_deleted=${DELETED}" >> "$GITHUB_OUTPUT"
-          {
-            echo ""
-            echo "### Named tag deletion"
-            echo ""
-            if [ "$DRY_RUN" = "true" ]; then
-              echo "- Requested: \`${DELETE_TAGS}\` — **dry run, nothing deleted**"
-              echo "- Present in the registry: $FOUND"
-            else
-              echo "- Requested: \`${DELETE_TAGS}\`"
-              echo "- Tags deleted: $DELETED (of $FOUND found)"
-              echo "- Their digests survive this run and are judged by the next sweep."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$FOUND" -gt 0 ]; then
+            {
+              echo ""
+              echo "### Stranded \`:latest\` cleanup"
+              echo ""
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "- Found on $FOUND package(s) — **dry run, nothing deleted**"
+              else
+                echo "- Tag removed from $DELETED of $FOUND package(s)"
+                echo "- The digests survive this run and are judged by the next sweep."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # ALWAYS. The deletion step above exits 1 on any unexpected failure, and a repo
       # left unlocked because a sweep failed is a silent loss of the protection the

@@ -619,11 +619,11 @@
           "required": false,
           "type": "string"
         },
-        "delete_tags": {
-          "default": "",
-          "description": "Comma-separated exact tags to DELETE outright \u2014 a one-shot cleanup, not a retention rule. This removes the TAG REFERENCE only; the digest stays and is judged on its own merits by the NEXT sweep. It exists for a moving tag (`latest`, `buildcache`) stranded in a repository that has since been locked: the tag pins its digest alive and `keep_tags` shields it, so no sweep can ever reclaim it. Deleting the digest instead is NOT equivalent \u2014 under build-once/promote a released digest carries both a sha tag and vX.Y.Z, so removing it would take a release with it. IGNORED on a scheduled run, so a value left behind in a caller's `with:` block cannot arm a recurring tag deleter. Unlike the sweep, this FAILS rather than degrades when the repository is locked and the service account cannot unlock it. Empty (DEFAULT) = the step never runs.",
+        "cleanup_latest_tag": {
+          "default": true,
+          "description": "Delete a STRANDED `:latest` tag (DEFAULT true). A moving `:latest` left in a repository that has since been locked is otherwise permanent: the tag pins its digest alive, `keep_tags` shields it from the sweep, and an immutable repository refuses to move or remove it, so nothing ever converges. This removes the TAG REFERENCE only \u2014 the digest stays and is judged on its own merits by the NEXT sweep. Dropping `latest` from `keep_tags` instead is NOT equivalent: under build-once/promote a released digest carries both a sha tag and vX.Y.Z, so deleting the digest would take a release with it. Defaulting to true is safe because it only acts where `:latest` CANNOT be a live tag \u2014 under `enforce` (a moving tag is unpushable), or under `preserve` on an already-locked repository. Under `unlock`, or `preserve` on an unlocked repository, `:latest` may be a live updating tag and is left alone. Set false to opt out entirely. Unlike the sweep, this FAILS rather than degrades when the repository is locked and the service account cannot unlock it.",
           "required": false,
-          "type": "string"
+          "type": "boolean"
         },
         "dry_run": {
           "default": true,

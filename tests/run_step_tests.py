@@ -362,13 +362,13 @@ def run_retire_exec_step(body: str, *, fail_with=None):
                 "deleted": deleted.read_text(), "output": out.read_text()}
 
 
-def run_delete_tags_step(body: str, *, delete_tags="latest", degraded="false",
-                         event_name="workflow_dispatch", dry_run="true",
-                         existing=("latest",)):
-    """Execute the named-tag deletion body against a stubbed gcloud.
+def run_cleanup_latest_step(body: str, *, dry_run="true", degraded="false",
+                            policy="enforce", started="false", existing=("latest",),
+                            packages=("host/p/repo/api",)):
+    """Execute the stranded-:latest cleanup against a stubbed gcloud.
 
-    existing: the tags that actually resolve to a digest in the registry; every
-    other requested tag reads back empty, i.e. already gone.
+    existing: the tags that actually exist on every package. Matching must be
+    EXACT — a repo carrying `latest-rc` but not `latest` has nothing to clean.
     Returns every gcloud call, so a dry run can be asserted to make none.
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -377,21 +377,21 @@ def run_delete_tags_step(body: str, *, delete_tags="latest", degraded="false",
         stub.mkdir()
         calls = tmp / "calls"
         calls.write_text("")
+        # `tags list --format=value(tag,version)` emits TAB-separated rows.
+        rows = "".join(f'  printf "%s\\t%s\\n" "{t}" "sha256:dead{i}"\n'
+                       for i, t in enumerate(existing))
         gcloud = stub / "gcloud"
         gcloud.write_text(
             '#!/usr/bin/env bash\n'
-            f'PRESENT="{" ".join(existing)}"\n'
             f'echo "$*" >> {calls}\n'
             'if [ "$3" = "tags" ] && [ "$4" = "list" ]; then\n'
-            '  t=""\n'
-            '  for a in "$@"; do case "$a" in --filter=tag:*) t="${a#--filter=tag:}" ;; esac; done\n'
-            '  for p in $PRESENT; do [ "$p" = "$t" ] && echo "sha256:deadbeef"; done\n'
+            f'{rows}'
             '  exit 0\n'
             'fi\n'
             'exit 0\n')
         gcloud.chmod(0o755)
         # The step reads the package list off the plan the sweep already built.
-        plan = {"per_package": {"host/p/repo/api": {"total": 3, "delete": 1}}}
+        plan = {"per_package": {p: {"total": 3, "delete": 1} for p in packages}}
         (tmp / "delete-plan.json").write_text(json.dumps(plan))
         out = tmp / "gh_output"
         out.write_text("")
@@ -399,8 +399,9 @@ def run_delete_tags_step(body: str, *, delete_tags="latest", degraded="false",
         summary.write_text("")
         env = dict(os.environ)
         env["PATH"] = f"{stub}:{env['PATH']}"
-        env.update(DELETE_TAGS=delete_tags, DEGRADED=degraded, EVENT_NAME=event_name,
-                   DRY_RUN=dry_run, GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo",
+        env.update(DEGRADED=degraded, POLICY=policy, STARTED=started, DRY_RUN=dry_run,
+                   GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo",
+                   SERVICE_ACCOUNT="sa@p.iam.gserviceaccount.com",
                    GITHUB_OUTPUT=str(out), GITHUB_STEP_SUMMARY=str(summary))
         body = body.replace("/tmp/delete-plan.json", str(tmp / "delete-plan.json"))
         proc = subprocess.run(
@@ -827,91 +828,117 @@ def main():
     check("retire · an immutability failure is named as such",
           "immutab" in r["out"].lower(), r["out"])
 
-    # ---- cleanup-gar-images · named tag deletion ----
+    # ---- cleanup-gar-images · stranded :latest cleanup ----
     #
-    # `delete_tags` removes a TAG REFERENCE, not a digest. It exists for moving
-    # tags (`latest`, `buildcache`) stranded in a repo that has since been locked:
-    # the tag pins its digest alive and `keep_tags` shields it, so the sweep can
-    # never reclaim it. Deleting the digest instead is not equivalent — under
-    # build-once/promote a released digest carries BOTH a sha tag and vX.Y.Z, so
-    # deleting it would take a release with it.
-    print("\ncleanup-gar-images · Delete named tags")
-    deltags = extract_step(GAR, "cleanup", "Delete named tags")
+    # Removes a TAG REFERENCE, never a digest. A moving :latest left in a repo
+    # that has since been LOCKED is otherwise permanent: it pins its digest alive,
+    # `keep_tags` shields it from the sweep, and an immutable repo refuses to move
+    # or remove it. Dropping `latest` from keep_tags instead is NOT equivalent —
+    # under build-once/promote a released digest carries both a :<sha> tag and
+    # vX.Y.Z, so deleting the digest would take a release with it.
+    #
+    # This is a CONVERGENCE RULE, not a one-shot: it deletes :latest, then finds
+    # nothing, forever. That is why it defaults to true and runs on the schedule.
+    print("\ncleanup-gar-images · Clean up stranded :latest")
+    clatest = extract_step(GAR, "cleanup", "Clean up stranded :latest tag")
 
-    # A dry run is the READ path: it must report what it found and touch nothing.
-    # This is the only way to see a keep-set digest at all — the plan JSON
-    # enumerates to_delete/blocked_by_parent, never the kept.
-    r = run_delete_tags_step(deltags, dry_run="true", existing=("latest",))
-    check("deltags · dry run exits 0", r["rc"] == 0, r["out"])
-    check("deltags · dry run deletes nothing", r["deletes"] == [], r["calls"])
-    check("deltags · dry run reports the tag it found", "latest" in r["out"], r["out"])
-    check("deltags · dry run reports the digest behind the tag",
-          "sha256:deadbeef" in r["out"], r["out"])
+    # A dry run is the READ path: report what is there, touch nothing. It is the
+    # only way to see a keep-set digest at all — the plan JSON enumerates
+    # to_delete/blocked_by_parent, never the kept.
+    r = run_cleanup_latest_step(clatest, dry_run="true")
+    check("latest · dry run exits 0", r["rc"] == 0, r["out"])
+    check("latest · dry run deletes nothing", r["deletes"] == [], r["calls"])
+    check("latest · dry run reports the digest behind the tag",
+          "sha256:dead0" in r["out"], r["out"])
 
-    # The real thing.
-    r = run_delete_tags_step(deltags, dry_run="false", existing=("latest",))
-    check("deltags · apply exits 0", r["rc"] == 0, r["out"])
-    check("deltags · apply deletes the named tag", len(r["deletes"]) == 1, r["calls"])
-    check("deltags · apply targets pkg:tag, never a digest",
+    r = run_cleanup_latest_step(clatest, dry_run="false")
+    check("latest · apply exits 0", r["rc"] == 0, r["out"])
+    check("latest · apply deletes the tag", len(r["deletes"]) == 1, r["calls"])
+    check("latest · apply targets pkg:latest, never a digest",
           any(":latest" in d and "@sha256" not in d for d in r["deletes"]), r["deletes"])
-    check("deltags · apply counts what it removed",
+    check("latest · apply counts what it removed",
           "tags_deleted=1" in r["output"], r["output"])
 
-    # Absent tag: the cleanup is idempotent, so re-running must stay green.
-    r = run_delete_tags_step(deltags, dry_run="false", delete_tags="latest",
-                             existing=())
-    check("deltags · an already-absent tag exits 0", r["rc"] == 0, r["out"])
-    check("deltags · an already-absent tag deletes nothing", r["deletes"] == [], r["calls"])
-    check("deltags · an already-absent tag says so", "not present" in r["out"].lower(), r["out"])
-    check("deltags · an already-absent tag counts zero",
+    # Convergence: the second run finds nothing and must stay green.
+    r = run_cleanup_latest_step(clatest, dry_run="false", existing=())
+    check("latest · an already-absent tag exits 0", r["rc"] == 0, r["out"])
+    check("latest · an already-absent tag deletes nothing", r["deletes"] == [], r["calls"])
+    check("latest · an already-absent tag counts zero",
           "tags_deleted=0" in r["output"], r["output"])
 
-    # Several tags at once, only some of which exist.
-    r = run_delete_tags_step(deltags, dry_run="false", delete_tags="latest,buildcache",
-                             existing=("buildcache",))
-    check("deltags · deletes only the tags that exist", len(r["deletes"]) == 1, r["calls"])
-    check("deltags · picks the right one of several",
-          any(":buildcache" in d for d in r["deletes"]), r["deletes"])
-    check("deltags · tolerates whitespace in the CSV",
-          run_delete_tags_step(deltags, dry_run="false", delete_tags=" latest , buildcache ",
-                               existing=("latest",))["rc"] == 0)
+    # Matching must be EXACT. gcloud's `--filter=tag:x` is a has/contains
+    # operator, not equality, so a repo carrying `latest-rc` could be read as
+    # having `latest` — and the delete would then fail on a tag that never
+    # existed. Nothing is destroyed either way, but a confusing red run is not
+    # an acceptable substitute for a clean no-op.
+    r = run_cleanup_latest_step(clatest, dry_run="false", existing=("latest-rc", "v1.0.0"))
+    check("latest · a similarly-named tag is NOT treated as :latest",
+          r["deletes"] == [], r["calls"])
+    check("latest · a similarly-named tag leaves the run green", r["rc"] == 0, r["out"])
 
-    # Divergence from the sweep's own semantics, and the point of the step:
-    # the sweep DEGRADES on locked+no-permission (skip tagged, exit green), which
-    # is right for a retention policy and wrong for a tag the caller named. A
-    # green run that silently did not delete it is the failure mode to avoid.
-    r = run_delete_tags_step(deltags, dry_run="false", degraded="true")
-    check("deltags · degraded FAILS rather than reporting success", r["rc"] == 1, r["out"])
-    check("deltags · degraded blames immutability", "immutab" in r["out"].lower(), r["out"])
-    check("deltags · degraded names the missing permission",
+    # Every image in the repo, not just one.
+    r = run_cleanup_latest_step(clatest, dry_run="false",
+                                packages=("host/p/repo/api", "host/p/repo/bff-api"))
+    check("latest · sweeps every package in the plan", len(r["deletes"]) == 2, r["calls"])
+
+    # ---- the policy gate, which is what makes defaulting to true safe ----
+    #
+    # Under `enforce` a moving :latest CANNOT be pushed, so any :latest present is
+    # stranded by definition. Under `preserve` that only holds if the repo is
+    # already locked. Under `unlock` the repo is deliberately left writable and
+    # :latest may be a live, updating tag — exactly the case `preserve` exists for.
+    r = run_cleanup_latest_step(clatest, dry_run="false", policy="preserve", started="true")
+    check("latest · preserve + already locked cleans up", len(r["deletes"]) == 1, r["calls"])
+
+    r = run_cleanup_latest_step(clatest, dry_run="false", policy="preserve", started="false")
+    check("latest · preserve + unlocked leaves a live :latest alone",
+          r["deletes"] == [], r["calls"])
+    check("latest · preserve + unlocked exits 0", r["rc"] == 0, r["out"])
+    check("latest · preserve + unlocked says why it declined",
+          "live" in r["out"].lower(), r["out"])
+
+    r = run_cleanup_latest_step(clatest, dry_run="false", policy="unlock", started="true")
+    check("latest · unlock never touches :latest even if locked",
+          r["deletes"] == [], r["calls"])
+
+    # Divergence from the sweep's own semantics: the sweep DEGRADES on
+    # locked+no-permission (skip tagged, exit green), which is right for a
+    # retention policy. Here it would mean reporting a cleanup that did not happen.
+    r = run_cleanup_latest_step(clatest, dry_run="false", degraded="true")
+    check("latest · degraded FAILS rather than reporting success", r["rc"] == 1, r["out"])
+    check("latest · degraded blames immutability", "immutab" in r["out"].lower(), r["out"])
+    check("latest · degraded names the missing permission",
           "artifactregistry.repositories.update" in r["out"], r["out"])
-    check("deltags · degraded deletes nothing", r["deletes"] == [], r["calls"])
+    check("latest · degraded names the service account, not a generic fallback",
+          "sa@p.iam.gserviceaccount.com" in r["out"], r["out"])
+    check("latest · degraded deletes nothing", r["deletes"] == [], r["calls"])
 
-    # Schedule guard: RI sweeps weekly and Traide DAILY. A delete_tags value left
-    # behind in a caller's with: block must not arm a recurring tag deleter.
-    r = run_delete_tags_step(deltags, dry_run="false", event_name="schedule")
-    check("deltags · a scheduled run exits 0", r["rc"] == 0, r["out"])
-    check("deltags · a scheduled run deletes nothing", r["deletes"] == [], r["calls"])
-    check("deltags · a scheduled run says why it skipped",
-          "schedule" in r["out"].lower(), r["out"])
-
-    # The step is inert for the other 14 call sites, none of which set the input.
     gar_doc = yaml.safe_load(GAR.read_text())
-    dt_step = [s for s in gar_doc["jobs"]["cleanup"]["steps"]
-               if s.get("name") == "Delete named tags"][0]
-    check("deltags · the step is gated on a non-empty delete_tags",
-          "delete_tags" in str(dt_step.get("if", "")), dt_step.get("if"))
-    check("deltags · delete_tags defaults to empty",
-          gar_doc[True]["workflow_call"]["inputs"]["delete_tags"]["default"] == "")
+    inputs = gar_doc[True]["workflow_call"]["inputs"]
+    check("latest · cleanup_latest_tag defaults to true",
+          inputs["cleanup_latest_tag"]["default"] is True, inputs["cleanup_latest_tag"])
+    check("latest · cleanup_latest_tag is a boolean",
+          inputs["cleanup_latest_tag"]["type"] == "boolean", inputs["cleanup_latest_tag"])
+    check("latest · the CSV delete_tags input is gone", "delete_tags" not in inputs,
+          sorted(inputs))
+
+    step = [s for s in gar_doc["jobs"]["cleanup"]["steps"]
+            if s.get("name") == "Clean up stranded :latest tag"][0]
+    check("latest · the step is gated on the input",
+          "cleanup_latest_tag" in str(step.get("if", "")), step.get("if"))
+    # It is a convergence rule, so it must NOT be limited to manual dispatch.
+    check("latest · is not restricted to workflow_dispatch",
+          "event_name" not in str(step.get("if", "")), step.get("if"))
 
     # Ordering is load-bearing: the plan is built long before any tag is touched,
     # so the reviewed dry-run digest set still matches what the sweep does. The
     # now-untagged digest is reclaimed on the NEXT run, by design.
     names = [s.get("name") for s in gar_doc["jobs"]["cleanup"]["steps"]]
-    check("deltags · runs after the sweep, preserving plan/apply parity",
-          names.index("Delete named tags") > names.index("Execute deletions"), names)
-    check("deltags · runs before the re-lock, i.e. inside the unlock window",
-          names.index("Delete named tags") < names.index("Ensure immutable-tag end-state"), names)
+    check("latest · runs after the sweep, preserving plan/apply parity",
+          names.index("Clean up stranded :latest tag") > names.index("Execute deletions"), names)
+    check("latest · runs before the re-lock, i.e. inside the unlock window",
+          names.index("Clean up stranded :latest tag")
+          < names.index("Ensure immutable-tag end-state"), names)
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

@@ -29,20 +29,21 @@
       Removing it now needs an unlock → `gcloud artifacts docker tags delete` → relock. Not
       urgent, not a one-way door — just permanent until someone does it.
 
-      **Capability shipped 2026-08-13 (v2.2.0): `cleanup-gar-images` gained `delete_tags`.**
-      Still OPEN because nothing has been applied. Next: dispatch each caller
-      (`Realm-ID/project`, `Traide-Co/project`) with `dry_run: true` and `delete_tags: latest`
-      — that is the ONLY read path for a keep-set digest, so it is the first confirmation that
-      these tags are really still there. Then re-dispatch with `dry_run: false`. Note the
-      digest is reclaimed on the NEXT scheduled sweep, not the same run, by design.
-      Callers pass `delete_tags` only on `workflow_dispatch` — the reusable ignores it on a
-      schedule, but the caller should not offer it on one either.
+      **Capability shipped 2026-08-13 (v2.2.0): `cleanup-gar-images` gained
+      `cleanup_latest_tag`, default `true`.** Still OPEN because nothing has been applied.
+      It is a convergence rule, not a one-shot: **no caller change is needed and no manual
+      dispatch is required** — once both callers are repinned to `v2.2.0`, the next scheduled
+      sweep clears the tag by itself, then finds nothing forever.
+      Recommended anyway before relying on that: dispatch each caller (`Realm-ID/project`,
+      `Traide-Co/project`) with `dry_run: true` first — that is the ONLY read path for a
+      keep-set digest, so it is the first confirmation these tags are really still there.
+      Note the digest is reclaimed on the NEXT sweep, not the same run, by design.
 
 - [ ] **`SERVICE_ACCOUNT` is referenced but never set in `cleanup-gar-images.yml`.** Two
       messages in the immutability pre-flight (`:728`, `:741`) interpolate
       `${SERVICE_ACCOUNT:-the deploy service account}`, but nothing ever sets the variable, so
       they always print the generic fallback instead of naming the SA that lacks the
-      permission. The `delete_tags` step added 2026-08-13 sets it in its own `env:`; these two
+      permission. The `cleanup_latest_tag` step added 2026-08-13 sets it in its own `env:`; these two
       still need `SERVICE_ACCOUNT: ${{ inputs.service_account }}` on their step. Cosmetic, but
       the message exists precisely to tell an operator which identity to grant a role to.
 
