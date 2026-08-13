@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-13` — [`retire-gar-packages` handles immutability, and preserves it rather than deciding it](#2026-08-13--retire-gar-packages-handles-immutability-and-preserves-it-rather-than-deciding-it)
 - `2026-08-12` — [A locked repo the sweep cannot unlock degrades to untagged-only instead of failing](#2026-08-12--a-locked-repo-the-sweep-cannot-unlock-degrades-to-untagged-only-instead-of-failing)
 - `2026-08-12` — [`cleanup-gar-images` v2.1.0: the sweep now ENABLES immutable tags, it does not merely restore them](#2026-08-12--cleanup-gar-images-v210-the-sweep-now-enables-immutable-tags-it-does-not-merely-restore-them)
 - `2026-08-11` — [`cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)](#2026-08-11--cleanup-gar-images-plans-are-mostly-impossible-fleet-wide-one-caller-stalled-completely-bug-fix)
@@ -62,6 +63,53 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-13 — `retire-gar-packages` handles immutability, and preserves it rather than deciding it
+
+**Context.** Enforcing immutable tags fleet-wide (v2.1.0, entries below) locked
+`realm-id/backend` and `traide-in/backend`. `retire-gar-packages` deletes whole packages via
+`gcloud artifacts packages delete`, which a locked repository refuses for any package holding a
+tagged image — and the executor `exit 1`s on that raw error. The workflow was left a trap:
+green in `dry_run`, red on the first apply, with a gcloud message naming neither the cause nor
+the fix. Latent only because no repo in either org calls it today (verified by grepping all 50
+workflow files across Realm-ID + Traide-Co), which is exactly the kind of thing that is
+discovered by the person retiring a service under time pressure.
+
+**Decision.** Give it the same detect → pre-flight → unlock → act → `always()` restore sequence
+as `cleanup-gar-images`, with two deliberate differences.
+
+**Difference 1 — no policy input.** `cleanup-gar-images` takes `immutable_tags_policy`
+(`enforce`/`preserve`/`unlock`) because it *owns* a repository's retention posture and runs on
+a schedule; deciding the end state is its job. A retirement is a one-off surgical delete, and
+nothing about removing a dead service's package is an argument for changing whether the repo is
+protected. So there is exactly one end state — **as it was found** — and no knob. A caller who
+wants to change a repo's protection has a one-line gcloud command for that.
+
+**Difference 2 — no degraded mode.** The 2026-08-12 entry below degrades a locked sweep to
+untagged-only because half a sweep is real work. That reasoning does not port: a package delete
+takes every tag with it or fails, so there is no partial version to fall back to. A locked repo
+whose SA cannot unlock it therefore **fails the pre-flight, before anything is deleted**, with
+an error that names immutability, says nothing has been deleted, and gives both fixes (grant
+`artifactregistry.repositories.update`, or unlock out-of-band). The failure mode being guarded
+against is the same one as always — not partiality, but a run that stops halfway and does not
+say why.
+
+The executor also now captures stderr and recognises the immutability error, so if the unlock
+is ever skipped or does not take, the message says so instead of surfacing raw gcloud.
+
+**Header IAM corrected.** It advertised `roles/artifactregistry.repoAdmin`. That still covers
+deleting packages, but not `repositories.update`, so it cannot unlock — the same
+name-versus-permissions trap recorded on 2026-08-12. Now documents
+`roles/artifactregistry.admin`, with the repoAdmin caveat spelled out.
+
+**Not a contract change.** No input added or changed; `catalog.json` is byte-identical after a
+regen. Per this repo's rule that semver tracks the *input contract*, this is a patch.
+
+**Tested.** 17 new checks in `run_step_tests.py` drive all four new step bodies against stubbed
+`gcloud`/`curl`: detection (locked / unlocked / undescribable-reads-as-unlocked), the
+pre-flight's fail-closed path and its wording, restore-and-verify-by-readback, the
+never-locked repo being left alone with no update call, and the executor naming immutability on
+failure. Written first and confirmed red (`step 'Check tag immutability' not found`).
 
 ## 2026-08-12 — A locked repo the sweep cannot unlock degrades to untagged-only instead of failing
 

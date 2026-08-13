@@ -31,6 +31,7 @@ PROMOTE = ROOT / ".github" / "workflows" / "promote-image.yml"
 CI_NODE = ROOT / ".github" / "workflows" / "ci-node.yml"
 CI_GO = ROOT / ".github" / "workflows" / "ci-go.yml"
 GAR = ROOT / ".github" / "workflows" / "cleanup-gar-images.yml"
+RETIRE = ROOT / ".github" / "workflows" / "retire-gar-packages.yml"
 PAGES = ROOT / ".github" / "workflows" / "deploy-cloudflare-pages.yml"
 
 FAILURES = []
@@ -293,6 +294,72 @@ def run_perm_step(body: str, *, started="true", granted=True):
         )
         return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
                 "output": out.read_text()}
+
+
+def run_immutable_step(body: str, *, state="true", describe_ok=True):
+    """Execute the immutability detector against a stubbed `repositories describe`.
+
+    state:       what `--format=value(dockerConfig.immutableTags)` prints
+    describe_ok: does describe succeed at all (a denied/missing repo prints
+                 nothing and exits non-zero, which must read as NOT locked
+                 rather than taking the step down)
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        gcloud = stub / "gcloud"
+        gcloud.write_text("#!/usr/bin/env bash\n"
+                          + (f'echo "{state}"\nexit 0\n' if describe_ok else "exit 1\n"))
+        gcloud.chmod(0o755)
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo",
+                   GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "output": out.read_text()}
+
+
+def run_retire_exec_step(body: str, *, fail_with=None):
+    """Execute the package-retirement body against a stubbed gcloud.
+
+    fail_with: stderr text `packages delete` fails with (None = it succeeds).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        deleted = tmp / "deleted"
+        deleted.write_text("")
+        gcloud = stub / "gcloud"
+        if fail_with is None:
+            gcloud.write_text(f'#!/usr/bin/env bash\necho "$*" >> {deleted}\nexit 0\n')
+        else:
+            gcloud.write_text(f'#!/usr/bin/env bash\necho "{fail_with}" >&2\nexit 1\n')
+        gcloud.chmod(0o755)
+        retire_list = tmp / "retire.txt"
+        retire_list.write_text("dead-svc\n")
+        out = tmp / "gh_output"
+        out.write_text("")
+        summary = tmp / "gh_summary"
+        summary.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="p", GCP_REGION="r", GAR_REPO="repo",
+                   GITHUB_OUTPUT=str(out), GITHUB_STEP_SUMMARY=str(summary))
+        body = body.replace("/tmp/retire.txt", str(retire_list))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "deleted": deleted.read_text(), "output": out.read_text()}
 
 
 def run_policy_step(body: str, *, policy_in="enforce", relock_in="true"):
@@ -645,6 +712,68 @@ def main():
     r = run_smoke_step(smoke, base="", attempts=1)
     check("no URL to test fails clearly", r["rc"] == 1, r["out"])
     check("no URL explains why", "no deployment URL" in r["out"], r["out"])
+
+    # ---- retire-gar-packages under immutability ----
+    # A locked repository refuses `packages delete` for any package holding a
+    # tagged image, and this workflow exits 1 on the raw gcloud error. Both
+    # backend repos are locked, so the whole workflow is a trap until it does
+    # what the image sweep does: detect, pre-flight, unlock, act, restore.
+    # Unlike the sweep there is no degraded half-run to fall back to — a
+    # package delete is all-or-nothing — so a locked repo with no permission
+    # must fail BEFORE anything is deleted, not partway through.
+    print("\nretire-gar-packages · immutability handling")
+
+    detect = extract_step(RETIRE, "retire", "Check tag immutability")
+    r = run_immutable_step(detect, state="true")
+    check("locked repo is detected", "immutable=true" in r["output"], r["output"])
+    r = run_immutable_step(detect, state="false")
+    check("unlocked repo is detected", "immutable=false" in r["output"], r["output"])
+    r = run_immutable_step(detect, describe_ok=False)
+    check("undescribable repo reads as unlocked, does not abort",
+          r["rc"] == 0 and "immutable=false" in r["output"], r["out"])
+
+    perm = extract_step(RETIRE, "retire", "Verify permission to toggle immutability")
+    r = run_perm_step(perm, started="true", granted=True)
+    check("retire · granted exits 0", r["rc"] == 0, r["out"])
+    check("retire · granted records can_update=true",
+          "can_update=true" in r["output"], r["output"])
+
+    # The whole point: fail closed, and say WHY, before the destructive step.
+    r = run_perm_step(perm, started="true", granted=False)
+    check("retire · locked + denied FAILS the run", r["rc"] == 1, r["out"])
+    check("retire · locked + denied blames immutability, not gcloud",
+          "immutable" in r["out"].lower(), r["out"])
+    check("retire · locked + denied names the missing permission",
+          "artifactregistry.repositories.update" in r["out"], r["out"])
+
+    endstate = extract_step(RETIRE, "retire", "Ensure immutable-tag end-state")
+    r = run_relock_step(endstate, policy="preserve", started="true",
+                        can_update="true", readback="true")
+    check("retire · a locked repo ends the run locked again", r["rc"] == 0, r["out"])
+    check("retire · re-lock is confirmed by readback, not exit code",
+          "describe" in r["calls"], r["calls"])
+
+    r = run_relock_step(endstate, policy="preserve", started="true",
+                        can_update="true", update_ok=False, readback="false")
+    check("retire · failing to restore the lock FAILS the run", r["rc"] == 1, r["out"])
+    check("retire · failed restore names the repair command",
+          "--immutable-tags" in r["out"], r["out"])
+
+    # Preserve semantics: a repo that was never locked is left as it was found.
+    r = run_relock_step(endstate, policy="preserve", started="false",
+                        can_update="true", readback="false")
+    check("retire · an unlocked repo is left unlocked", r["rc"] == 0, r["out"])
+    check("retire · leaving it unlocked does not run an update",
+          "--immutable-tags" not in r["calls"], r["calls"])
+
+    execstep = extract_step(RETIRE, "retire", "Execute retirement")
+    r = run_retire_exec_step(execstep)
+    check("retire · a clean delete counts the package",
+          "retired=1" in r["output"], r["output"])
+    r = run_retire_exec_step(execstep, fail_with="FAILED_PRECONDITION: repository has immutable tags")
+    check("retire · a delete failure still fails the run", r["rc"] == 1, r["out"])
+    check("retire · an immutability failure is named as such",
+          "immutab" in r["out"].lower(), r["out"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

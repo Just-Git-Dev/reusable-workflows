@@ -52,7 +52,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-gke-service.yml@v2.1.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-gke-service.yml@v2.1.2
     with:
       gcp_region: asia-south1
       gar_project: zs-products
@@ -81,7 +81,7 @@ on:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-gke-service.yml@v2.1.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-gke-service.yml@v2.1.2
     with:
       gcp_region: asia-southeast1
       gar_repo: backend

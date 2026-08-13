@@ -2,15 +2,18 @@
 
 ## Fallout from immutable-tag enforcement (opened 2026-08-12, v2.1.1)
 
-- [ ] **`retire-gar-packages` has no immutability handling and will fail on a locked repo.**
-      It calls `gcloud artifacts packages delete`, which refuses to remove a package holding
-      tagged images while the repository is immutable — and it `exit 1`s on failure
-      (`retire-gar-packages.yml:206`). `realm-id/backend` and `traide-in/backend` are now
-      locked, so this is real but **latent: no repo in either org calls this workflow today**
-      (verified by grepping all 50 workflow files across Realm-ID + Traide-Co). Either give it
-      the same detect → unlock → act → relock treatment as `cleanup-gar-images`, or make it
-      fail with a message that names immutability instead of a raw gcloud error. Its header
-      comment also still advertises `roles/artifactregistry.repoAdmin`.
+- [x] **`retire-gar-packages` has no immutability handling and will fail on a locked repo.**
+      Done 2026-08-13 — detect → pre-flight → unlock → act → `always()` restore, mirroring
+      `cleanup-gar-images` but with no policy input (a retirement preserves the repo's
+      protection, it does not decide it) and no degraded mode (a package delete is
+      all-or-nothing, so a locked repo with no update permission fails BEFORE anything is
+      deleted). Header IAM corrected to `roles/artifactregistry.admin`. 17 step-body tests.
+      See DECISIONS.md 2026-08-13.
+
+- [ ] **`retire-gar-packages` has no `docs/` page and no README catalog row** — every other
+      workflow has both (`docs/<workflow>.md`, a README table row). Noticed 2026-08-13 while
+      adding immutability handling; the new IAM requirement and the unlock/re-lock behaviour
+      are documented only in the workflow's own header comment.
 
 - [ ] **`keep_tags` defaults to `latest,buildcache` — both are MOVING tags, which the default
       `immutable_tags_policy: enforce` makes impossible to push.** The default keep-set
