@@ -29,10 +29,10 @@
       Removing it now needs an unlock → `gcloud artifacts docker tags delete` → relock. Not
       urgent, not a one-way door — just permanent until someone does it.
 
-- [ ] **13 of 15 fleet call sites are still pinned `@v2.0.0`** (only the two
-      `cleanup-gar-images` callers moved to `@v2.1.1`). v2.1.x changed exactly one workflow's
-      contract, so nothing is stale in behaviour — but `fleet_drift.py` will report them a
-      minor behind until a fleet-wide repin sweep.
+- [x] **13 of 15 fleet call sites are still pinned `@v2.0.0`.** Done 2026-08-13 — all 15
+      repinned to `@v2.1.2` across 6 repos (Realm-ID/{issuer, ui, project},
+      Traide-Co/{project, website, webapp}), all merged. `fleet_drift.py` now reports
+      15/15 at latest, zero stale, zero mutable. See DECISIONS.md 2026-08-13.
 
 ## Build attestations
 
