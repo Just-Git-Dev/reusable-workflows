@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-13` — [Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately](#2026-08-13--fleet-repinned-to-v212-drift-is-closed-to-zero-on-a-behaviour-neutral-tag-deliberately)
 - `2026-08-13` — [`retire-gar-packages` handles immutability, and preserves it rather than deciding it](#2026-08-13--retire-gar-packages-handles-immutability-and-preserves-it-rather-than-deciding-it)
 - `2026-08-12` — [A locked repo the sweep cannot unlock degrades to untagged-only instead of failing](#2026-08-12--a-locked-repo-the-sweep-cannot-unlock-degrades-to-untagged-only-instead-of-failing)
 - `2026-08-12` — [`cleanup-gar-images` v2.1.0: the sweep now ENABLES immutable tags, it does not merely restore them](#2026-08-12--cleanup-gar-images-v210-the-sweep-now-enables-immutable-tags-it-does-not-merely-restore-them)
@@ -63,6 +64,42 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-13 — Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately
+
+**Context.** `fleet_drift.py` reported 13 of 15 call sites at `@v2.0.0` and 2 at `@v2.1.1`.
+None were flagged STALE or MUTABLE — the tool was reporting lag, not breakage.
+
+**Decision.** Repin **all 15** to `v2.1.2` in one sweep, including the two already at v2.1.1,
+so the fleet lands at exactly one version rather than two-versions-of-nearly-current.
+
+**Why repin at all, when nothing was behaviourally stale.** Verified before doing it, rather
+than inferred from the release notes: for all 8 workflows those 13 sites call, the *only* diff
+between `v2.0.0` and `v2.1.1` is the `WORKFLOW_VERSION` stamp line. So this bought no
+behaviour — and that is the argument for doing it, not against. Accumulated lag is what made
+the 2026-07-27 sweep find 18 of 27 lines six-plus releases back: drift is cheap to close while
+it is uniform and cosmetic, and expensive once a real change is buried under it. A fleet at one
+version also means the *next* drift report is signal.
+
+**Why v2.1.2 and not v2.1.1.** The retirement fix (entry below) was in flight the same day.
+Cutting it first and repinning once to the result is one sweep instead of two, and leaves no
+window where the fleet is pinned to a tag that is already superseded.
+
+**How the mechanical risk was bounded.** A repin sweep across 6 repos is exactly the shape of
+change that quietly rewrites something it should not. The script rewrote only refs matching
+`Just-Git-Dev/reusable-workflows/.github/workflows/<name>.yml@vX.Y.Z` — third-party action pins
+untouched — and asserted per repo that the number of changed lines NOT containing
+`Just-Git-Dev/reusable-workflows` was **0**. It was 0 in all six. The 15 rewritten pins also
+reconcile exactly against the 15 the pre-sweep scan found.
+
+**Result.** All 6 PRs merged; `fleet_drift.py` re-run against live state reports 15/15 at
+`v2.1.2`, zero stale, zero mutable.
+
+**`Realm-ID/ui` was included, knowingly.** Its tag-deploy path is still unproven end-to-end (an
+open follow-up). The repin cannot change its behaviour — version stamp only — but the first
+real `v*.*.*` tag will now exercise a line touched today. Called out here so that, if that
+deploy misbehaves, this is not mistaken for the cause and the actual unproven surface is
+looked at first.
 
 ## 2026-08-13 — `retire-gar-packages` handles immutability, and preserves it rather than deciding it
 
