@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-17` — [`keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper](#2026-08-17--keep_enabled_count-on-the-writers-disable-is-inline-destroy-stays-in-the-sweeper)
 - `2026-08-16` — [`cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong](#2026-08-16--cleanup-secret-versions-quarantine-not-deletion--and-the-latest-resolves-at-deploy-premise-was-wrong)
 - `2026-08-13` — [`cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule](#2026-08-13--cleanup_latest_tag-v220-a-stranded-latest-is-cleaned-by-the-sweep-that-strands-it-as-a-convergence-rule)
 - `2026-08-13` — [Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately](#2026-08-13--fleet-repinned-to-v212-drift-is-closed-to-zero-on-a-behaviour-neutral-tag-deliberately)
@@ -66,6 +67,60 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-17 — `keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper
+
+`sync-bundle-key`, `rotate-signing-keypair` and `rotate-worker-signing-secret` each disabled
+exactly one version after a successful roll — the one they had just superseded, hard-coded.
+That is now `keep_enabled_count` (default `'1'`), a keep-set: the newest N ENABLED versions
+survive and everything older is disabled.
+
+**Why not put the whole retention story in the writers.** The question raised was whether
+`cleanup-secret-versions` needed to exist at all, or whether the update flow could own version
+lifecycle end to end. The state machine's two halves have genuinely different requirements, and
+that is what decided it:
+
+- **Disable** needs only the version list and `secretVersionManager`, which every writer already
+  holds. It was already inline. Generalising it to a keep-set costs nothing new.
+- **Destroy** needs a quarantine clock and a consumer scan. Secret Manager stores no disabled-at
+  timestamp, so the clock comes from Admin Activity audit logs (`roles/logging.viewer`), and
+  number-pinned Cloud Run consumers are only visible with `roles/run.viewer`. Granting both to
+  the identities that mint credentials widens their blast radius for no gain.
+
+Decisive beyond IAM: **a writer-owned sweep only runs when you write.** `app-secrets` rotates
+quarterly and annually, and the two sync callers are dispatch-only. Retention that fires when
+rotation fires never reaches the secrets that most need it — the ones nobody rotates — and
+never covers versions written by `manage-config-secrets` or by hand. A retention bug would also
+fail a *rotation* run, which is the safety-critical path.
+
+**A run cannot destroy what it just disabled**, either: the quarantine clock starts at the
+`DisableSecretVersion` event, so dwell is zero by construction. Inline destroy would always be
+operating on a tail left by earlier runs, which is the sweeper's job by another name.
+
+**On cost, since it was raised.** Disabled versions *are* billed — $0.06 per version per month,
+as recorded in the 2026-08-16 entry. But total Secret Manager spend across all three projects
+measured ~$0.78/month on 2026-08-16, so destroying the entire tail saves single-digit dollars a
+year. Cost is the weakest argument for destruction; reducing the number of retrievable
+plaintexts is the real one, and it is `cleanup-secret-versions` that acts on it.
+
+**The behaviour change, stated rather than claimed away.** At `keep_enabled_count: '1'` this is
+identical to the old single-version disable *only when the secret carries no pre-existing
+ENABLED tail*. That is the steady state these workflows maintain, so in practice the default is
+a no-op — but a secret written outside them can carry a tail, and the first run will now disable
+all of it. AGENTS.md §5 exists because on 2026-08-11 this repo's docs claimed a retention change
+"could only ever delete less" and a dry-run measurement showed the opposite; that lesson applies
+here, so the step emits a `::warning::` naming the count whenever it disables more than one, and
+the docs tell upgraders to dry-run both pins. Every action remains reversible with
+`gcloud secrets versions enable`.
+
+`0` is rejected outright: it would disable every version and leave `latest` unresolvable. The
+newest ENABLED version is never in the disable set, so the step cannot silently repoint `latest`
+— the live-rollback failure mode the 2026-08-16 entry documents.
+
+Covered by nine assertions per workflow in `tests/run_step_tests.py`, executed against the
+shipped step bodies: keep-set arithmetic at 1 and 2, the tail sweep and its warning, the
+newest-version guard, rejection of `0` and of non-numeric input, that no path ever calls
+`versions destroy`, and that the step is ordered after the Cloud Run roll.
 
 ## 2026-08-16 — `cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong
 

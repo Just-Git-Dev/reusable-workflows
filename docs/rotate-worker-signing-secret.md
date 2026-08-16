@@ -67,6 +67,7 @@ The rotation drives both sides through an overlap:
 | `secret_bytes` | input | `32` | generated secret length (hex, so 2x chars) |
 | `bootstrap` | input | `false` | tolerate a missing secret / missing services on first run; no grace, no disable |
 | `dry_run` | input | `false` | print the plan; generate/write/roll nothing |
+| `keep_enabled_count` | input | `'1'` | keep this many newest ENABLED versions, disable the rest; minimum `1`. See [Version retention](sync-bundle-key.md#version-retention--keep_enabled_count) |
 | `cloudflare_api_token` | **secret** (req) | — | needs Workers Scripts:Edit on `cf_account_id` |
 
 ## Outputs

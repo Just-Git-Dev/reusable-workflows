@@ -2346,6 +2346,12 @@
           "required": false,
           "type": "string"
         },
+        "keep_enabled_count": {
+          "default": "1",
+          "description": "After a successful roll, keep this many of the most recent ENABLED versions of the bundle secret and DISABLE the rest. 1 (DEFAULT) keeps only the version this run wrote \u2014 the historical behaviour in the steady state these workflows maintain. 2 leaves the previous version ENABLED as a rollback target that needs no re-enable first. Minimum 1: 0 would disable every version and leave `latest` unresolvable. This step only ever DISABLES \u2014 destruction belongs to cleanup-secret-versions, which owns the quarantine clock and the Cloud Run consumer scan.",
+          "required": false,
+          "type": "string"
+        },
         "key_id_name": {
           "default": "JWT_KEY_ID",
           "description": "Bundle key for the key id (kid = first 16 hex of SHA-256 over the public PEM).",
@@ -2484,6 +2490,12 @@
           "description": "Seconds to keep the PREVIOUS slot live. MUST be > your longest signed-URL TTL.",
           "required": false,
           "type": "number"
+        },
+        "keep_enabled_count": {
+          "default": "1",
+          "description": "After a successful roll, keep this many of the most recent ENABLED versions of the bundle secret and DISABLE the rest. 1 (DEFAULT) keeps only the version this run wrote \u2014 the historical behaviour in the steady state these workflows maintain. 2 leaves the previous version ENABLED as a rollback target that needs no re-enable first. Minimum 1: 0 would disable every version and leave `latest` unresolvable. This step only ever DISABLES \u2014 destruction belongs to cleanup-secret-versions, which owns the quarantine clock and the Cloud Run consumer scan.",
+          "required": false,
+          "type": "string"
         },
         "mount_path": {
           "default": "/app/configs/.prod.env",
@@ -2684,6 +2696,12 @@
         "gcp_region": {
           "default": "asia-southeast1",
           "description": "Region of the Cloud Run services.",
+          "required": false,
+          "type": "string"
+        },
+        "keep_enabled_count": {
+          "default": "1",
+          "description": "After a successful roll, keep this many of the most recent ENABLED versions of the bundle secret and DISABLE the rest. 1 (DEFAULT) keeps only the version this run wrote \u2014 the historical behaviour in the steady state these workflows maintain. 2 leaves the previous version ENABLED as a rollback target that needs no re-enable first. Minimum 1: 0 would disable every version and leave `latest` unresolvable. This step only ever DISABLES \u2014 destruction belongs to cleanup-secret-versions, which owns the quarantine clock and the Cloud Run consumer scan.",
           "required": false,
           "type": "string"
         },

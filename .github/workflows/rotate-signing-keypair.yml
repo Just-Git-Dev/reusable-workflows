@@ -91,6 +91,19 @@ on:
         type: boolean
         required: false
         default: false
+      keep_enabled_count:
+        description: >-
+          After a successful roll, keep this many of the most recent ENABLED
+          versions of the bundle secret and DISABLE the rest. 1 (DEFAULT) keeps
+          only the version this run wrote — the historical behaviour in the
+          steady state these workflows maintain. 2 leaves the previous version
+          ENABLED as a rollback target that needs no re-enable first. Minimum 1:
+          0 would disable every version and leave `latest` unresolvable. This
+          step only ever DISABLES — destruction belongs to cleanup-secret-versions,
+          which owns the quarantine clock and the Cloud Run consumer scan.
+        type: string
+        required: false
+        default: '1'
     outputs:
       old_version:
         description: 'Bundle version enabled before this run (empty if none / bootstrap).'
@@ -282,17 +295,56 @@ jobs:
             --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" \
             || echo "::warning::Could not disable failed version ${{ steps.new_version.outputs.new_version }} (non-fatal — latest already restored)."
 
-      - name: Disable the old SM version
+      - name: Disable superseded bundle version(s)
         # No grace: asymmetric JWTs carry a kid and short-lived tokens churn onto the
         # new key naturally once the signer rolls, so the old key can go immediately.
+        #
+        # KEEP-SET, not "disable the one we replaced". The newest
+        # `keep_enabled_count` ENABLED versions survive and everything older is
+        # disabled, so a pre-existing ENABLED tail is mopped up rather than
+        # accumulating retrievable plaintext forever. At the default of 1 that is
+        # identical to the old single-version disable whenever no such tail exists.
+        #
+        # DISABLE ONLY, never destroy. Destruction needs a quarantine clock (GSM
+        # stores no disabled-at timestamp) and the Cloud Run consumer scan; both
+        # live in cleanup-secret-versions, and this workflow holds neither
+        # roles/logging.viewer nor roles/run.viewer. See DECISIONS.md 2026-08-17.
         if: inputs.dry_run == false && steps.cur.outputs.empty == 'false' && steps.cur.outputs.current_version != ''
+        env:
+          KEEP_ENABLED_COUNT: ${{ inputs.keep_enabled_count }}
         run: |
-          gcloud secrets versions disable "${{ steps.cur.outputs.current_version }}" \
-            --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" || true
+          case "$KEEP_ENABLED_COUNT" in
+            ''|*[!0-9]*)
+              echo "::error::keep_enabled_count must be a non-negative integer (got '$KEEP_ENABLED_COUNT')."
+              exit 1 ;;
+          esac
+          if [ "$KEEP_ENABLED_COUNT" -lt 1 ]; then
+            echo "::error::keep_enabled_count must be >= 1: 0 disables every version and leaves 'latest' unresolvable."
+            exit 1
+          fi
+          # `latest` resolves SERVER-SIDE to the newest ENABLED version, so keeping
+          # at least one guarantees this step can never silently repoint it.
+          gcloud secrets versions list "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --filter='state=ENABLED' \
+            --sort-by=~createTime --format='value(name)' > /tmp/enabled.txt
+          TOTAL=$(wc -l < /tmp/enabled.txt | tr -d ' ')
+          # tail -n +N is 1-based, so +2 with KEEP=1 skips the newest and keeps the rest.
+          tail -n +"$((KEEP_ENABLED_COUNT + 1))" /tmp/enabled.txt > /tmp/to-disable.txt
+          COUNT=$(wc -l < /tmp/to-disable.txt | tr -d ' ')
+          echo "ENABLED versions: $TOTAL; keeping newest $KEEP_ENABLED_COUNT; disabling $COUNT."
+          if [ "$COUNT" -gt 1 ]; then
+            echo "::warning::Disabling $COUNT versions, more than the one this run superseded — a pre-existing ENABLED tail was present. Every one is reversible with 'gcloud secrets versions enable'."
+          fi
+          while read -r v; do
+            [ -n "$v" ] || continue
+            echo "Disabling version $v"
+            gcloud secrets versions disable "$v" \
+              --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" || true
+          done < /tmp/to-disable.txt
 
       - name: Shred local bundle copies
         if: always()
-        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/rollback.env /tmp/priv.pem /tmp/pub.pem
+        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/rollback.env /tmp/priv.pem /tmp/pub.pem /tmp/enabled.txt /tmp/to-disable.txt
 
       - name: Summary
         if: always()

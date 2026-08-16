@@ -376,3 +376,12 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   credential-minting workflow that five repos depend on, to serve exactly one caller. Revisit only
   if a second frontend genuinely grows a stage environment.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
+- [ ] `sync-bundle-key.yml` / `rotate-signing-keypair.yml` / `rotate-worker-signing-secret.yml` —
+  align the `concurrency:` group key on the bundle. All three do a read-modify-write of the SAME
+  `app-secrets` blob but declare three different prefixes (`secrets-rotation-<proj>-<bundle>`,
+  `keypair-rotation-<proj>-<bundle>`, `signing-rotation-<proj>-<bundle>-<key>`), so a sync and a
+  keypair rotation are NOT serialised against each other: both read v5, both write, the second
+  write silently drops the first one's keys. Found 2026-08-17 while mapping the AutoMahn callers;
+  no overlap observed in run history (not checked), the exposure is a scheduled quarterly/annual
+  rotation landing on a manual sync. Fixing it in the reusables covers every caller at once —
+  AutoMahn's caller-level `group: secrets-rotation` only papers over two of the four.

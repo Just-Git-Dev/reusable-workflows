@@ -12,10 +12,34 @@ so one workflow covers every rotation without branching. Build it with
 
 ## Ordering contract
 
-The previous secret version is disabled **only after every service has rolled
+Superseded secret versions are disabled **only after every service has rolled
 successfully**. If any roll fails, the job fails with the old version still
 enabled, so no running service is left pointing at a disabled secret version.
 Re-run after fixing the cause; the disable happens on the next green run.
+
+## Version retention — `keep_enabled_count`
+
+The disable step keeps the newest `keep_enabled_count` ENABLED versions and
+disables everything older. It **never destroys**; see
+[cleanup-secret-versions](cleanup-secret-versions.md) for that.
+
+| Value | Effect |
+|---|---|
+| `1` (default) | only the version this run wrote stays ENABLED |
+| `2` | the previous version stays ENABLED as a rollback target needing no re-enable |
+| `0` | **rejected** — it would disable every version and leave `latest` unresolvable |
+
+`latest` resolves server-side to the newest ENABLED version, so the newest is
+never in the disable set and this step cannot silently repoint it.
+
+**Behaviour note for existing callers.** At the default of `1` this is identical
+to the previous single-version disable *whenever the secret carries no
+pre-existing ENABLED tail* — which is the steady state these workflows
+themselves maintain. If a tail does exist (a hand-added version, or one written
+by `manage-config-secrets`), the first run now disables all of it and emits a
+`::warning::` naming the count. That is reversible with `gcloud secrets versions
+enable`; per [AGENTS.md §5](../AGENTS.md) dry-run both pins and compare before
+upgrading if the secret has been written outside these workflows.
 
 ## Inputs / secrets
 
@@ -30,6 +54,7 @@ Re-run after fixing the cause; the disable happens on the next green run.
 | `title` | input | `secrets` | label for the run summary |
 | `dry_run` | input | `false` | validate + print the plan; write nothing |
 | `min_value_length` | input | `8` | refuse the run if any payload value is shorter than this; `0` disables |
+| `keep_enabled_count` | input | `'1'` | keep this many newest ENABLED versions, disable the rest; minimum `1` |
 | `payload_json` | **secret** (req) | — | `{"DEST_KEY": "value", ...}` |
 
 ## Outputs

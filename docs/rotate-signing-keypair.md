@@ -52,6 +52,7 @@ that overlap `sync-bundle-key`.
 | `title` | input | `JWT signing keys` | label for the run summary |
 | `bootstrap` | input | `false` | tolerate missing secret/services; skip disable |
 | `dry_run` | input | `false` | print the plan; generate/write/roll nothing |
+| `keep_enabled_count` | input | `'1'` | keep this many newest ENABLED versions, disable the rest; minimum `1`. See [Version retention](sync-bundle-key.md#version-retention--keep_enabled_count) |
 
 No `secrets:` — the keypair is generated in-workflow.
 
