@@ -385,3 +385,19 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   no overlap observed in run history (not checked), the exposure is a scheduled quarterly/annual
   rotation landing on a manual sync. Fixing it in the reusables covers every caller at once —
   AutoMahn's caller-level `group: secrets-rotation` only papers over two of the four.
+- [ ] `cleanup-secret-versions.yml` — adopt Secret Manager **delayed destruction** and drop the
+  audit-log clock. `gcloud secrets update <secret> --version-destroy-ttl=30d` (API field
+  `version_destroy_ttl`, min 1d / max 1000d) makes a destroy land as `DISABLED` +
+  `scheduledDestroyTime`, cancellable by enabling or disabling before that time. The delay is
+  then enforced server-side and cannot be wrong, so the sweep can drop `quarantine_days`,
+  `roles/logging.viewer`, and the "disable event not found ⇒ HELD forever" branch — the whole
+  reason those exist is that GSM stores no disabled-at timestamp, but `scheduledDestroyTime` IS
+  plain metadata. See DECISIONS.md 2026-08-17. **Verify first, none of it confirmed:**
+  (a) is a version awaiting `scheduledDestroyTime` still billed at $0.06/mo? If so the cost
+  saving is deferred by the TTL, not avoided — which undercuts the motivation.
+  (b) which role grants `secretmanager.secrets.update`? Setting the TTL mutates the *secret*,
+  not a version, so `roles/secretmanager.secretVersionManager` may not cover it — and secret
+  *configuration* arguably belongs with `manage-config-secrets`, which creates them, not with a
+  sweep or a rotation.
+  (c) a version awaiting destruction is `DISABLED`, so the sweep's current DISABLED-selection
+  would re-enter it as a candidate next run. No-op, error, or does it reset the clock?

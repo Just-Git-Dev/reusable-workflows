@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-17` — [Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it](#2026-08-17--delayed-destruction-version_destroy_ttl-exists--it-simplifies-the-sweeper-but-does-not-replace-it)
 - `2026-08-17` — [`keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper](#2026-08-17--keep_enabled_count-on-the-writers-disable-is-inline-destroy-stays-in-the-sweeper)
 - `2026-08-16` — [`cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong](#2026-08-16--cleanup-secret-versions-quarantine-not-deletion--and-the-latest-resolves-at-deploy-premise-was-wrong)
 - `2026-08-13` — [`cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule](#2026-08-13--cleanup_latest_tag-v220-a-stranded-latest-is-cleaned-by-the-sweep-that-strands-it-as-a-convergence-rule)
@@ -67,6 +68,67 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-17 — Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it
+
+Recorded as a finding, not a change: nothing in this repo sets or reads `version_destroy_ttl`
+today, and no workflow was modified for it. `grep` across all 22 workflows, `docs/` and this log
+returned nothing for it before this entry.
+
+**What it is.** Secret Manager supports **delayed destruction**, configured per secret:
+`gcloud secrets create|update SECRET_ID --version-destroy-ttl=DURATION` (API field
+`version_destroy_ttl`), minimum 1 day, maximum 1000 days, removed with
+`--remove-version-destroy-ttl`. With it set, destroying a version does not delete the material —
+the version moves to **`DISABLED`** and gains a **`scheduledDestroyTime`**, and destruction is
+cancelled by enabling *or* disabling the version any time before that. Verified against Google's
+docs rather than recalled, per the standard this repo adopted on 2026-08-16.
+
+Note the state precisely: the version is `DISABLED` with `scheduledDestroyTime` set.
+`SECRET_VERSION_DESTROY_SCHEDULED` is the name of the Pub/Sub *notification*, not a version
+state — a workflow must detect scheduling by the field, not by a state string.
+
+**What it corrects.** The 2026-08-16 entry built the quarantine on Admin Activity audit logs
+because Secret Manager stores no disabled-at timestamp. That premise is still true, but the
+conclusion drawn from it — that the clock must be reconstructed client-side — was reached without
+knowing this feature exists. `scheduledDestroyTime` is a plain metadata field, so with a TTL
+configured the delay is enforced *server-side and cannot be wrong*, and
+`cleanup-secret-versions` could drop `quarantine_days`, `roles/logging.viewer`, and the
+"disable event not found ⇒ HELD forever" branch. That is a real simplification of shipped code
+and is filed in `TODO.md`.
+
+**Why it does not remove the need for the sweeper**, which is the question it prompted.
+`version_destroy_ttl` is an **undo window, not a retention policy**. The TTL clock starts when
+something calls `DestroySecretVersion`; nothing inside Secret Manager ever makes that call. With
+the TTL set and no sweeper, versions accumulate exactly as they do today and the TTL never fires
+because nothing arms it. (GSM's only automatic destruction is secret-level expiry, which deletes
+the entire secret — a different tool.)
+
+**Why the writers still do not absorb it.** Two of the original objections genuinely dissolve
+under a TTL: destruction stops being irreversible, and the audit-log clock stops being needed. A
+third weakens — a destroyed-under-TTL version lands in `DISABLED`, the same immediate blast
+radius as the disable the writers already perform without a consumer scan. The coverage argument
+also proved narrower than first stated: versions are only created by writes, so a writer-owned
+sweep is eventually correct for any secret still being rotated.
+
+What decided it is reviewability. The sweep's safety model is *run it dry, read the plan, then
+opt in* — `dry_run` defaults true and `enable_destroy` defaults false. That requires an
+invocation with **no side effects**. Inside a writer there is no such invocation: `dry_run`
+suppresses the write, and with it the disable and the destroy, so the plan is never computed;
+and `dry_run: false` reaches the destroy only by minting a credential, rolling Cloud Run and
+flipping the Cloudflare Worker slots. Reviewing a destroy plan would require performing a
+production rotation. AGENTS.md §5 exists because on 2026-08-11 a retention change was *reasoned*
+safe and a dry-run measurement showed the opposite; that measurement has to be cheap and
+side-effect-free or it stops being taken. Secondary: a retention bug would fail a rotation
+mid-flight rather than a sweep, and dormant or externally-written secrets (`manage-config-secrets`,
+hand edits) would never be swept at all.
+
+**Open before acting on any of this** — both filed in `TODO.md`, neither verified:
+whether a version awaiting `scheduledDestroyTime` is still billed (if it is, the cost saving
+that started this is deferred by the TTL, not avoided), and which role grants
+`secretmanager.secrets.update` — setting the TTL mutates the *secret*, not a version, so
+`roles/secretmanager.secretVersionManager` may not cover it. There is also an interaction to
+check: a version awaiting destruction is `DISABLED`, so the sweep's current DISABLED-selection
+would re-enter it as a candidate on the next run.
 
 ## 2026-08-17 — `keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper
 
