@@ -70,6 +70,19 @@
 
 ## Secret Manager
 
+- [x] **A GSM version cleanup workflow.** ✅ **Shipped as `cleanup-secret-versions.yml`**
+      (2026-08-16) — quarantine model (`ENABLED`→`DISABLED`→`DESTROYED`), `enable_destroy`
+      off by default, 16 fixtures wired into CI as `secret-plan-fixtures`. See
+      [docs/cleanup-secret-versions.md](docs/cleanup-secret-versions.md) and DECISIONS.md.
+      **⚠️ One design note below was WRONG and is corrected there:** `:latest` does *not*
+      resolve at deploy time for the mount style the fleet actually uses. A Cloud Run
+      **volume** mount re-fetches from Secret Manager on **every read, at runtime**, so a
+      wrong destroy breaks a *running* service rather than waiting for the next deploy.
+      The "not `:latest` ≠ not in use" conclusion held; the reason did not, and the real
+      behaviour is stricter. Original text kept below as filed.
+
+      Original entry, for reference:
+
 - [ ] **A GSM version cleanup workflow.** Four reusables add Secret Manager versions and
       none ever removes one: `manage-config-secrets`, `rotate-signing-keypair`,
       `rotate-worker-signing-secret`, `sync-bundle-key`. Versions accumulate for the life of

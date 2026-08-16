@@ -1,0 +1,32 @@
+{
+  "name": "no DisableSecretVersion audit event means the quarantine clock is unknown \u2014 hold, never destroy",
+  "secrets": {
+    "app-secrets": {
+      "latest": 5,
+      "versions": [
+        {
+          "version": 5,
+          "state": "ENABLED"
+        },
+        {
+          "version": 4,
+          "state": "DISABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    }
+  ],
+  "disabled_at": [],
+  "expect_disable": [],
+  "expect_destroy": [],
+  "expect_held": [
+    "app-secrets:4"
+  ]
+}

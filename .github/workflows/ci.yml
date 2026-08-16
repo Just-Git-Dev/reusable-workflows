@@ -129,6 +129,24 @@ jobs:
       - name: Run delete-plan fixtures
         run: python3 tests/run_plan_tests.py
 
+  secret-plan-fixtures:
+    name: cleanup-secret-versions sweep-plan fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same seam as the GAR fixtures above, guarding a strictly worse failure:
+      # a destroyed secret version has no undelete and no rebuild. Every fixture
+      # additionally asserts the two invariants that make the sweep safe — the
+      # version `latest` resolves to is never actioned, and no secret is ever
+      # left without an ENABLED version.
+      - name: Run sweep-plan fixtures
+        run: python3 tests/run_secret_plan_tests.py
+
   step-bodies:
     name: step bodies (stubbed commands)
     runs-on: ubuntu-latest

@@ -1,0 +1,38 @@
+{
+  "name": "the version `latest` resolves to is kept; an old disabled one is destroyed",
+  "secrets": {
+    "api-env": {
+      "latest": 2,
+      "versions": [
+        {
+          "version": 2,
+          "state": "ENABLED"
+        },
+        {
+          "version": 1,
+          "state": "DISABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "api-env",
+      "key": "latest"
+    }
+  ],
+  "disabled_at": [
+    {
+      "secret": "api-env",
+      "version": 1,
+      "days_ago": 60
+    }
+  ],
+  "expect_disable": [],
+  "expect_destroy": [
+    "api-env:1"
+  ],
+  "expect_held": []
+}

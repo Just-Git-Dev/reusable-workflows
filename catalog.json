@@ -720,6 +720,99 @@
       "secrets": {},
       "workflow": "cleanup-gar-images.yml"
     },
+    "cleanup-secret-versions": {
+      "inputs": {
+        "dry_run": {
+          "default": true,
+          "description": "true = print the plan only, change nothing.",
+          "required": false,
+          "type": "boolean"
+        },
+        "enable_destroy": {
+          "default": false,
+          "description": "false (DEFAULT) = quarantine only. Versions are disabled and the destroy plan is printed but nothing is destroyed, so every action the run takes is reversible. Set true only once you have read a plan you agree with.",
+          "required": false,
+          "type": "boolean"
+        },
+        "gcp_project": {
+          "default": null,
+          "description": "GCP project id owning the secrets.",
+          "required": true,
+          "type": "string"
+        },
+        "gcp_region": {
+          "default": "asia-southeast1",
+          "description": "Region of the Cloud Run Services/Jobs that consume the secrets.",
+          "required": false,
+          "type": "string"
+        },
+        "keep_enabled_count": {
+          "default": "3",
+          "description": "Per secret, keep this many of the most recent ENABLED versions. Minimum 1, and 1 means \"keep only what `latest` resolves to\" \u2014 no rollback version survives, so 2 is the lowest value that can express a rollback.",
+          "required": false,
+          "type": "string"
+        },
+        "keep_versions": {
+          "default": "",
+          "description": "Comma-separated `secret:version` pins that are never disabled or destroyed (e.g. app-secrets:5,api-env:6). An escape hatch for a version held by something the consumer scan cannot see.",
+          "required": false,
+          "type": "string"
+        },
+        "min_age_days": {
+          "default": "7",
+          "description": "Never touch a version created within this many days, whatever the keep count says. This is the window in which a rotation is still being validated and a rollback is most likely.",
+          "required": false,
+          "type": "string"
+        },
+        "quarantine_days": {
+          "default": "30",
+          "description": "A DISABLED version must have been disabled for MORE than this many days before it can be destroyed. The clock starts at the DisableSecretVersion audit event, so a version this run disables can never be destroyed by the same run. 0 is rejected: it collapses the quarantine that makes destruction safe.",
+          "required": false,
+          "type": "string"
+        },
+        "require_consumers": {
+          "default": "true",
+          "description": "true (DEFAULT) = abort if a target secret has no live Cloud Run consumer. Set false ONLY for a secret consumed outside Cloud Run, where the scan genuinely cannot see the consumer and you have verified it by hand.",
+          "required": false,
+          "type": "string"
+        },
+        "secrets_list": {
+          "default": "",
+          "description": "Comma-separated secret names to sweep (e.g. app-secrets,api-env). Empty means every secret in the project \u2014 convenient, but prefer naming them: an explicit list cannot silently grow to cover a secret nobody vetted.",
+          "required": false,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "Service account email to impersonate via WIF.",
+          "required": true,
+          "type": "string"
+        },
+        "wif_provider": {
+          "default": null,
+          "description": "Workload Identity Federation provider resource name.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "cleanup": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Cleanup Secret Manager versions (reusable)",
+      "outputs": {
+        "destroyed": "Number of versions actually destroyed (0 on a dry run, or when enable_destroy is false).",
+        "disabled": "Number of versions actually disabled (0 on a dry run).",
+        "held": "Versions eligible by policy but withheld \u2014 quarantine not yet served, or disable time unknown.",
+        "to_destroy": "Number of versions the plan selected to destroy.",
+        "to_disable": "Number of versions the plan selected to disable."
+      },
+      "path": ".github/workflows/cleanup-secret-versions.yml",
+      "secrets": {},
+      "workflow": "cleanup-secret-versions.yml"
+    },
     "deploy-cloud-run": {
       "inputs": {
         "also_tag_latest": {

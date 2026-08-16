@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-16` — [`cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong](#2026-08-16--cleanup-secret-versions-quarantine-not-deletion--and-the-latest-resolves-at-deploy-premise-was-wrong)
 - `2026-08-13` — [`cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule](#2026-08-13--cleanup_latest_tag-v220-a-stranded-latest-is-cleaned-by-the-sweep-that-strands-it-as-a-convergence-rule)
 - `2026-08-13` — [Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately](#2026-08-13--fleet-repinned-to-v212-drift-is-closed-to-zero-on-a-behaviour-neutral-tag-deliberately)
 - `2026-08-13` — [`retire-gar-packages` handles immutability, and preserves it rather than deciding it](#2026-08-13--retire-gar-packages-handles-immutability-and-preserves-it-rather-than-deciding-it)
@@ -65,6 +66,82 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-16 — `cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong
+
+**What.** New reusable `cleanup-secret-versions.yml`, closing the TODO filed as #51: four
+reusables add Secret Manager versions (`manage-config-secrets`, `rotate-signing-keypair`,
+`rotate-worker-signing-secret`, `sync-bundle-key`) and none ever removed one, so every
+rotation increased the number of retrievable plaintexts.
+
+**Why a quarantine rather than a delete-set.** `cleanup-gar-images` can afford to be wrong:
+a deleted image rebuilds from its commit. A destroyed secret version cannot — *"After a
+version is destroyed, you can't access the secret data or restore the version to another
+state."* So the sweep moves `ENABLED → DISABLED → DESTROYED` with a mandatory dwell time,
+and `enable_destroy` defaults to **false**. Out of the box the workflow only performs
+actions that `gcloud secrets versions enable` can undo. Holding a version disabled for a
+month costs $0.06; getting it wrong costs a credential.
+
+**The premise correction, which is the substantive finding.** The design note in TODO.md
+recorded that Cloud Run mounts `:latest` and that this "resolves at *deploy* time", and
+concluded that `not :latest ≠ not in use`. The conclusion was right; the stated reason was
+wrong, and wrong in the unsafe direction. Per Google's Cloud Run docs, verified rather than
+recalled:
+
+- **Volume mounts** — *"When reading a volume, Cloud Run always fetches the secret value
+  from the Secret Manager"*, and *"during runtime, if a secret is inaccessible, attempts to
+  read the mounted volume fail."* Resolution is at **runtime, on every read**.
+- **Env vars** — *"resolved at instance startup time."*
+
+Every Cloud Run service across `realm-id`, `auto-mahn` and `traide-in` uses the **volume**
+form. So there is no "safe until the next deploy" grace window that the original premise
+implied: a wrong destroy breaks a **running** service on its next read. The keep-set is
+therefore stricter than specced, not looser.
+
+**The `latest` invariant.** `latest` resolves server-side to the highest-numbered ENABLED
+version, which makes *disabling* the newest enabled version a silent live rollback — it
+repoints `latest` at an older payload with no deploy and no signal. The version `latest`
+resolves to is consequently never actionable: hard-coded, not an input, asserted as a
+plan-time invariant, and re-resolved immediately before each destroy. The guard is
+mathematically redundant with the keep-count in the steady state; it earns its place only
+when a rotation lands between the two collection calls, which is precisely when an
+irreversible mistake would otherwise happen. A fixture
+(`s15-latest-diverges-from-highest-enabled`) exists solely to keep it load-bearing —
+mutation testing showed that without it, removing the guard broke nothing.
+
+**The quarantine clock comes from audit logs, because the resource has no clock.** A secret
+version carries `createTime`, `state` and `etag` and nothing else — there is no
+disabled-at timestamp to read. Admin Activity logs record `DisableSecretVersion`, retain it
+400 days and cannot be disabled, so that is the source; the most recent event governs a
+version that was disabled, re-enabled and disabled again. A version with no discoverable
+disable event is **held**, never destroyed: absence of evidence is not evidence of an
+old-enough disable. This is why `roles/logging.viewer` is required.
+
+**`secretmanager.secretAccessor` is deliberately not required.** The sweep reads metadata
+only and never reads a payload, so it cannot leak one.
+
+**Fail-safe.** Zero live consumers for a target secret aborts the run, mirroring
+`cleanup-gar-images`' "no live digests resolved" — a broken scan, a wrong `gcp_region` or a
+missing role all present identically to an unused secret, and are far more likely.
+`require_consumers: false` is the explicit opt-out for secrets consumed outside Cloud Run.
+
+**Verification.** 16 fixtures in `tests/fixtures-secrets/`, run against the heredoc
+extracted from the workflow itself (no second copy to drift), wired into CI as
+`secret-plan-fixtures`. The suite was mutation-tested — dropping the `latest` guard, an
+off-by-one on the quarantine boundary, substituting `max(version)` for the resolved
+`latest`, ignoring consumer pins, and destroying on an unknown clock each now fail at least
+one fixture; the first two survived the initial suite and drove two extra fixtures. The
+full collection-plus-plan pipeline was additionally driven against live `realm-id`,
+`auto-mahn` and `traide-in` data read-only: the `auto-mahn` plan (disable `5`, destroy
+`8,6,4,3,2,1`) matches fixture `s11` exactly, and `realm-id`'s `issuer-env:1` is correctly
+held at 6.7 days of a 30-day quarantine.
+
+**Also caught, and worth recording as a lint win:** shellcheck's SC2259 flagged
+`gcloud … | python3 - <<'PY'` in two collection steps. The heredoc claims stdin, so the pipe
+was silently overridden and the script would have parsed its own source instead of the
+gcloud output. Both now write to a file and read that. actionlint's shellcheck does not
+descend into heredoc *bodies*, but it does see the redirection — the bug was invisible to
+the fixture suite, which only covers the plan block.
 
 ## 2026-08-13 — `cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule
 

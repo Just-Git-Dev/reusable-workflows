@@ -1,0 +1,29 @@
+{
+  "name": "zero live consumers aborts the run \u2014 a broken scan looks exactly like an unused secret",
+  "secrets": {
+    "app-secrets": {
+      "latest": 5,
+      "versions": [
+        {
+          "version": 5,
+          "state": "ENABLED"
+        },
+        {
+          "version": 4,
+          "state": "ENABLED"
+        },
+        {
+          "version": 3,
+          "state": "ENABLED"
+        },
+        {
+          "version": 2,
+          "state": "ENABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [],
+  "expect_exit": 1,
+  "expect_error": "No live Cloud Run consumer"
+}

@@ -1,0 +1,40 @@
+{
+  "name": "keep_versions pins a version the consumer scan cannot see",
+  "env": {
+    "KEEP_VERSIONS": "app-secrets:7"
+  },
+  "secrets": {
+    "app-secrets": {
+      "latest": 10,
+      "versions": [
+        {
+          "version": 10,
+          "state": "ENABLED"
+        },
+        {
+          "version": 9,
+          "state": "ENABLED"
+        },
+        {
+          "version": 8,
+          "state": "ENABLED"
+        },
+        {
+          "version": 7,
+          "state": "ENABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    }
+  ],
+  "expect_disable": [],
+  "expect_destroy": [],
+  "expect_held": []
+}

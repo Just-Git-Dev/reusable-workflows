@@ -1,0 +1,37 @@
+{
+  "name": "collected `latest` disagrees with highest-ENABLED (a rotation landed mid-collection) \u2014 the explicit latest guard is what saves it",
+  "secrets": {
+    "app-secrets": {
+      "latest": 2,
+      "versions": [
+        {
+          "version": 5,
+          "state": "ENABLED"
+        },
+        {
+          "version": 4,
+          "state": "ENABLED"
+        },
+        {
+          "version": 3,
+          "state": "ENABLED"
+        },
+        {
+          "version": 2,
+          "state": "ENABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    }
+  ],
+  "expect_disable": [],
+  "expect_destroy": [],
+  "expect_held": []
+}

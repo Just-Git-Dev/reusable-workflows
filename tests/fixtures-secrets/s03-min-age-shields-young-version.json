@@ -1,0 +1,44 @@
+{
+  "name": "a version younger than min_age_days is kept even when the keep count does not reach it",
+  "secrets": {
+    "app-secrets": {
+      "latest": 10,
+      "versions": [
+        {
+          "version": 10,
+          "state": "ENABLED"
+        },
+        {
+          "version": 9,
+          "state": "ENABLED"
+        },
+        {
+          "version": 8,
+          "state": "ENABLED"
+        },
+        {
+          "version": 7,
+          "state": "ENABLED"
+        },
+        {
+          "version": 6,
+          "state": "ENABLED",
+          "days_ago": 2
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    }
+  ],
+  "expect_disable": [
+    "app-secrets:7"
+  ],
+  "expect_destroy": [],
+  "expect_held": []
+}
