@@ -1,0 +1,44 @@
+{
+  "name": "keep_enabled_count keeps the N newest ENABLED; the rest are disabled, never destroyed in the same run",
+  "secrets": {
+    "app-secrets": {
+      "latest": 10,
+      "versions": [
+        {
+          "version": 10,
+          "state": "ENABLED"
+        },
+        {
+          "version": 9,
+          "state": "ENABLED"
+        },
+        {
+          "version": 8,
+          "state": "ENABLED"
+        },
+        {
+          "version": 7,
+          "state": "ENABLED"
+        },
+        {
+          "version": 6,
+          "state": "ENABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    }
+  ],
+  "expect_disable": [
+    "app-secrets:7",
+    "app-secrets:6"
+  ],
+  "expect_destroy": [],
+  "expect_held": []
+}

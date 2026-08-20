@@ -4,7 +4,7 @@
 Why this exists: every release since v1.20.0 needed a manual `perl -pi` pass over
 docs/ + README.md, which is exactly the chore that gets skipped — 39 example pins
 once sat on twelve different tags. The sweep is now a script, so the script itself
-needs the tests: a bad rewrite would silently corrupt 21 shipped workflows.
+needs the tests: a bad rewrite would silently corrupt 22 shipped workflows.
 
 The text-level functions are pure (str -> str), so these run against fixtures in
 memory; only the repo-wide scan touches disk, and it asserts against the real tree.
@@ -177,7 +177,11 @@ def test_repo_is_internally_consistent():
     check("repo: no disagreement", report.problems, [])
     check("repo: every reusable is stamped", report.unstamped, [])
     check("repo: one version across the tree", sorted(report.versions), [report.version])
-    check("repo: stamped 21 reusables", len(report.stamps), 21)
+    # Hand-maintained on purpose: deriving it from the same scan would make the
+    # assertion a tautology. Bump it when a reusable is ADDED (22 as of
+    # cleanup-secret-versions, 2026-08-16) — if it fails without one being added,
+    # a workflow has silently stopped being stamped, which is the point.
+    check("repo: stamped 22 reusables", len(report.stamps), 22)
 
 
 def test_scan_flags_a_stale_pin(tmp_check=True):

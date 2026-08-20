@@ -1,0 +1,49 @@
+{
+  "name": "a version pinned BY NUMBER by a live consumer is kept regardless of policy",
+  "secrets": {
+    "app-secrets": {
+      "latest": 10,
+      "versions": [
+        {
+          "version": 10,
+          "state": "ENABLED"
+        },
+        {
+          "version": 9,
+          "state": "ENABLED"
+        },
+        {
+          "version": 8,
+          "state": "ENABLED"
+        },
+        {
+          "version": 7,
+          "state": "ENABLED"
+        },
+        {
+          "version": 6,
+          "state": "ENABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    },
+    {
+      "kind": "service",
+      "resource": "worker",
+      "secret": "app-secrets",
+      "key": "6"
+    }
+  ],
+  "expect_disable": [
+    "app-secrets:7"
+  ],
+  "expect_destroy": [],
+  "expect_held": []
+}

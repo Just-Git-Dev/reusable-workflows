@@ -70,6 +70,19 @@
 
 ## Secret Manager
 
+- [x] **A GSM version cleanup workflow.** ✅ **Shipped as `cleanup-secret-versions.yml`**
+      (2026-08-16) — quarantine model (`ENABLED`→`DISABLED`→`DESTROYED`), `enable_destroy`
+      off by default, 16 fixtures wired into CI as `secret-plan-fixtures`. See
+      [docs/cleanup-secret-versions.md](docs/cleanup-secret-versions.md) and DECISIONS.md.
+      **⚠️ One design note below was WRONG and is corrected there:** `:latest` does *not*
+      resolve at deploy time for the mount style the fleet actually uses. A Cloud Run
+      **volume** mount re-fetches from Secret Manager on **every read, at runtime**, so a
+      wrong destroy breaks a *running* service rather than waiting for the next deploy.
+      The "not `:latest` ≠ not in use" conclusion held; the reason did not, and the real
+      behaviour is stricter. Original text kept below as filed.
+
+      Original entry, for reference:
+
 - [ ] **A GSM version cleanup workflow.** Four reusables add Secret Manager versions and
       none ever removes one: `manage-config-secrets`, `rotate-signing-keypair`,
       `rotate-worker-signing-secret`, `sync-bundle-key`. Versions accumulate for the life of
@@ -363,3 +376,28 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   credential-minting workflow that five repos depend on, to serve exactly one caller. Revisit only
   if a second frontend genuinely grows a stage environment.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
+- [ ] `sync-bundle-key.yml` / `rotate-signing-keypair.yml` / `rotate-worker-signing-secret.yml` —
+  align the `concurrency:` group key on the bundle. All three do a read-modify-write of the SAME
+  `app-secrets` blob but declare three different prefixes (`secrets-rotation-<proj>-<bundle>`,
+  `keypair-rotation-<proj>-<bundle>`, `signing-rotation-<proj>-<bundle>-<key>`), so a sync and a
+  keypair rotation are NOT serialised against each other: both read v5, both write, the second
+  write silently drops the first one's keys. Found 2026-08-17 while mapping the AutoMahn callers;
+  no overlap observed in run history (not checked), the exposure is a scheduled quarterly/annual
+  rotation landing on a manual sync. Fixing it in the reusables covers every caller at once —
+  AutoMahn's caller-level `group: secrets-rotation` only papers over two of the four.
+- [ ] `cleanup-secret-versions.yml` — adopt Secret Manager **delayed destruction** and drop the
+  audit-log clock. `gcloud secrets update <secret> --version-destroy-ttl=30d` (API field
+  `version_destroy_ttl`, min 1d / max 1000d) makes a destroy land as `DISABLED` +
+  `scheduledDestroyTime`, cancellable by enabling or disabling before that time. The delay is
+  then enforced server-side and cannot be wrong, so the sweep can drop `quarantine_days`,
+  `roles/logging.viewer`, and the "disable event not found ⇒ HELD forever" branch — the whole
+  reason those exist is that GSM stores no disabled-at timestamp, but `scheduledDestroyTime` IS
+  plain metadata. See DECISIONS.md 2026-08-17. **Verify first, none of it confirmed:**
+  (a) is a version awaiting `scheduledDestroyTime` still billed at $0.06/mo? If so the cost
+  saving is deferred by the TTL, not avoided — which undercuts the motivation.
+  (b) which role grants `secretmanager.secrets.update`? Setting the TTL mutates the *secret*,
+  not a version, so `roles/secretmanager.secretVersionManager` may not cover it — and secret
+  *configuration* arguably belongs with `manage-config-secrets`, which creates them, not with a
+  sweep or a rotation.
+  (c) a version awaiting destruction is `DISABLED`, so the sweep's current DISABLED-selection
+  would re-enter it as a candidate next run. No-op, error, or does it reset the clock?

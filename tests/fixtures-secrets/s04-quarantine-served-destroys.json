@@ -1,0 +1,48 @@
+{
+  "name": "a DISABLED version past quarantine_days is destroyed",
+  "secrets": {
+    "app-secrets": {
+      "latest": 5,
+      "versions": [
+        {
+          "version": 5,
+          "state": "ENABLED"
+        },
+        {
+          "version": 4,
+          "state": "DISABLED"
+        },
+        {
+          "version": 3,
+          "state": "DISABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    }
+  ],
+  "disabled_at": [
+    {
+      "secret": "app-secrets",
+      "version": 4,
+      "days_ago": 45
+    },
+    {
+      "secret": "app-secrets",
+      "version": 3,
+      "days_ago": 45
+    }
+  ],
+  "expect_disable": [],
+  "expect_destroy": [
+    "app-secrets:3",
+    "app-secrets:4"
+  ],
+  "expect_held": []
+}

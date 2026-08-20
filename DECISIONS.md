@@ -5,6 +5,9 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-17` — [Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it](#2026-08-17--delayed-destruction-version_destroy_ttl-exists--it-simplifies-the-sweeper-but-does-not-replace-it)
+- `2026-08-17` — [`keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper](#2026-08-17--keep_enabled_count-on-the-writers-disable-is-inline-destroy-stays-in-the-sweeper)
+- `2026-08-16` — [`cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong](#2026-08-16--cleanup-secret-versions-quarantine-not-deletion--and-the-latest-resolves-at-deploy-premise-was-wrong)
 - `2026-08-13` — [`cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule](#2026-08-13--cleanup_latest_tag-v220-a-stranded-latest-is-cleaned-by-the-sweep-that-strands-it-as-a-convergence-rule)
 - `2026-08-13` — [Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately](#2026-08-13--fleet-repinned-to-v212-drift-is-closed-to-zero-on-a-behaviour-neutral-tag-deliberately)
 - `2026-08-13` — [`retire-gar-packages` handles immutability, and preserves it rather than deciding it](#2026-08-13--retire-gar-packages-handles-immutability-and-preserves-it-rather-than-deciding-it)
@@ -65,6 +68,197 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-17 — Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it
+
+Recorded as a finding, not a change: nothing in this repo sets or reads `version_destroy_ttl`
+today, and no workflow was modified for it. `grep` across all 22 workflows, `docs/` and this log
+returned nothing for it before this entry.
+
+**What it is.** Secret Manager supports **delayed destruction**, configured per secret:
+`gcloud secrets create|update SECRET_ID --version-destroy-ttl=DURATION` (API field
+`version_destroy_ttl`), minimum 1 day, maximum 1000 days, removed with
+`--remove-version-destroy-ttl`. With it set, destroying a version does not delete the material —
+the version moves to **`DISABLED`** and gains a **`scheduledDestroyTime`**, and destruction is
+cancelled by enabling *or* disabling the version any time before that. Verified against Google's
+docs rather than recalled, per the standard this repo adopted on 2026-08-16.
+
+Note the state precisely: the version is `DISABLED` with `scheduledDestroyTime` set.
+`SECRET_VERSION_DESTROY_SCHEDULED` is the name of the Pub/Sub *notification*, not a version
+state — a workflow must detect scheduling by the field, not by a state string.
+
+**What it corrects.** The 2026-08-16 entry built the quarantine on Admin Activity audit logs
+because Secret Manager stores no disabled-at timestamp. That premise is still true, but the
+conclusion drawn from it — that the clock must be reconstructed client-side — was reached without
+knowing this feature exists. `scheduledDestroyTime` is a plain metadata field, so with a TTL
+configured the delay is enforced *server-side and cannot be wrong*, and
+`cleanup-secret-versions` could drop `quarantine_days`, `roles/logging.viewer`, and the
+"disable event not found ⇒ HELD forever" branch. That is a real simplification of shipped code
+and is filed in `TODO.md`.
+
+**Why it does not remove the need for the sweeper**, which is the question it prompted.
+`version_destroy_ttl` is an **undo window, not a retention policy**. The TTL clock starts when
+something calls `DestroySecretVersion`; nothing inside Secret Manager ever makes that call. With
+the TTL set and no sweeper, versions accumulate exactly as they do today and the TTL never fires
+because nothing arms it. (GSM's only automatic destruction is secret-level expiry, which deletes
+the entire secret — a different tool.)
+
+**Why the writers still do not absorb it.** Two of the original objections genuinely dissolve
+under a TTL: destruction stops being irreversible, and the audit-log clock stops being needed. A
+third weakens — a destroyed-under-TTL version lands in `DISABLED`, the same immediate blast
+radius as the disable the writers already perform without a consumer scan. The coverage argument
+also proved narrower than first stated: versions are only created by writes, so a writer-owned
+sweep is eventually correct for any secret still being rotated.
+
+What decided it is reviewability. The sweep's safety model is *run it dry, read the plan, then
+opt in* — `dry_run` defaults true and `enable_destroy` defaults false. That requires an
+invocation with **no side effects**. Inside a writer there is no such invocation: `dry_run`
+suppresses the write, and with it the disable and the destroy, so the plan is never computed;
+and `dry_run: false` reaches the destroy only by minting a credential, rolling Cloud Run and
+flipping the Cloudflare Worker slots. Reviewing a destroy plan would require performing a
+production rotation. AGENTS.md §5 exists because on 2026-08-11 a retention change was *reasoned*
+safe and a dry-run measurement showed the opposite; that measurement has to be cheap and
+side-effect-free or it stops being taken. Secondary: a retention bug would fail a rotation
+mid-flight rather than a sweep, and dormant or externally-written secrets (`manage-config-secrets`,
+hand edits) would never be swept at all.
+
+**Open before acting on any of this** — both filed in `TODO.md`, neither verified:
+whether a version awaiting `scheduledDestroyTime` is still billed (if it is, the cost saving
+that started this is deferred by the TTL, not avoided), and which role grants
+`secretmanager.secrets.update` — setting the TTL mutates the *secret*, not a version, so
+`roles/secretmanager.secretVersionManager` may not cover it. There is also an interaction to
+check: a version awaiting destruction is `DISABLED`, so the sweep's current DISABLED-selection
+would re-enter it as a candidate on the next run.
+
+## 2026-08-17 — `keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper
+
+`sync-bundle-key`, `rotate-signing-keypair` and `rotate-worker-signing-secret` each disabled
+exactly one version after a successful roll — the one they had just superseded, hard-coded.
+That is now `keep_enabled_count` (default `'1'`), a keep-set: the newest N ENABLED versions
+survive and everything older is disabled.
+
+**Why not put the whole retention story in the writers.** The question raised was whether
+`cleanup-secret-versions` needed to exist at all, or whether the update flow could own version
+lifecycle end to end. The state machine's two halves have genuinely different requirements, and
+that is what decided it:
+
+- **Disable** needs only the version list and `secretVersionManager`, which every writer already
+  holds. It was already inline. Generalising it to a keep-set costs nothing new.
+- **Destroy** needs a quarantine clock and a consumer scan. Secret Manager stores no disabled-at
+  timestamp, so the clock comes from Admin Activity audit logs (`roles/logging.viewer`), and
+  number-pinned Cloud Run consumers are only visible with `roles/run.viewer`. Granting both to
+  the identities that mint credentials widens their blast radius for no gain.
+
+Decisive beyond IAM: **a writer-owned sweep only runs when you write.** `app-secrets` rotates
+quarterly and annually, and the two sync callers are dispatch-only. Retention that fires when
+rotation fires never reaches the secrets that most need it — the ones nobody rotates — and
+never covers versions written by `manage-config-secrets` or by hand. A retention bug would also
+fail a *rotation* run, which is the safety-critical path.
+
+**A run cannot destroy what it just disabled**, either: the quarantine clock starts at the
+`DisableSecretVersion` event, so dwell is zero by construction. Inline destroy would always be
+operating on a tail left by earlier runs, which is the sweeper's job by another name.
+
+**On cost, since it was raised.** Disabled versions *are* billed — $0.06 per version per month,
+as recorded in the 2026-08-16 entry. But total Secret Manager spend across all three projects
+measured ~$0.78/month on 2026-08-16, so destroying the entire tail saves single-digit dollars a
+year. Cost is the weakest argument for destruction; reducing the number of retrievable
+plaintexts is the real one, and it is `cleanup-secret-versions` that acts on it.
+
+**The behaviour change, stated rather than claimed away.** At `keep_enabled_count: '1'` this is
+identical to the old single-version disable *only when the secret carries no pre-existing
+ENABLED tail*. That is the steady state these workflows maintain, so in practice the default is
+a no-op — but a secret written outside them can carry a tail, and the first run will now disable
+all of it. AGENTS.md §5 exists because on 2026-08-11 this repo's docs claimed a retention change
+"could only ever delete less" and a dry-run measurement showed the opposite; that lesson applies
+here, so the step emits a `::warning::` naming the count whenever it disables more than one, and
+the docs tell upgraders to dry-run both pins. Every action remains reversible with
+`gcloud secrets versions enable`.
+
+`0` is rejected outright: it would disable every version and leave `latest` unresolvable. The
+newest ENABLED version is never in the disable set, so the step cannot silently repoint `latest`
+— the live-rollback failure mode the 2026-08-16 entry documents.
+
+Covered by nine assertions per workflow in `tests/run_step_tests.py`, executed against the
+shipped step bodies: keep-set arithmetic at 1 and 2, the tail sweep and its warning, the
+newest-version guard, rejection of `0` and of non-numeric input, that no path ever calls
+`versions destroy`, and that the step is ordered after the Cloud Run roll.
+
+## 2026-08-16 — `cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong
+
+**What.** New reusable `cleanup-secret-versions.yml`, closing the TODO filed as #51: four
+reusables add Secret Manager versions (`manage-config-secrets`, `rotate-signing-keypair`,
+`rotate-worker-signing-secret`, `sync-bundle-key`) and none ever removed one, so every
+rotation increased the number of retrievable plaintexts.
+
+**Why a quarantine rather than a delete-set.** `cleanup-gar-images` can afford to be wrong:
+a deleted image rebuilds from its commit. A destroyed secret version cannot — *"After a
+version is destroyed, you can't access the secret data or restore the version to another
+state."* So the sweep moves `ENABLED → DISABLED → DESTROYED` with a mandatory dwell time,
+and `enable_destroy` defaults to **false**. Out of the box the workflow only performs
+actions that `gcloud secrets versions enable` can undo. Holding a version disabled for a
+month costs $0.06; getting it wrong costs a credential.
+
+**The premise correction, which is the substantive finding.** The design note in TODO.md
+recorded that Cloud Run mounts `:latest` and that this "resolves at *deploy* time", and
+concluded that `not :latest ≠ not in use`. The conclusion was right; the stated reason was
+wrong, and wrong in the unsafe direction. Per Google's Cloud Run docs, verified rather than
+recalled:
+
+- **Volume mounts** — *"When reading a volume, Cloud Run always fetches the secret value
+  from the Secret Manager"*, and *"during runtime, if a secret is inaccessible, attempts to
+  read the mounted volume fail."* Resolution is at **runtime, on every read**.
+- **Env vars** — *"resolved at instance startup time."*
+
+Every Cloud Run service across `realm-id`, `auto-mahn` and `traide-in` uses the **volume**
+form. So there is no "safe until the next deploy" grace window that the original premise
+implied: a wrong destroy breaks a **running** service on its next read. The keep-set is
+therefore stricter than specced, not looser.
+
+**The `latest` invariant.** `latest` resolves server-side to the highest-numbered ENABLED
+version, which makes *disabling* the newest enabled version a silent live rollback — it
+repoints `latest` at an older payload with no deploy and no signal. The version `latest`
+resolves to is consequently never actionable: hard-coded, not an input, asserted as a
+plan-time invariant, and re-resolved immediately before each destroy. The guard is
+mathematically redundant with the keep-count in the steady state; it earns its place only
+when a rotation lands between the two collection calls, which is precisely when an
+irreversible mistake would otherwise happen. A fixture
+(`s15-latest-diverges-from-highest-enabled`) exists solely to keep it load-bearing —
+mutation testing showed that without it, removing the guard broke nothing.
+
+**The quarantine clock comes from audit logs, because the resource has no clock.** A secret
+version carries `createTime`, `state` and `etag` and nothing else — there is no
+disabled-at timestamp to read. Admin Activity logs record `DisableSecretVersion`, retain it
+400 days and cannot be disabled, so that is the source; the most recent event governs a
+version that was disabled, re-enabled and disabled again. A version with no discoverable
+disable event is **held**, never destroyed: absence of evidence is not evidence of an
+old-enough disable. This is why `roles/logging.viewer` is required.
+
+**`secretmanager.secretAccessor` is deliberately not required.** The sweep reads metadata
+only and never reads a payload, so it cannot leak one.
+
+**Fail-safe.** Zero live consumers for a target secret aborts the run, mirroring
+`cleanup-gar-images`' "no live digests resolved" — a broken scan, a wrong `gcp_region` or a
+missing role all present identically to an unused secret, and are far more likely.
+`require_consumers: false` is the explicit opt-out for secrets consumed outside Cloud Run.
+
+**Verification.** 16 fixtures in `tests/fixtures-secrets/`, run against the heredoc
+extracted from the workflow itself (no second copy to drift), wired into CI as
+`secret-plan-fixtures`. The suite was mutation-tested — dropping the `latest` guard, an
+off-by-one on the quarantine boundary, substituting `max(version)` for the resolved
+`latest`, ignoring consumer pins, and destroying on an unknown clock each now fail at least
+one fixture; the first two survived the initial suite and drove two extra fixtures. The
+full collection-plus-plan pipeline was additionally driven against live `realm-id`,
+`auto-mahn` and `traide-in` data read-only: the `auto-mahn` plan (disable `5`, destroy
+`8,6,4,3,2,1`) matches fixture `s11` exactly, and `realm-id`'s `issuer-env:1` is correctly
+held at 6.7 days of a 30-day quarantine.
+
+**Also caught, and worth recording as a lint win:** shellcheck's SC2259 flagged
+`gcloud … | python3 - <<'PY'` in two collection steps. The heredoc claims stdin, so the pipe
+was silently overridden and the script would have parsed its own source instead of the
+gcloud output. Both now write to a file and read that. actionlint's shellcheck does not
+descend into heredoc *bodies*, but it does see the redirection — the bug was invisible to
+the fixture suite, which only covers the plan block.
 
 ## 2026-08-13 — `cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule
 

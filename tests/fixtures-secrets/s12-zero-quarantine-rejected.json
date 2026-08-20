@@ -1,0 +1,31 @@
+{
+  "name": "quarantine_days 0 is rejected \u2014 it collapses the dwell time that makes destroy safe",
+  "env": {
+    "QUARANTINE_DAYS": "0"
+  },
+  "secrets": {
+    "app-secrets": {
+      "latest": 5,
+      "versions": [
+        {
+          "version": 5,
+          "state": "ENABLED"
+        },
+        {
+          "version": 4,
+          "state": "DISABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [
+    {
+      "kind": "service",
+      "resource": "api",
+      "secret": "app-secrets",
+      "key": "latest"
+    }
+  ],
+  "expect_exit": 1,
+  "expect_error": "quarantine_days must be greater than 0"
+}

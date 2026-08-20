@@ -33,6 +33,13 @@ CI_GO = ROOT / ".github" / "workflows" / "ci-go.yml"
 GAR = ROOT / ".github" / "workflows" / "cleanup-gar-images.yml"
 RETIRE = ROOT / ".github" / "workflows" / "retire-gar-packages.yml"
 PAGES = ROOT / ".github" / "workflows" / "deploy-cloudflare-pages.yml"
+SYNC = ROOT / ".github" / "workflows" / "sync-bundle-key.yml"
+KEYPAIR = ROOT / ".github" / "workflows" / "rotate-signing-keypair.yml"
+WORKER = ROOT / ".github" / "workflows" / "rotate-worker-signing-secret.yml"
+
+# The three writers that add a bundle version, and the job each does it in.
+WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
+DISABLE_STEP = "Disable superseded bundle version(s)"
 
 FAILURES = []
 
@@ -413,6 +420,56 @@ def run_cleanup_latest_step(body: str, *, dry_run="true", degraded="false",
                 "calls": text,
                 "deletes": [ln for ln in text.splitlines() if "tags delete" in ln],
                 "output": out.read_text(), "summary": summary.read_text()}
+
+
+def run_disable_keep_step(body: str, *, keep="1", enabled=("7", "6"),
+                          disable_fails=False):
+    """Execute a writer's keep-set disable body against a stubbed gcloud.
+
+    enabled: the ENABLED version names as `versions list --sort-by=~createTime`
+    returns them — NEWEST FIRST. The newest must never appear in the disable
+    set: `latest` resolves server-side to it, so disabling it is a silent live
+    rollback (DECISIONS.md 2026-08-16).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        calls = tmp / "calls"
+        calls.write_text("")
+        rows = "".join(f'  echo "{v}"\n' for v in enabled)
+        gcloud = stub / "gcloud"
+        gcloud.write_text(
+            '#!/usr/bin/env bash\n'
+            f'echo "$*" >> {calls}\n'
+            'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
+            f'{rows}'
+            '  exit 0\n'
+            'fi\n'
+            'if [ "$2" = "versions" ] && [ "$3" = "disable" ]; then\n'
+            f'  exit {1 if disable_fails else 0}\n'
+            'fi\n'
+            'exit 0\n')
+        gcloud.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(KEEP_ENABLED_COUNT=keep, BUNDLE_SECRET="app-secrets",
+                   GCP_PROJECT="p",
+                   GITHUB_STEP_SUMMARY=str(tmp / "summary"))
+        # Keep the scratch lists inside the sandbox rather than the real /tmp.
+        body = body.replace("/tmp/", f"{tmp}/")
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        text = calls.read_text()
+        # `--secret=` / `--project=` trail the version, so pull the positional arg.
+        disabled = [ln.split()[3] for ln in text.splitlines()
+                    if "versions disable" in ln]
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "calls": text, "disabled": disabled,
+                "destroys": [ln for ln in text.splitlines()
+                             if "versions destroy" in ln]}
 
 
 def run_policy_step(body: str, *, policy_in="enforce", relock_in="true"):
@@ -939,6 +996,78 @@ def main():
     check("latest · runs before the re-lock, i.e. inside the unlock window",
           names.index("Clean up stranded :latest tag")
           < names.index("Ensure immutable-tag end-state"), names)
+
+    # ---- writers · keep_enabled_count -------------------------------------
+    #
+    # The writers disable; they never destroy. Destruction needs the quarantine
+    # clock and the Cloud Run consumer scan, which live in cleanup-secret-versions
+    # and which these workflows deliberately lack the IAM to perform.
+    for wf, job in WRITERS:
+        print(f"\n{wf.stem} · {DISABLE_STEP}")
+        body = extract_step(wf, job, DISABLE_STEP)
+        doc = yaml.safe_load(wf.read_text())
+        inputs = doc[True]["workflow_call"]["inputs"]
+
+        check(f"{wf.stem} · keep_enabled_count defaults to '1'",
+              inputs["keep_enabled_count"]["default"] == "1",
+              inputs.get("keep_enabled_count"))
+        check(f"{wf.stem} · keep_enabled_count is a string, as the repo's other counts are",
+              inputs["keep_enabled_count"]["type"] == "string",
+              inputs.get("keep_enabled_count"))
+
+        # 1. Fresh secret: the version this run added is the only ENABLED one.
+        r = run_disable_keep_step(body, keep="1", enabled=("7",))
+        check(f"{wf.stem} · sole version is never disabled", r["disabled"] == [], r["calls"])
+        check(f"{wf.stem} · sole version exits 0", r["rc"] == 0, r["out"])
+
+        # 2. The steady state these workflows maintain — one superseded version.
+        r = run_disable_keep_step(body, keep="1", enabled=("7", "6"))
+        check(f"{wf.stem} · keep=1 disables exactly the superseded version",
+              r["disabled"] == ["6"], r["calls"])
+
+        # 3. keep=2 buys a rollback target that needs no re-enable.
+        r = run_disable_keep_step(body, keep="2", enabled=("7", "6", "5"))
+        check(f"{wf.stem} · keep=2 leaves one previous version enabled",
+              r["disabled"] == ["5"], r["calls"])
+
+        # 4. A pre-existing ENABLED tail: swept, and said out loud. This is the
+        #    one case where the default is NOT identical to the old behaviour.
+        r = run_disable_keep_step(body, keep="1", enabled=("7", "6", "5", "4"))
+        check(f"{wf.stem} · keep=1 sweeps a pre-existing tail",
+              r["disabled"] == ["6", "5", "4"], r["calls"])
+        check(f"{wf.stem} · sweeping a tail emits a warning",
+              "::warning::" in r["out"], r["out"])
+
+        # 5. `latest` resolves to the newest ENABLED version, so it is never touched.
+        check(f"{wf.stem} · never disables the latest-resolving version",
+              "7" not in r["disabled"], r["disabled"])
+
+        # 6. Destruction is not this workflow's job, at any input.
+        check(f"{wf.stem} · never destroys", r["destroys"] == [], r["calls"])
+
+        # 7. keep=0 would disable every version and strand `latest`.
+        r = run_disable_keep_step(body, keep="0", enabled=("7", "6"))
+        check(f"{wf.stem} · keep=0 is rejected", r["rc"] != 0, r["out"])
+        check(f"{wf.stem} · keep=0 disables nothing", r["disabled"] == [], r["calls"])
+
+        # 8. A non-numeric input must not reach `[ -lt ]` as a bare word.
+        r = run_disable_keep_step(body, keep="all", enabled=("7", "6"))
+        check(f"{wf.stem} · non-numeric keep_enabled_count is rejected",
+              r["rc"] != 0, r["out"])
+        check(f"{wf.stem} · non-numeric keep_enabled_count disables nothing",
+              r["disabled"] == [], r["calls"])
+
+        # 9. Ordering: disable only after the services rolled onto the new version.
+        names = [s.get("name") for s in doc["jobs"][job]["steps"]]
+        check(f"{wf.stem} · disables after the Cloud Run roll",
+              names.index(DISABLE_STEP) > names.index("Force new Cloud Run revision(s)"),
+              names)
+
+    # sync-bundle-key alone fails hard on a disable error; the two rotators
+    # tolerate it with `|| true` because the credential is already live by then.
+    r = run_disable_keep_step(extract_step(SYNC, "sync", DISABLE_STEP),
+                              keep="1", enabled=("7", "6"), disable_fails=True)
+    check("sync-bundle-key · a failed disable fails the step", r["rc"] != 0, r["out"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

@@ -1,0 +1,35 @@
+{
+  "name": "require_consumers false lets a secret consumed outside Cloud Run be swept",
+  "env": {
+    "REQUIRE_CONSUMERS": "false"
+  },
+  "secrets": {
+    "app-secrets": {
+      "latest": 5,
+      "versions": [
+        {
+          "version": 5,
+          "state": "ENABLED"
+        },
+        {
+          "version": 4,
+          "state": "ENABLED"
+        },
+        {
+          "version": 3,
+          "state": "ENABLED"
+        },
+        {
+          "version": 2,
+          "state": "ENABLED"
+        }
+      ]
+    }
+  },
+  "consumers": [],
+  "expect_disable": [
+    "app-secrets:2"
+  ],
+  "expect_destroy": [],
+  "expect_held": []
+}

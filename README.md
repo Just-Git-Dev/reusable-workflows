@@ -59,6 +59,7 @@ lands everywhere.
 |---|---|
 | [`neon-backup.yml`](docs/neon-backup.md) | `pg_dump` a Postgres database to a private artifact (custom or plain-gz) |
 | [`cleanup-gar-images.yml`](docs/cleanup-gar-images.md) | Age-sweep Artifact Registry images, protecting digests live on Cloud Run Services **and** Jobs |
+| [`cleanup-secret-versions.yml`](docs/cleanup-secret-versions.md) | Quarantine-sweep Secret Manager versions (`ENABLED`→`DISABLED`→`DESTROYED`), never touching what `latest` resolves to |
 | [`retire-gar-packages.yml`](docs/retire-gar-packages.md) | Delete **entire** Artifact Registry packages for retired services, refusing any package with a live reference |
 | [`bootstrap-alerts.yml`](docs/bootstrap-alerts.md) | Apply a Cloud Monitoring channel + alert policies from the caller's `infra/alerts/` |
 | [`deploy-cloudflare-pages.yml`](docs/deploy-cloudflare-pages.md) | Build a static site and deploy it to Cloudflare Pages |
