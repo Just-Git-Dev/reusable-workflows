@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-20` — [Three writers of one secret blob held three different locks (bug fix)](#2026-08-20--three-writers-of-one-secret-blob-held-three-different-locks-bug-fix)
 - `2026-08-17` — [Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it](#2026-08-17--delayed-destruction-version_destroy_ttl-exists--it-simplifies-the-sweeper-but-does-not-replace-it)
 - `2026-08-17` — [`keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper](#2026-08-17--keep_enabled_count-on-the-writers-disable-is-inline-destroy-stays-in-the-sweeper)
 - `2026-08-16` — [`cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong](#2026-08-16--cleanup-secret-versions-quarantine-not-deletion--and-the-latest-resolves-at-deploy-premise-was-wrong)
@@ -68,6 +69,52 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-20 — Three writers of one secret blob held three different locks (bug fix)
+
+Released as **v2.3.1**. `sync-bundle-key`, `rotate-signing-keypair` and
+`rotate-worker-signing-secret` now declare a byte-identical
+`concurrency.group: bundle-write-${{ inputs.gcp_project }}-${{ inputs.bundle_secret }}`,
+replacing `secrets-rotation-…`, `keypair-rotation-…` and
+`signing-rotation-…-${{ inputs.bundle_key }}`.
+
+**Symptom.** None observed — this was found by reading, not by an incident. Two of the three
+workflows running concurrently against one `app-secrets` bundle would each read version N,
+patch their own keys, and add version N+1 and N+2; whichever wrote second would silently drop
+the other's keys. The failure surfaces later and somewhere else — a worker that stops verifying
+signatures, with nothing in either run's log suggesting why.
+
+**Root cause.** A `concurrency.group` is an opaque string, and the three workflows were written
+at different times, each naming its group after *itself* (`keypair-rotation`, `signing-rotation`)
+rather than after the resource it mutates. All three do the same read-modify-write of the same
+blob, so the resource — not the operation — is the thing that needs the lock. The third
+compounded it by keying on `bundle_key`: two runs patching different keys inside one bundle
+still collide on the whole-blob write, so a per-key lock is no lock at all.
+
+**Why it wasn't caught.** Nothing mechanical could see it. `actionlint` validates that a
+`concurrency:` block is well-formed, not that two well-formed blocks refer to the same lock;
+three plausible, self-consistent prefixes are indistinguishable from a deliberate choice to run
+them in parallel. Nor did run history disprove it: no overlap has been observed, because the
+exposure needs a quarterly or annual scheduled rotation to land on a manual sync — rare enough
+to stay invisible for a long time and still be real. AutoMahn's caller-level
+`group: secrets-rotation` covered two of its four callers, which is the kind of partial mitigation
+that makes the gap look closed.
+
+**Fix.** One group string in all three files, keyed on `gcp_project` + `bundle_secret`.
+`cancel-in-progress` stays `false`: a writer cancelled mid-run may already have added a version,
+which is worse than queueing behind one.
+
+**Prevention.** `tests/run_concurrency_tests.py` asserts the three group expressions are
+*identical strings* — the only assertion that means anything about a lock — that the key is
+absent from them, and that none of the three cancels the others. Wired into CI as its own job.
+The test file lists the writers explicitly, so a fourth writer of this blob has to be added to
+the list by hand; that is the intended prompt.
+
+**Known residual, not fixable here.** GitHub scopes a concurrency group to the repository that
+*declares* it, which for a `workflow_call` reusable is the **caller's** repo. Two different caller
+repos writing the same bundle are still not serialised. Recorded in the docs rather than worked
+around: the alternative is a lock outside GitHub (a GSM-etag CAS retry, or a lease secret), which
+is a materially bigger change than the exposure justifies while one repo owns each bundle.
 
 ## 2026-08-17 — Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it
 

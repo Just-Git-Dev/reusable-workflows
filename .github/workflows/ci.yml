@@ -147,6 +147,23 @@ jobs:
       - name: Run sweep-plan fixtures
         run: python3 tests/run_secret_plan_tests.py
 
+  concurrency-groups:
+    name: bundle writers share one lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A concurrency group is a string: three writers of the same app-secrets
+      # blob are serialised only if their group expressions are byte-identical.
+      # actionlint cannot see that — a differently-spelled prefix is valid YAML
+      # and a different lock, which is exactly how the lost-update bug shipped.
+      - name: Run concurrency-group tests
+        run: python3 tests/run_concurrency_tests.py
+
   step-bodies:
     name: step bodies (stubbed commands)
     runs-on: ubuntu-latest
