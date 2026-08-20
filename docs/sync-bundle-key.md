@@ -41,6 +41,30 @@ by `manage-config-secrets`), the first run now disables all of it and emits a
 enable`; per [AGENTS.md §5](../AGENTS.md) dry-run both pins and compare before
 upgrading if the secret has been written outside these workflows.
 
+## Serialisation — one lock across all three bundle writers
+
+`sync-bundle-key`, `rotate-signing-keypair` and `rotate-worker-signing-secret`
+each read the latest version of the same `app-secrets` bundle, patch one or two
+keys, and add a new version. They therefore declare an **identical**
+`concurrency.group`:
+
+```yaml
+group: bundle-write-${{ inputs.gcp_project }}-${{ inputs.bundle_secret }}
+```
+
+so any two of them queue rather than interleave. Before v2.3.1 the three used
+three different prefixes: two concurrent runs both read version N and the second
+write silently dropped the first one's keys. `cancel-in-progress` is `false` — a
+writer cancelled mid-run may already have added a version.
+
+The group is keyed on the **blob**, never on `bundle_key`: two runs patching
+different keys still collide on the whole-blob read-modify-write.
+
+**Caveat.** GitHub scopes a concurrency group to the repository that declares it,
+which for a called workflow is the **caller's** repo. Two different caller repos
+writing the same bundle are not serialised by this; give one repo ownership of a
+bundle if that is a real risk.
+
 ## Inputs / secrets
 
 | Name | Kind | Default | Notes |
@@ -84,7 +108,7 @@ permissions:
 
 jobs:
   sync:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/sync-bundle-key.yml@v2.3.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/sync-bundle-key.yml@v2.3.1
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

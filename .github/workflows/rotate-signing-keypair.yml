@@ -120,13 +120,23 @@ permissions:
   id-token: write
 
 concurrency:
-  group: keypair-rotation-${{ inputs.gcp_project }}-${{ inputs.bundle_secret }}
+  # ONE lock across all three bundle writers. sync-bundle-key,
+  # rotate-signing-keypair and rotate-worker-signing-secret each read the latest
+  # version of the SAME app-secrets blob, patch a key or two, and add a new
+  # version — so any two of them running at once both read version N and the
+  # second write silently drops the first one's keys. The group string must stay
+  # byte-identical in all three files (tests/run_concurrency_tests.py asserts it);
+  # a differently-spelled prefix is a different lock. Keyed on the blob, never on
+  # bundle_key: two runs patching different keys still collide on the whole-blob
+  # read-modify-write. Caveat: GitHub scopes the group to the CALLER's repo, so
+  # two caller repos writing the same bundle are still not serialised.
+  group: bundle-write-${{ inputs.gcp_project }}-${{ inputs.bundle_secret }}
   cancel-in-progress: false
 
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v2.3.0
+  WORKFLOW_VERSION: v2.3.1
 
 jobs:
   rotate:

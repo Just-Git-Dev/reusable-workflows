@@ -376,8 +376,12 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   credential-minting workflow that five repos depend on, to serve exactly one caller. Revisit only
   if a second frontend genuinely grows a stage environment.
 - [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
-- [ ] `sync-bundle-key.yml` / `rotate-signing-keypair.yml` / `rotate-worker-signing-secret.yml` —
-  align the `concurrency:` group key on the bundle. All three do a read-modify-write of the SAME
+- [x] **CLOSED 2026-08-20 (v2.3.1).** `sync-bundle-key.yml` / `rotate-signing-keypair.yml` / `rotate-worker-signing-secret.yml` —
+  aligned the `concurrency:` group key on the bundle (`bundle-write-<proj>-<bundle>`, identical in all three;
+  `bundle_key` deliberately not in the key). `tests/run_concurrency_tests.py` + a CI job assert the three
+  strings stay byte-identical. Residual, unfixable here: GitHub scopes the group to the CALLER's repo, so two
+  caller repos writing the same bundle are still not serialised. DECISIONS.md 2026-08-20.
+  Original finding: All three do a read-modify-write of the SAME
   `app-secrets` blob but declare three different prefixes (`secrets-rotation-<proj>-<bundle>`,
   `keypair-rotation-<proj>-<bundle>`, `signing-rotation-<proj>-<bundle>-<key>`), so a sync and a
   keypair rotation are NOT serialised against each other: both read v5, both write, the second
