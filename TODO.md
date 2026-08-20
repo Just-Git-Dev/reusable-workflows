@@ -70,6 +70,13 @@
 
 ## Secret Manager
 
+- [ ] **`cleanup-secret-versions.yml` has zero callers fleet-wide.** It shipped in `v2.3.0` and was
+      never adopted anywhere — surveyed 2026-08-20 across AutoMahn/{project,api},
+      Realm-ID/{project,issuer,ui}, Traide-Co/project. Adoption is a real decision, not a repin: it
+      needs a quarantine window per project and a Cloud Run consumer scan, and it interacts with the
+      delayed-destruction item below. The three project repos that already run the GAR sweep are the
+      natural first callers.
+
 - [x] **A GSM version cleanup workflow.** ✅ **Shipped as `cleanup-secret-versions.yml`**
       (2026-08-16) — quarantine model (`ENABLED`→`DISABLED`→`DESTROYED`), `enable_destroy`
       off by default, 16 fixtures wired into CI as `secret-plan-fixtures`. See
@@ -348,7 +355,12 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   why that repo has not migrated to the reusable. **Six consumers**: the five current callers
   (`AutoMahn/{ui,admin-ui,website}`, `Traide-Co/{webapp,website}`) plus `eazyupdates-ui`. Lift the
   logic from `Realm-ID/ui`'s `deploy.yml` rather than reinventing it.
-- [ ] **Repin the three GAR callers onto `v2.0.0`** (release-relative retention). `Realm-ID/project`
+- [x] **Repin the three GAR callers onto `v2.0.0`** (release-relative retention). **DONE — overtaken
+      by events 2026-08-20:** all three had already reached `@v2.2.0`, and the fleet-wide repin to
+      `@v2.3.1` (AutoMahn/project#31, Realm-ID/project#13, Traide-Co/project#82) supersedes this
+      item. `Traide-Co/project#65` was closed, so its pin-comment fix did not need folding in; the
+      stale pin comments were rewritten to name no version at all in the repin PRs. Original text:
+      `Realm-ID/project`
       is on `@v1.21.1`; **`Traide-Co/project` and `AutoMahn/project` are still on `@v1.15.0`**, which
       predates the retention window entirely, so today they run on `keep_semver_count` + age alone.
       Per repo: dry-run BOTH pins, diff the plans, then repin. Expect a larger first sweep — v1 was
