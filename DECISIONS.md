@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-21` — [`setup-buildx-action` 4.3.0 merged without a release: a tag is a fleet event, a patch bump is not](#2026-08-21--setup-buildx-action-430-merged-without-a-release-a-tag-is-a-fleet-event-a-patch-bump-is-not)
 - `2026-08-21` — [v2.4.0: `buildcache` leaves the default keep-set — a moving tag the default policy forbids](#2026-08-21--v240-buildcache-leaves-the-default-keep-set--a-moving-tag-the-default-policy-forbids)
 - `2026-08-21` — [Three workflows shipped undocumented; a generator cannot catch absence from a hand-maintained list](#2026-08-21--three-workflows-shipped-undocumented-a-generator-cannot-catch-absence-from-a-hand-maintained-list)
 - `2026-08-20` — [Three writers of one secret blob held three different locks (bug fix)](#2026-08-20--three-writers-of-one-secret-blob-held-three-different-locks-bug-fix)
@@ -71,6 +72,33 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-21 — `setup-buildx-action` 4.3.0 merged without a release: a tag is a fleet event, a patch bump is not
+
+**Change.** Dependabot PR #63 bumped `docker/setup-buildx-action` 4.2.0 → 4.3.0 (SHA and trailing
+version comment together, as the pin convention requires) in `deploy-cloud-run.yml`,
+`deploy-cluster-keyed.yml` and `deploy-gke-service.yml`. All ten required checks green; merged as
+`cb012a2`, main CI success.
+
+**The decision was not the merge — it was the non-release.** These are workflow *bodies*, and a
+consumer pinned at `@v2.4.0` runs the workflow as it existed at that tag. So the bump reaches
+nobody until a new release is cut. The obvious move was `v2.4.1`; we deliberately did not.
+
+- **Nothing consumer-visible changed.** The input contract is untouched, and semver here tracks the
+  input contract. A patch action bump inside a `run:`-less setup step changes no behaviour a caller
+  can observe.
+- **It would have instantly staled two repos that were repinned hours earlier.**
+  `AutoMahn/project` and `Traide-Co/project` moved to `@v2.4.0` the same day. Cutting `v2.4.1`
+  makes both out-of-date immediately, for no gain.
+- **The release ceremony is disproportionate.** Cutting one is four steps — stamp sweep PR
+  (`scripts/stamp_version.py`) → merge → tag → `gh release create` — plus a repin PR per caller
+  afterwards. Paying that per Dependabot bump means the fleet spends more time repinning than the
+  bumps are worth.
+
+**So: Dependabot bumps ride to the next functional release rather than driving one.** The bump sits
+on `main` and ships with whatever lands next. The risk this accepts is the one worth naming — an
+*urgent* action bump (a CVE in a pinned action) must NOT inherit this rule; that one cuts a patch
+release immediately, because "it's on main" is not a fix for anybody still pinned.
 
 ## 2026-08-21 — v2.4.0: `buildcache` leaves the default keep-set — a moving tag the default policy forbids
 
