@@ -62,6 +62,9 @@ lands everywhere.
 | [`cleanup-secret-versions.yml`](docs/cleanup-secret-versions.md) | Quarantine-sweep Secret Manager versions (`ENABLED`→`DISABLED`→`DESTROYED`), never touching what `latest` resolves to |
 | [`retire-gar-packages.yml`](docs/retire-gar-packages.md) | Delete **entire** Artifact Registry packages for retired services, refusing any package with a live reference |
 | [`bootstrap-alerts.yml`](docs/bootstrap-alerts.md) | Apply a Cloud Monitoring channel + alert policies from the caller's `infra/alerts/` |
+| [`validate-alerts.yml`](docs/validate-alerts.md) | **PR-time preflight** for those policy files — offline structural lint, plus real MQL execution when given a project (the Monitoring API has no `validateOnly`) |
+| [`bootstrap-dashboards.yml`](docs/bootstrap-dashboards.md) | Apply Cloud Monitoring **dashboards** from the caller's `infra/dashboards/`; updates in place so dashboard ids and bookmarks survive |
+| [`cleanup-cloud-run-revisions.yml`](docs/cleanup-cloud-run-revisions.md) | Prune inactive Cloud Run revisions, releasing the GAR digests they pin — schedule **before** `cleanup-gar-images` |
 | [`deploy-cloudflare-pages.yml`](docs/deploy-cloudflare-pages.md) | Build a static site and deploy it to Cloudflare Pages |
 
 Each workflow has a `docs/<name>.md` page with its full input/secret contract and

@@ -14,7 +14,7 @@
 # service's ConfigMap and secrets are managed by `manage-config-secrets` (Cloud
 # Run bundles are `sync-bundle-key`). A stage→prod promote (no rebuild) is
 # `promote-image`, and non-GCP / key-based clusters use `deploy-cluster-keyed`.
-name: deploy-gke-service
+name: Build and deploy a GKE service (reusable)
 
 on:
   workflow_call:

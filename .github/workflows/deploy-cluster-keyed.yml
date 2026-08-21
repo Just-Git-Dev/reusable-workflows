@@ -16,7 +16,7 @@
 # Registry (registry_type): gar | gcr | ecr | acr | ghcr | dockerhub | custom.
 # Cluster  (cluster_type):   gke | eks | aks | kubeconfig  (empty ⇒ auto-detect
 #           from the credential format).
-name: deploy-cluster-keyed
+name: Key-based multi-cloud cluster deploy (reusable)
 
 on:
   workflow_call:

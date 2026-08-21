@@ -17,7 +17,7 @@
 # Auth mirrors promote-image: keyless WIF (wif_provider + service_account)
 # preferred; empty wif_provider ⇒ key-based (registry_credentials verifies the
 # image exists, cluster_credentials authenticates the roll).
-name: rollback-service
+name: Roll a service back onto a prior image (reusable)
 
 on:
   workflow_call:

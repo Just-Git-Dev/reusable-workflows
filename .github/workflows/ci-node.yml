@@ -18,7 +18,7 @@
 # calling job; without it the badges are generated and the push degrades to a
 # warning, never a failed run. Coverage is read from an Istanbul `json-summary`
 # report, so the caller's test_command must emit one.
-name: ci-node
+name: Node/React CI — install, lint, test, build (reusable)
 
 on:
   workflow_call:

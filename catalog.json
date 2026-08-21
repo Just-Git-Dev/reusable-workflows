@@ -309,7 +309,7 @@
           }
         }
       },
-      "name": "ci-go",
+      "name": "Go CI \u2014 build, vet, test, lint (reusable)",
       "outputs": {},
       "path": ".github/workflows/ci-go.yml",
       "secrets": {
@@ -539,7 +539,7 @@
           }
         }
       },
-      "name": "ci-node",
+      "name": "Node/React CI \u2014 install, lint, test, build (reusable)",
       "outputs": {},
       "path": ".github/workflows/ci-node.yml",
       "secrets": {
@@ -972,7 +972,7 @@
           "declared_permissions": "inherits-caller"
         }
       },
-      "name": "deploy-cloud-run",
+      "name": "Build and deploy to Cloud Run (reusable)",
       "outputs": {
         "image": "Fully-qualified image reference that was built.",
         "service_url": "Cloud Run service URL after the deploy."
@@ -1310,7 +1310,7 @@
           "declared_permissions": "inherits-caller"
         }
       },
-      "name": "deploy-cluster-keyed",
+      "name": "Key-based multi-cloud cluster deploy (reusable)",
       "outputs": {
         "image": "Fully-qualified image reference that was built."
       },
@@ -1514,7 +1514,7 @@
           "declared_permissions": "inherits-caller"
         }
       },
-      "name": "deploy-gke-service",
+      "name": "Build and deploy a GKE service (reusable)",
       "outputs": {
         "image": "Fully-qualified image reference that was built."
       },
@@ -1979,7 +1979,7 @@
           "declared_permissions": "inherits-caller"
         }
       },
-      "name": "promote-image",
+      "name": "Promote an existing image without rebuilding (reusable)",
       "outputs": {
         "image": "Fully-qualified promoted image reference (\u2026:<target_tag>)."
       },
@@ -2250,7 +2250,7 @@
           "declared_permissions": "inherits-caller"
         }
       },
-      "name": "rollback-service",
+      "name": "Roll a service back onto a prior image (reusable)",
       "outputs": {
         "image": "Fully-qualified image the service was rolled back onto."
       },
@@ -2665,7 +2665,7 @@
           "declared_permissions": "inherits-caller"
         }
       },
-      "name": "run-db-job",
+      "name": "Run a Cloud Run Job \u2014 migrations and one-shot tasks (reusable)",
       "outputs": {
         "execution": "Name of the execution that ran (empty when execute is false or dry_run)."
       },

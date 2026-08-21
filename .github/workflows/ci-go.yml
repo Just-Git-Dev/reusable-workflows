@@ -18,7 +18,7 @@
 #                        `permissions: contents: write` on the calling job —
 #                        without it the push degrades to a warning, not a
 #                        failure.
-name: ci-go
+name: Go CI — build, vet, test, lint (reusable)
 
 on:
   workflow_call:
