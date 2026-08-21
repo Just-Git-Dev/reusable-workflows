@@ -109,7 +109,7 @@ warning rather than passing quietly.
 | `release_tag_pattern` | no | `^v\d+\.\d+\.\d+$` | regex (Python `re.match`); an artifact carrying a matching tag is a RELEASE, everything else is a BUILD |
 | `build_retention_releases` | no | `2` | keep builds newer than the Nth-most-recent release. Must be ≥1 and ≤ `keep_semver_count` |
 | `grace_period_days` | no | `0` | reprieve for artifacts outside the keep-set, measured back from the oldest release-policy-retained image |
-| `keep_tags` | no | `latest,buildcache` | exact tags never deleted |
+| `keep_tags` | no | `latest` | exact tags never deleted. **`buildcache` was removed from this default in v2.4.0** — see [`buildcache` and registry build caches](#buildcache-and-registry-build-caches) |
 | `keep_tag_prefixes` | no | `hotfix-,rc-,debug-` | tag prefixes never deleted |
 | `cleanup_latest_tag` | no | `true` | delete a **stranded** `:latest` tag. Removes the tag reference only, never a digest, and only where `:latest` cannot be live. See [Stranded `:latest`](#stranded-latest) |
 | `immutable_tags_policy` | no | `enforce` | state the repository is left in after an applied sweep: `enforce` \| `preserve` \| `unlock`; see [Immutable tags](#immutable-tags) |
@@ -247,9 +247,28 @@ permission is absent (short version: the run never fails because of it).
 
 If you use a BuildKit **registry** cache (`cache-to:
 type=registry,ref=...:buildcache`), that cache is an ordinary tagged image in
-the same repo. It is in the default `keep_tags` for exactly this reason — with it removed, the
-cache would be classified as a BUILD, fall outside the release window as soon as
-two releases passed, and be deleted, making the next build a cold rebuild.
+the same repo. Without protection it would be classified as a BUILD, fall outside the
+release window as soon as two releases passed, and be deleted — making the next build a
+cold rebuild. So if you run one, add it: `keep_tags: latest,buildcache`.
+
+### Why it is not in the default (changed in v2.4.0)
+
+It used to be, and that was incoherent with the *other* default. A registry cache is a
+**moving** tag — every build overwrites `:buildcache` — and the default
+`immutable_tags_policy` is `enforce`. Immutable tags let you **create** a tag but never
+**move** one, so on an enforcing repository the first `cache-to` push succeeds and every
+later one fails: the cache freezes at its first push and silently stops helping. Nothing
+errors loudly; builds just quietly stop getting cache hits.
+
+So the old default protected a tag that, under the default policy, could not usefully
+exist. Keeping it cost nothing at runtime — shielding a tag that isn't there is harmless —
+but the two defaults told a new caller opposite stories about whether moving tags were
+part of the model.
+
+**A registry cache and `immutable_tags_policy: enforce` are mutually exclusive.** Choosing
+the cache means choosing `preserve` or `unlock`. Making `buildcache` opt-in puts that
+decision where it belongs — with the caller who actually runs one. If you set it under
+`enforce`, the workflow now warns at run time rather than leaving you to find it here.
 
 ## Stranded `:latest`
 
@@ -277,7 +296,7 @@ It only acts where `:latest` **cannot be a live tag**:
 | `preserve` | unlocked | no — the build may still be pushing `:latest`; this is the case `preserve` exists for |
 | `unlock` | either | no — the repository is deliberately left writable |
 
-So `keep_tags: latest,buildcache` and `cleanup_latest_tag: true` are not in
+So keeping `latest` in `keep_tags` and `cleanup_latest_tag: true` are not in
 conflict, despite reading that way: **`keep_tags` protects the digest during the
 sweep; `cleanup_latest_tag` removes the stranded pointer after it.** Set it to
 `false` to opt out entirely.
@@ -354,7 +373,7 @@ jobs:
 
   cleanup:
     needs: resolve
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.3.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-gar-images.yml@v2.4.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

@@ -674,8 +674,8 @@
           "type": "string"
         },
         "keep_tags": {
-          "default": "latest,buildcache",
-          "description": "Comma-separated exact tags that are never deleted.",
+          "default": "latest",
+          "description": "Comma-separated exact tags that are never deleted. `buildcache` was removed from this default in v2.4.0: it is only meaningful for a BuildKit *registry* cache (`cache-to: type=registry,ref=\u2026:buildcache`), which is a moving tag and therefore unmaintainable under the default `immutable_tags_policy: enforce` \u2014 immutable tags let you create a tag but never move it, so such a cache freezes at its first push. If you run a registry cache (and are consequently NOT on `enforce`), set `keep_tags: latest,buildcache` explicitly.",
           "required": false,
           "type": "string"
         },
