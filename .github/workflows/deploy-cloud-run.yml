@@ -16,7 +16,7 @@
 #
 # App-specific pre-deploy gates (unit tests, version-file cross-checks, migration
 # smokes) stay as their own jobs in the caller and gate this via `needs:`.
-name: deploy-cloud-run
+name: Build and deploy to Cloud Run (reusable)
 
 on:
   workflow_call:

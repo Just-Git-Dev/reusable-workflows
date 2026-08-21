@@ -48,6 +48,22 @@ jobs:
       - run: pip install --quiet pyyaml
       - run: python3 scripts/gen_catalog.py --check
 
+  docs-coverage:
+    name: every workflow is documented
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # `catalog.json is current` regenerates FROM the workflow files, so a new
+      # workflow appears there and looks fine while never reaching the README or
+      # docs/. Three did exactly that. Absence from a hand-maintained list is the
+      # one failure a generator structurally cannot see, so it needs its own gate.
+      - run: python3 scripts/check_docs_coverage.py
+
   version-sweep:
     name: version stamps and doc pins agree
     runs-on: ubuntu-latest

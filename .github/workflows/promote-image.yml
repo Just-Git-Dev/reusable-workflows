@@ -17,7 +17,7 @@
 #   none       — retag only (a later job/deploy consumes `outputs.image`).
 #   gke        — `kubectl set image` / `helm upgrade` onto the promoted tag.
 #   cloud-run  — `gcloud run services update --image` onto the promoted tag.
-name: promote-image
+name: Promote an existing image without rebuilding (reusable)
 
 on:
   workflow_call:

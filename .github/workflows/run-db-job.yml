@@ -15,7 +15,7 @@
 # No jgd_commit label and no GitHub Deployment record: forward-only is defined
 # per environment over what its SERVICES are serving, and a one-shot Job is not
 # "live". See docs/run-db-job.md.
-name: run-db-job
+name: Run a Cloud Run Job — migrations and one-shot tasks (reusable)
 
 on:
   workflow_call:

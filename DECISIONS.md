@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-21` — [Three workflows shipped undocumented; a generator cannot catch absence from a hand-maintained list](#2026-08-21--three-workflows-shipped-undocumented-a-generator-cannot-catch-absence-from-a-hand-maintained-list)
 - `2026-08-20` — [Three writers of one secret blob held three different locks (bug fix)](#2026-08-20--three-writers-of-one-secret-blob-held-three-different-locks-bug-fix)
 - `2026-08-17` — [Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it](#2026-08-17--delayed-destruction-version_destroy_ttl-exists--it-simplifies-the-sweeper-but-does-not-replace-it)
 - `2026-08-17` — [`keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper](#2026-08-17--keep_enabled_count-on-the-writers-disable-is-inline-destroy-stays-in-the-sweeper)
@@ -69,6 +70,42 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-21 — Three workflows shipped undocumented; a generator cannot catch absence from a hand-maintained list
+
+Found in an org-wide cleanup review of the four `Just-Git-Dev` repos.
+
+**`bootstrap-dashboards`, `cleanup-cloud-run-revisions` and `validate-alerts` had no
+`docs/<name>.md` page and no README row.** The only way to discover them was to list
+`.github/workflows/`. The README meanwhile asserts, in prose, "Each workflow has a
+`docs/<name>.md` page with its full input/secret contract" — so the docs were not merely
+incomplete, they contained a false claim about their own completeness.
+
+**Why nine CI jobs missed it.** Every existing gate checks the *content* of something
+already tracked. `gen_catalog.py --check` regenerates `catalog.json` **from** the workflow
+files, so all three appeared there and looked perfectly healthy — a generator sees what
+exists, never what is missing from a list maintained by hand. `doc-examples` lints the
+examples that are present. `version-sweep` checks the pins that are present. Absence from a
+hand-maintained list is structurally invisible to all of them, so it needed its own gate:
+`scripts/check_docs_coverage.py`, wired in as `every workflow is documented`. It checks both
+directions — a workflow with no docs page or README link, and a docs page whose workflow was
+deleted or renamed. Confirmed red on the pre-fix tree before being wired in; a gate never
+observed failing is not yet a gate.
+
+The three pages are written from each workflow's own header comments, which were good — the
+rationale existed, it just lived where only someone already reading the YAML would find it.
+Two things worth having in the README rather than a file header: `cleanup-cloud-run-revisions`
+must be scheduled **before** `cleanup-gar-images` (an idle revision costs no compute but pins
+a GAR digest, so the GAR sweep cannot reclaim it), and `validate-alerts` exists because the
+Monitoring API has **no** `validateOnly` mode — `alertPolicies.create` takes exactly one
+parameter, so actually creating the policy is the only server-side check, and the workflow
+substitutes an offline structural lint plus real MQL execution for it.
+
+**Eight workflows had a bare filename as their `name:`** (`ci-go`, `deploy-cloud-run`,
+`promote-image`, …), so `catalog.json` — the file a consuming repo's agent reads instead of
+~7,500 lines of YAML — mixed filenames with prose titles, and those eight rendered as a bare
+slug in every caller's Actions UI. All eight now carry a `… (reusable)` title matching the
+other fourteen; `catalog.json` regenerated.
 
 ## 2026-08-20 — Three writers of one secret blob held three different locks (bug fix)
 
