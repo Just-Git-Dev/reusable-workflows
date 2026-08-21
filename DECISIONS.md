@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-21` — [v2.4.0: `buildcache` leaves the default keep-set — a moving tag the default policy forbids](#2026-08-21--v240-buildcache-leaves-the-default-keep-set--a-moving-tag-the-default-policy-forbids)
 - `2026-08-21` — [Three workflows shipped undocumented; a generator cannot catch absence from a hand-maintained list](#2026-08-21--three-workflows-shipped-undocumented-a-generator-cannot-catch-absence-from-a-hand-maintained-list)
 - `2026-08-20` — [Three writers of one secret blob held three different locks (bug fix)](#2026-08-20--three-writers-of-one-secret-blob-held-three-different-locks-bug-fix)
 - `2026-08-17` — [Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it](#2026-08-17--delayed-destruction-version_destroy_ttl-exists--it-simplifies-the-sweeper-but-does-not-replace-it)
@@ -70,6 +71,58 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-21 — v2.4.0: `buildcache` leaves the default keep-set — a moving tag the default policy forbids
+
+**The incoherence.** `keep_tags` defaulted to `latest,buildcache` while
+`immutable_tags_policy` defaults to `enforce`. `buildcache` is only meaningful for a BuildKit
+**registry** cache (`cache-to: type=registry,ref=…:buildcache`), which is a **moving** tag —
+every build overwrites it. Immutable tags permit *creating* a tag but never *moving* one, so on
+an enforcing repository the first `cache-to` push succeeds and every later one fails: the cache
+freezes at its first push and silently stops helping. Nothing errors; builds just quietly stop
+getting cache hits. The default keep-set was protecting a tag that, under the default policy,
+could not usefully exist.
+
+**Half the original TODO was already answered.** It also flagged `latest` as a moving tag in the
+same default. That was resolved on 2026-08-13 by `cleanup_latest_tag`: **`keep_tags` protects
+the DIGEST during the sweep; `cleanup_latest_tag` removes the stranded POINTER after it.**
+Different objects, hence no conflict — dropping `latest` from `keep_tags` would let the sweep
+delete the digest, and under build-once/promote a released digest also carries `:<sha>` and
+`vX.Y.Z`, so that would take a release with it. Only `buildcache` was ever open.
+
+**The fleet decided it, and the scan method is worth recording.** `gh search code` returns
+**empty** for these private repos — two control searches for strings that certainly exist came
+back with nothing, so "no results" there is not evidence of absence. Scanned instead by fetching
+every workflow file through the git-trees + contents APIs: **19 active repos, 91 workflow files.
+Zero registry build caches.** Every cache in the fleet is `type=gha` (AutoMahn/api,
+Traide-Co/api, Realm-ID/api, Realm-ID/project) — GitHub's Actions cache, which never creates a
+tagged image in Artifact Registry. The only `buildcache` string anywhere is a comment. Of the
+three `cleanup-gar-images` callers, two run `enforce` (Traide-Co, Realm-ID), one `preserve`
+(AutoMahn), and **none overrides `keep_tags`**.
+
+**Decision: opt-in, not default.** `keep_tags` now defaults to `latest`. A registry cache and
+`immutable_tags_policy: enforce` are mutually exclusive, so choosing the cache means choosing
+`preserve`/`unlock` — and making `buildcache` opt-in puts that decision with the caller who
+actually runs one, at the moment they run it. Live impact is nil: no such tag exists in the
+fleet and all three callers pin `@v2.3.1`, so nothing changes for them until they repin.
+
+*Rejected: leave the default and only fix the docs.* Cheapest, and the keep genuinely costs
+nothing at runtime — shielding a tag that isn't there is harmless. But it leaves two defaults
+telling a new caller opposite stories about whether moving tags are part of the model, and the
+docs are the wrong place to resolve a contradiction the inputs themselves state.
+
+**A warning, because the docs are not where people are looking.** Setting `keep_tags` to include
+`buildcache` under `enforce` is still legal — it is the caller's call — but the resolver now
+warns at run time, mirroring how the workflow already warns about a missing update permission. It
+never fails. The check normalises whitespace before matching, because the plan step's `csv()`
+strips it and `latest, buildcache` is a valid keep-set — without that, the check would silently
+miss the exact spaced form it exists to catch. Eight step-body assertions cover it, including
+that `mybuildcache`, `buildcache-old` and `buildcaches` do **not** trip it.
+
+**Rode along:** `SERVICE_ACCOUNT` was interpolated by two immutability warnings but never set on
+their step, so both always printed the generic "the deploy service account" fallback — defeating
+the point of a message whose whole job is naming the identity an operator must grant a role to.
+Same file, same feature area, so it ships here rather than accruing another release.
 
 ## 2026-08-21 — Three workflows shipped undocumented; a generator cannot catch absence from a hand-maintained list
 

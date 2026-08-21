@@ -16,30 +16,23 @@
       it has no policy input and no degraded mode, and the `artifactregistry.admin`-not-
       repoAdmin requirement.
 
-- [ ] **`keep_tags` defaults to `latest,buildcache` — both are MOVING tags, which the default
-      `immutable_tags_policy: enforce` makes impossible to push.** The default keep-set
-      therefore advertises a workflow the default policy forbids. Nothing is broken (keeping a
-      tag that can no longer move is harmless), but the two defaults tell a new caller opposite
-      stories. Decide whether `keep_tags` should default to empty, or whether the docs should
-      simply say these entries are for `preserve`-mode repos.
+- [x] ~~**`keep_tags` defaults to `latest,buildcache` — both are MOVING tags**~~ — **Done
+      2026-08-21 (v2.4.0).** Half of this was already stale: the `latest` half was answered by
+      the 2026-08-13 `cleanup_latest_tag` work (`keep_tags` protects the DIGEST during the
+      sweep, `cleanup_latest_tag` removes the stranded POINTER after it — different objects,
+      so no conflict). Only `buildcache` was open, and the fleet decided it: **zero registry
+      build caches exist** — all 19 active repos scanned, every cache is `type=gha`, no
+      `cache-to: type=registry` anywhere — while 2 of the 3 `cleanup-gar-images` callers run
+      `enforce` and none overrides `keep_tags`. Dropped `buildcache` from the default, added a
+      run-time warning when a caller opts back into it under `enforce`, and rewrote the docs
+      section to state the `preserve`/`unlock` assumption it always relied on. See
+      DECISIONS.md 2026-08-21.
 
-- [x] **Stale `:latest` tags are now frozen in both backend repos.** **DONE 2026-08-13.**
-      Shipped `cleanup_latest_tag` (v2.2.0), repinned both GAR callers, and applied.
-      **All three stranded tags are gone** — `realm-id/backend/{api,bff-api}` and
-      `traide-in/backend/api`. Applied runs `31701095105` / `31701099146`, both green, both
-      repos re-locked by readback. Verification dry runs `31701325700` / `31701329799` report
-      `not present, nothing to do` on all three: converged.
-      The tags had **never been observed before** — there was no read path — and the first
-      `dry_run: true` dispatch on v2.2.0 was the first confirmation they existed at all.
-      See DECISIONS.md 2026-08-13.
-
-- [ ] **`SERVICE_ACCOUNT` is referenced but never set in `cleanup-gar-images.yml`.** Two
-      messages in the immutability pre-flight (`:728`, `:741`) interpolate
-      `${SERVICE_ACCOUNT:-the deploy service account}`, but nothing ever sets the variable, so
-      they always print the generic fallback instead of naming the SA that lacks the
-      permission. The `cleanup_latest_tag` step added 2026-08-13 sets it in its own `env:`; these two
-      still need `SERVICE_ACCOUNT: ${{ inputs.service_account }}` on their step. Cosmetic, but
-      the message exists precisely to tell an operator which identity to grant a role to.
+- [x] ~~**`SERVICE_ACCOUNT` is referenced but never set in `cleanup-gar-images.yml`.**~~ —
+      **Done 2026-08-21 (v2.4.0).** `SERVICE_ACCOUNT: ${{ inputs.service_account }}` added to
+      the `Verify permission to toggle immutability` step's `env:`, so both immutability
+      warnings now name the identity that needs the role instead of printing the generic
+      fallback. Rode along with the `keep_tags` change — same file, same feature area.
 
 - [x] **13 of 15 fleet call sites are still pinned `@v2.0.0`.** Done 2026-08-13 — all 15
       repinned to `@v2.1.2` across 6 repos (Realm-ID/{issuer, ui, project},

@@ -472,14 +472,15 @@ def run_disable_keep_step(body: str, *, keep="1", enabled=("7", "6"),
                              if "versions destroy" in ln]}
 
 
-def run_policy_step(body: str, *, policy_in="enforce", relock_in="true"):
+def run_policy_step(body: str, *, policy_in="enforce", relock_in="true", keep_tags=""):
     """Execute the policy resolver, which folds the deprecated boolean in."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         out = tmp / "gh_output"
         out.write_text("")
         env = dict(os.environ)
-        env.update(POLICY_IN=policy_in, RELOCK_IN=relock_in, GITHUB_OUTPUT=str(out))
+        env.update(POLICY_IN=policy_in, RELOCK_IN=relock_in, KEEP_TAGS=keep_tags,
+                   GITHUB_OUTPUT=str(out))
         proc = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
             capture_output=True, text=True, env=env, cwd=tmp,
@@ -688,6 +689,34 @@ def main():
     r = run_policy_step(resolver, policy_in="preserve", relock_in="true")
     check("the boolean's default does not override the policy",
           "policy=preserve" in r["output"], r["output"])
+
+    # A registry build cache is a MOVING tag; `enforce` lets it be created once and
+    # never updated, so the cache freezes at its first push and silently stops helping.
+    # v2.4.0 dropped `buildcache` from the default keep-set and warns when a caller
+    # opts back into it under `enforce`.
+    def warned(res):
+        return "keep_tags contains 'buildcache'" in res["out"]
+
+    r = run_policy_step(resolver, policy_in="enforce", keep_tags="latest,buildcache")
+    check("enforce + buildcache warns", warned(r), r["out"])
+    check("enforce + buildcache does NOT fail the job", r["rc"] == 0, r["out"])
+
+    r = run_policy_step(resolver, policy_in="enforce", keep_tags="latest, buildcache")
+    check("the warning survives whitespace (csv() strips it, so must we)",
+          warned(r), r["out"])
+
+    r = run_policy_step(resolver, policy_in="enforce", keep_tags="latest")
+    check("enforce without buildcache is quiet", not warned(r), r["out"])
+
+    for p in ("preserve", "unlock"):
+        r = run_policy_step(resolver, policy_in=p, keep_tags="latest,buildcache")
+        check(f"{p} + buildcache is quiet — that is the supported combination",
+              not warned(r), r["out"])
+
+    # Substring matches would fire on an unrelated tag that merely contains the word.
+    for tag in ("latest,mybuildcache", "buildcache-old", "latest,buildcaches"):
+        r = run_policy_step(resolver, policy_in="enforce", keep_tags=tag)
+        check(f"'{tag}' does not trip the warning", not warned(r), r["out"])
 
     # ---- GAR permission pre-flight: one probe, two verdicts ----
     perm = extract_step(GAR, "cleanup", "Verify permission to toggle immutability")

@@ -107,10 +107,17 @@ on:
         required: false
         default: '0'
       keep_tags:
-        description: 'Comma-separated exact tags that are never deleted.'
+        description: >-
+          Comma-separated exact tags that are never deleted. `buildcache` was removed
+          from this default in v2.4.0: it is only meaningful for a BuildKit *registry*
+          cache (`cache-to: type=registry,ref=…:buildcache`), which is a moving tag and
+          therefore unmaintainable under the default `immutable_tags_policy: enforce` —
+          immutable tags let you create a tag but never move it, so such a cache freezes
+          at its first push. If you run a registry cache (and are consequently NOT on
+          `enforce`), set `keep_tags: latest,buildcache` explicitly.
         type: string
         required: false
-        default: 'latest,buildcache'
+        default: 'latest'
       cleanup_latest_tag:
         description: >-
           Delete a STRANDED `:latest` tag (DEFAULT true). A moving `:latest` left
@@ -187,7 +194,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v2.3.1
+  WORKFLOW_VERSION: v2.4.0
 
 jobs:
   cleanup:
@@ -676,6 +683,30 @@ jobs:
           echo "policy=$p" >> "$GITHUB_OUTPUT"
           echo "::notice::immutable-tag policy: $p"
 
+          # A caller that explicitly keeps `buildcache` under `enforce` is asking us to
+          # protect a BuildKit registry cache in a repository where that cache cannot be
+          # maintained: immutable tags permit creating a tag but never moving one, so the
+          # cache freezes at its first push and every later `cache-to` fails. Nothing
+          # breaks loudly — builds just quietly stop getting cache hits — which is exactly
+          # the kind of mismatch that needs saying at run time rather than in a doc.
+          # Warn, never fail: the keep itself is harmless, and this is the caller's call.
+          if [ "$p" = "enforce" ]; then
+            # The plan step's csv() strips whitespace, so `latest, buildcache` is a
+            # valid keep-set. Normalise the same way before matching, or this check
+            # silently misses the spaced form it is meant to catch.
+            case ",$(printf '%s' "$KEEP_TAGS" | tr -d '[:space:]')," in
+              *,buildcache,*)
+                {
+                  echo "::warning::keep_tags contains 'buildcache' while immutable_tags_policy is 'enforce'."
+                  echo "::warning::A BuildKit registry cache is a MOVING tag; an immutable repository lets it be"
+                  echo "::warning::created once and never updated, so the cache freezes at its first push and"
+                  echo "::warning::silently stops helping. Either drop 'buildcache' from keep_tags, or use"
+                  echo "::warning::immutable_tags_policy: preserve/unlock if you really do run a registry cache."
+                } >&2
+                ;;
+            esac
+          fi
+
       - name: Check tag immutability
         id: immutable
         run: |
@@ -706,6 +737,10 @@ jobs:
            steps.policy.outputs.policy == 'enforce')
         env:
           STARTED: ${{ steps.immutable.outputs.immutable }}
+          # Both warnings below interpolate ${SERVICE_ACCOUNT:-…}; without this they
+          # always printed the generic fallback, which defeats the point — the message
+          # exists to name the identity an operator has to grant a role to.
+          SERVICE_ACCOUNT: ${{ inputs.service_account }}
         run: |
           res=$(curl -sS -X POST \
             -H "Authorization: Bearer $(gcloud auth print-access-token)" \
