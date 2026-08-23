@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-24` — [RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists](#2026-08-24--rca-the-sweep-demanded-a-project-wide-role-to-check-a-typo-and-collapsed-multi-secret-lists)
 - `2026-08-21` — [`setup-buildx-action` 4.3.0 merged without a release: a tag is a fleet event, a patch bump is not](#2026-08-21--setup-buildx-action-430-merged-without-a-release-a-tag-is-a-fleet-event-a-patch-bump-is-not)
 - `2026-08-21` — [v2.4.0: `buildcache` leaves the default keep-set — a moving tag the default policy forbids](#2026-08-21--v240-buildcache-leaves-the-default-keep-set--a-moving-tag-the-default-policy-forbids)
 - `2026-08-21` — [Three workflows shipped undocumented; a generator cannot catch absence from a hand-maintained list](#2026-08-21--three-workflows-shipped-undocumented-a-generator-cannot-catch-absence-from-a-hand-maintained-list)
@@ -72,6 +73,61 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-24 — RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists
+
+Found while adopting `cleanup-secret-versions` on AutoMahn and Traide-Co — the first callers
+it has ever had. It shipped in v2.3.0 on 2026-08-16 and nobody had run it, so both defects
+were latent in a workflow that CI called green.
+
+**Symptom.** Two, in the one step (`Collect target secrets`):
+
+1. The step opened with an unconditional `gcloud secrets list --project=…`. Under
+   `set -euo pipefail` a caller without **project-level** `secretmanager.secrets.list` dies
+   there, before the sweep starts — even when it named exactly the secrets it holds
+   resource-scoped grants on. The workflow's own IAM contract never mentioned that
+   permission, so the failure would arrive as a `PERMISSION_DENIED` for a role the docs
+   said was not needed.
+2. `secrets_list: app-secrets,api-env` collapsed into the single bogus name
+   `app-secretsapi-env`. `tr ',' '\n' | tr -d '[:space:]'` splits on the comma and then
+   deletes **every** whitespace character — including the newlines the split just made.
+   `[:space:]` was the wrong class; `[:blank:]` (space + tab) is the one that strips
+   ` a, b ` without rejoining the lines. Single-secret callers — every real one, since
+   both target projects hold exactly one secret — never saw it.
+
+**Root cause.** Both come from validating by *enumeration* instead of by *identity*. The
+step proved a name existed by listing the project and diffing with `comm`, which needs a
+project-wide read, needs the names in a sorted file, and made the newline handling
+load-bearing in a way nothing tested. Bug 2 was masked by bug 1's own error path: the
+collapsed name failed the `comm` check and aborted with "names secrets that do not exist",
+which reads like a caller typo rather than a workflow defect.
+
+**Why it wasn't caught.** No caller. The 16 plan fixtures cover the sweep's dangerous half —
+the keep-set, the quarantine clock, the `latest` invariant — and `run_step_tests.py` covers
+other workflows' bash bodies, but nothing executed *this* step. Reviewing bash for a
+character-class bug is exactly what review is worst at. And a zero-caller workflow gets no
+runtime signal at all: CI proved the YAML parsed and the plan logic was right, which is not
+the same as proving the thing can run.
+
+**Fix.** Validate each named secret with `gcloud secrets describe`, which needs
+`secretmanager.secrets.get` **on that secret** — a permission a resource-scoped caller
+already holds. `secrets list` now runs only on the `secrets_list: ''` path, which is the one
+that genuinely must enumerate (and already warns about its blast radius). `[:space:]` →
+`[:blank:]`. The error message covers denied as well as absent, because `describe` cannot
+distinguish them and both mean stop.
+
+**Why this matters beyond one workflow.** The fleet moved to resource-scoped IAM in
+ADR-005 precisely so an ops identity is not handed project-wide roles. A reusable that
+demands a project-level role to check a typo quietly undoes that — the caller either grants
+too much or cannot adopt the workflow. Reusables should ask for the narrowest scope their
+work actually needs, and say so in permissions rather than role names.
+
+**Prevention.** Five checks in `run_step_tests.py` execute the shipped step body against a
+stubbed `gcloud` whose `secrets list` **fails** with `PERMISSION_DENIED`: named secrets
+still resolve; a multi-secret list resolves to N distinct names; a typo still aborts and is
+named; and the empty-list path still enumerates and still warns. The IAM contract in the
+workflow header and in `docs/cleanup-secret-versions.md` is now stated as permissions, with
+the resource-scope note and the one project-level exception spelled out.
 
 ## 2026-08-21 — `setup-buildx-action` 4.3.0 merged without a release: a tag is a fleet event, a patch bump is not
 

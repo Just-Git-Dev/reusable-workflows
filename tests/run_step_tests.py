@@ -36,6 +36,7 @@ PAGES = ROOT / ".github" / "workflows" / "deploy-cloudflare-pages.yml"
 SYNC = ROOT / ".github" / "workflows" / "sync-bundle-key.yml"
 KEYPAIR = ROOT / ".github" / "workflows" / "rotate-signing-keypair.yml"
 WORKER = ROOT / ".github" / "workflows" / "rotate-worker-signing-secret.yml"
+SWEEP = ROOT / ".github" / "workflows" / "cleanup-secret-versions.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -527,6 +528,50 @@ echo -n "${{statuses[$idx]}}"
                               capture_output=True, text=True, env=env, cwd=tmp)
         return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
                 "attempts": int(n.read_text().strip() or 0)}
+
+
+def run_collect_targets_step(body: str, *, secrets_list="", can_list=True,
+                             existing=("app-secrets",)):
+    """Execute cleanup-secret-versions' "Collect target secrets" against a stubbed gcloud.
+
+    can_list: does project-level `gcloud secrets list` succeed? A caller holding only
+              resource-scoped grants on the secrets it named cannot list the project,
+              and must still be able to run a sweep it named explicitly.
+    existing: which secret names `gcloud secrets describe` accepts.
+
+    The step writes to absolute /tmp paths (they are runner paths in production); the
+    body is rewritten to the case's tempdir so cases cannot bleed into each other.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        gcloud = stub / "gcloud"
+        gcloud.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1 $2" = "secrets list" ]; then\n'
+            + ("  printf '%s\\n' " + " ".join(f"'{n}'" for n in existing) + "\n  exit 0\n"
+               if can_list else
+               '  echo "PERMISSION_DENIED: secretmanager.secrets.list" >&2\n  exit 1\n')
+            + 'fi\n'
+            'if [ "$1 $2" = "secrets describe" ]; then\n'
+            '  case " ' + " ".join(existing) + ' " in *" $3 "*) exit 0;; esac\n'
+            '  echo "NOT_FOUND: $3" >&2; exit 1\n'
+            'fi\n'
+            'exit 0\n'
+        )
+        gcloud.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="p", SECRETS_LIST=secrets_list)
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+             body.replace("/tmp/", f"{tmp}/")],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        targets = (tmp / "targets.txt")
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "targets": targets.read_text().split() if targets.exists() else []}
 
 
 def check(name, cond, detail=""):
@@ -1097,6 +1142,34 @@ def main():
     r = run_disable_keep_step(extract_step(SYNC, "sync", DISABLE_STEP),
                               keep="1", enabled=("7", "6"), disable_fails=True)
     check("sync-bundle-key · a failed disable fails the step", r["rc"] != 0, r["out"])
+
+    # ── cleanup-secret-versions · Collect target secrets ──────────────────────
+    # The workflow's stated IAM contract is secretVersionManager + run.viewer +
+    # logging.viewer. Listing every secret in the project needs a fourth thing it
+    # never mentions — project-level secretmanager.secrets.list — which locks out
+    # exactly the resource-scoped callers the fleet moved to.
+    body = extract_step(SWEEP, "cleanup", "Collect target secrets")
+    print("\ncleanup-secret-versions · Collect target secrets")
+
+    r = run_collect_targets_step(body, secrets_list="app-secrets", can_list=False)
+    check("named secrets sweep without project-level list", r["rc"] == 0, r["out"])
+    check("named secrets resolve as targets", r["targets"] == ["app-secrets"], r["targets"])
+
+    r = run_collect_targets_step(body, secrets_list="app-secrets, api-env",
+                                 can_list=False, existing=("app-secrets", "api-env"))
+    check("several named secrets resolve", r["targets"] == ["api-env", "app-secrets"], r["targets"])
+
+    # A typo must still be caught — a sweep that silently covers nothing reads as success.
+    r = run_collect_targets_step(body, secrets_list="app-secrets,ap-secrets", can_list=False)
+    check("a misnamed secret aborts", r["rc"] == 1, r["out"])
+    check("a misnamed secret is named in the error", "ap-secrets" in r["out"], r["out"])
+
+    # Sweeping EVERYTHING still needs the project list, and still warns.
+    r = run_collect_targets_step(body, secrets_list="", can_list=True,
+                                 existing=("app-secrets", "api-env"))
+    check("empty list sweeps every secret", r["targets"] == ["api-env", "app-secrets"], r["targets"])
+    check("empty list warns", "::warning::" in r["out"], r["out"])
+
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")
