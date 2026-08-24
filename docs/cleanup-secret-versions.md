@@ -118,11 +118,26 @@ Outputs: `to_disable`, `to_destroy`, `disabled`, `destroyed`, `held`.
 
 ## Required IAM
 
+Stated as **permissions**, because the secret-side ones can be held at *resource*
+scope — bound on each target secret rather than on the project:
+
 ```
-roles/secretmanager.secretVersionManager   # disable/destroy + list versions
-roles/run.viewer                           # enumerate live Services + Jobs
-roles/logging.viewer                       # read the quarantine clock
+secretmanager.versions.list|get|disable|destroy   # the sweep itself
+secretmanager.secrets.get                         # `secrets describe`, per target
+roles/run.viewer                                  # enumerate live Services + Jobs
+roles/logging.viewer                              # read the quarantine clock
 ```
+
+The least-privilege grant is `roles/secretmanager.secretVersionManager` **and**
+`roles/secretmanager.viewer`, bound **on each secret you name**. Neither alone is
+enough: `secretVersionManager` does not include `secretmanager.secrets.get`, so
+without `viewer` every `secrets describe` 403s. Verify that by permission list, not
+by role name.
+
+The one thing that cannot be resource-scoped is *enumerating* a project's secrets.
+So `secrets_list: ''` — sweep everything — additionally needs project-level
+`secretmanager.secrets.list`. **Name your secrets and you never need it**, which is
+another reason to prefer the explicit list.
 
 `secretmanager.secretAccessor` is deliberately **not** required. The sweep reads
 metadata and never reads a payload, so it cannot leak one.

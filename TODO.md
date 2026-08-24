@@ -63,12 +63,24 @@
 
 ## Secret Manager
 
-- [ ] **`cleanup-secret-versions.yml` has zero callers fleet-wide.** It shipped in `v2.3.0` and was
-      never adopted anywhere — surveyed 2026-08-20 across AutoMahn/{project,api},
-      Realm-ID/{project,issuer,ui}, Traide-Co/project. Adoption is a real decision, not a repin: it
-      needs a quarantine window per project and a Cloud Run consumer scan, and it interacts with the
-      delayed-destruction item below. The three project repos that already run the GAR sweep are the
-      natural first callers.
+- [ ] **`cleanup-secret-versions.yml` — adoption IN PROGRESS 2026-08-24 (AutoMahn + Traide-Co).**
+      Zero callers since `v2.3.0`; the first adoption attempt immediately surfaced two latent
+      defects in the workflow (project-wide `secrets.list` demanded to validate a name;
+      `secrets_list` collapsing multi-secret lists) — fixed, with step tests, see DECISIONS
+      2026-08-24. **A workflow with no callers has no runtime signal: CI green meant only that
+      the YAML parsed and the plan logic was right.**
+      Live survey, same day, of what the sweep would actually find:
+      | project | secret | versions |
+      |---|---|---|
+      | `auto-mahn` | `app-secrets` | 2 ENABLED (v9, v10), 8 already DESTROYED |
+      | `traide-in` | `app-secrets` | 3 ENABLED (v3–v5), 2 DISABLED (v1, v2, since 2026-05-24) |
+      So with the defaults (`keep_enabled_count: 3`, `min_age_days: 7`) **both projects plan zero
+      disables today** — the accumulation the workflow was built for is not present. Its value
+      here is (a) prospective: the sweep runs on a schedule so it never accumulates, and
+      (b) traide-in's two DISABLED versions, which are past any quarantine and are the only
+      destroy candidates in the fleet. Adopt with `dry_run: true` + `enable_destroy: false`
+      first, read a plan, and only then consider the destroy flip.
+      Remaining: IAM for the caller SA (see infra-provisioning) and the two caller workflows.
 
 - [x] **A GSM version cleanup workflow.** ✅ **Shipped as `cleanup-secret-versions.yml`**
       (2026-08-16) — quarantine model (`ENABLED`→`DISABLED`→`DESTROYED`), `enable_destroy`
