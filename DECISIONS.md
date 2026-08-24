@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-24` — [`cloud-run-update`: empty means "do not touch", and it never deploys an image](#2026-08-24--cloud-run-update-empty-means-do-not-touch-and-it-never-deploys-an-image)
 - `2026-08-24` — [`bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules](#2026-08-24--bootstrap-cf-dns-the-full-ruleset-put-was-deleting-another-workflows-origin-rules)
 - `2026-08-24` — [`bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied](#2026-08-24--bootstrap-cf-service-two-routes-to-one-hostname-and-the-origin-host-stops-being-hand-copied)
 - `2026-08-24` — [`deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy](#2026-08-24--deploy-cloudflare-worker-wrangler-owns-the-workers-config-this-workflow-owns-everything-around-the-deploy)
@@ -76,6 +77,54 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-24 — `cloud-run-update`: empty means "do not touch", and it never deploys an image
+
+**Decision.** New reusable applying configuration to an existing Cloud Run service — runtime
+identity, sizing, scaling, env vars, mounted secrets, probes — with a health gate. It is the
+last of the four convergence reusables built today.
+
+**It never deploys an image.** `deploy-cloud-run` and `promote-image` own which revision runs;
+this owns how that revision is configured. Splitting them is what makes a config change
+reviewable without a rebuild, and keeps rollback a pure image operation.
+
+**The central property: an unset input produces no flag.** `gcloud run services update` leaves
+any flag it is not given untouched, and this workflow preserves that rather than substituting
+its own defaults. The alternative — always sending every flag — has a specific, quiet failure
+mode: a caller bumping `max_instances` also resets memory, concurrency and probes to whatever
+this file happens to say. A step test asserts a bare run sends nothing but the service, project
+and region.
+
+`cpu_boost` is therefore a **string** (`'true'`/`'false'`/`''`), not a boolean: a boolean
+cannot express "leave it alone", and Cloud Run's boost setting is exactly the kind of thing a
+caller updating scaling has no opinion about.
+
+**The env-var delimiter is chosen at runtime, not hardcoded.** gcloud's `^delim^k=v delim k=v`
+form exists because values contain commas. The Realm-ID caller this replaces hardcoded `@` —
+fine for its values, and a silent corruption for anyone whose values contain an email address.
+The workflow picks the first of `@ # % | ~ ! +` absent from every value, and **fails loudly**
+if all of them occur. Guessing would produce environment variables nobody declared, which is
+worse than a failed run.
+
+**`extra_args` is a deliberate escape hatch, one flag per line.** Cloud Run has far more flags
+than deserve typed inputs, and a reusable that must be released every time someone needs
+`--set-cloudsql-instances` is a bottleneck. One flag per line (rather than a single string)
+keeps a value containing spaces intact instead of word-splitting it.
+
+**The health gate generalises Realm-ID's `sql.status` check.** Its caller asserts
+`.data.sql.status == "UP"` because GoFr lazy-connects to Postgres: a bad DSN passes the startup
+probe and fails on the first query — the May 2026 v2-DSN incident. `health_jq` +
+`health_expect` express that for any service: apply a jq filter to the health body and require
+a value. A status-code check alone cannot catch an endpoint that returns 200 while reporting a
+dependency as down.
+
+**Built with no caller to adopt it.** Every caller is in Realm-ID, which is frozen on a billing
+issue, so this ships with green CI and step tests but **no runtime signal** — nothing has run
+it against a real service. That is a deliberate, user-approved trade (build now, adopt later),
+and worth remembering when the first real run happens: treat it as unproven in execution, the
+same way `resource_roles.secrets` was until an apply actually exercised it.
+
+---
 
 ## 2026-08-24 — `bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules
 

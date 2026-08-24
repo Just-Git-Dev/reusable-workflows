@@ -996,6 +996,203 @@
       "secrets": {},
       "workflow": "cleanup-secret-versions.yml"
     },
+    "cloud-run-update": {
+      "inputs": {
+        "clear_env_vars": {
+          "default": false,
+          "description": "Remove every env var before applying. Only meaningful with env_vars_mode: update, which otherwise cannot remove anything; with `set` it is redundant.",
+          "required": false,
+          "type": "boolean"
+        },
+        "concurrency": {
+          "default": "",
+          "description": "Max concurrent requests per instance. Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "cpu": {
+          "default": "",
+          "description": "CPU allocation, e.g. \"1\". Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "cpu_boost": {
+          "default": "",
+          "description": "\"true\" or \"false\" to set startup CPU boost. Empty (the default) leaves it unchanged \u2014 a string rather than a boolean precisely so that \"unset\" is expressible.",
+          "required": false,
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Print the exact gcloud command that would run, and run nothing.",
+          "required": false,
+          "type": "boolean"
+        },
+        "env_vars": {
+          "default": "",
+          "description": "Newline-separated KEY=VALUE pairs. Values may contain commas and spaces \u2014 the delimiter passed to gcloud is chosen at runtime from a character none of the values uses, so a CORS header list or a DSN does not need escaping by hand.",
+          "required": false,
+          "type": "string"
+        },
+        "env_vars_mode": {
+          "default": "update",
+          "description": "`update` (default) merges the pairs, leaving other variables alone. `set` makes the service's environment EXACTLY these pairs, removing any not listed \u2014 declarative, and the right choice for a caller that owns the whole environment.",
+          "required": false,
+          "type": "string"
+        },
+        "extra_args": {
+          "default": "",
+          "description": "Additional `gcloud run services update` flags, newline-separated, one flag per line. An escape hatch for the long tail of flags that do not deserve a typed input. Each line is passed as a single argument, so a value containing spaces stays intact.",
+          "required": false,
+          "type": "string"
+        },
+        "gcp_project": {
+          "default": null,
+          "description": "GCP project owning the service.",
+          "required": true,
+          "type": "string"
+        },
+        "gcp_region": {
+          "default": "asia-southeast1",
+          "description": "Cloud Run region.",
+          "required": false,
+          "type": "string"
+        },
+        "health_attempts": {
+          "default": 6,
+          "description": "Attempts before failing \u2014 a new revision takes a moment to serve.",
+          "required": false,
+          "type": "number"
+        },
+        "health_expect": {
+          "default": "",
+          "description": "Value health_jq must produce, e.g. \"UP\".",
+          "required": false,
+          "type": "string"
+        },
+        "health_interval_seconds": {
+          "default": 5,
+          "description": "Seconds between health attempts.",
+          "required": false,
+          "type": "number"
+        },
+        "health_jq": {
+          "default": "",
+          "description": "jq filter applied to the health response, e.g. `.data.sql.status`. Empty means the check asserts only the HTTP status. Use this when the endpoint returns 200 while reporting a dependency as down \u2014 the case a status-code check cannot catch.",
+          "required": false,
+          "type": "string"
+        },
+        "health_path": {
+          "default": "",
+          "description": "Path on the service to check after updating, e.g. /.well-known/health. Empty skips the check. Configuration changes fail in ways a revision rollout does not notice \u2014 a bad DSN in a secret starts cleanly and only fails on first query.",
+          "required": false,
+          "type": "string"
+        },
+        "health_status": {
+          "default": "200",
+          "description": "HTTP status the health request must return.",
+          "required": false,
+          "type": "string"
+        },
+        "labels": {
+          "default": "",
+          "description": "Newline-separated KEY=VALUE labels to merge onto the service.",
+          "required": false,
+          "type": "string"
+        },
+        "max_instances": {
+          "default": "",
+          "description": "Maximum instances. Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "memory": {
+          "default": "",
+          "description": "Memory, e.g. \"512Mi\". Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "min_instances": {
+          "default": "",
+          "description": "Minimum instances. Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "port": {
+          "default": "",
+          "description": "Container port. Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "request_timeout": {
+          "default": "",
+          "description": "Request timeout, e.g. \"60s\". Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "runtime_service_account": {
+          "default": "",
+          "description": "The identity the SERVICE runs as. Distinct from service_account, which is the identity this workflow runs as. Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "secrets": {
+          "default": "",
+          "description": "Newline-separated secret mounts, in gcloud's own syntax: ENV_NAME=secret-name:version (as an environment variable) /path/to/file=secret-name:version (mounted as a file)",
+          "required": false,
+          "type": "string"
+        },
+        "secrets_mode": {
+          "default": "update",
+          "description": "`update` (default) merges; `set` makes the mounts exactly these.",
+          "required": false,
+          "type": "string"
+        },
+        "service": {
+          "default": null,
+          "description": "Cloud Run service to update. It must already exist.",
+          "required": true,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "Service account email to impersonate via WIF (the CI identity).",
+          "required": true,
+          "type": "string"
+        },
+        "startup_probe": {
+          "default": "",
+          "description": "gcloud --startup-probe spec, e.g. \"httpGet.path=/alive,periodSeconds=3\". Empty leaves it unchanged.",
+          "required": false,
+          "type": "string"
+        },
+        "timeout_minutes": {
+          "default": 15,
+          "description": "Job timeout.",
+          "required": false,
+          "type": "number"
+        },
+        "wif_provider": {
+          "default": null,
+          "description": "Workload Identity Federation provider resource name.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "update": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Update a Cloud Run service's configuration (reusable)",
+      "outputs": {
+        "service_url": "The service URL after the update."
+      },
+      "path": ".github/workflows/cloud-run-update.yml",
+      "secrets": {},
+      "workflow": "cloud-run-update.yml"
+    },
     "deploy-cloud-run": {
       "inputs": {
         "also_tag_latest": {
