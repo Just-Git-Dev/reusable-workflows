@@ -4,7 +4,7 @@ Deploy a Cloudflare Worker with `wrangler deploy`, from a worker directory insid
 caller's repo.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-worker.yml@v2.4.1
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-worker.yml@v2.5.0
 ```
 
 ## What it does and does not own
@@ -109,7 +109,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-worker.yml@v2.4.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-worker.yml@v2.5.0
     with:
       worker_directory: cf-worker-files
       worker_name: automahn-files-cdn

@@ -98,7 +98,7 @@ permissions:
 
 jobs:
   retire:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/retire-gar-packages.yml@v2.4.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/retire-gar-packages.yml@v2.5.0
     with:
       gcp_project: my-project
       gar_repo: backend
