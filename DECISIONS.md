@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-24` — [`bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules](#2026-08-24--bootstrap-cf-dns-the-full-ruleset-put-was-deleting-another-workflows-origin-rules)
 - `2026-08-24` — [`bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied](#2026-08-24--bootstrap-cf-service-two-routes-to-one-hostname-and-the-origin-host-stops-being-hand-copied)
 - `2026-08-24` — [`deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy](#2026-08-24--deploy-cloudflare-worker-wrangler-owns-the-workers-config-this-workflow-owns-everything-around-the-deploy)
 - `2026-08-24` — [RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists](#2026-08-24--rca-the-sweep-demanded-a-project-wide-role-to-check-a-typo-and-collapsed-multi-secret-lists)
@@ -75,6 +76,60 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-24 — `bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules
+
+**Decision.** New reusable for zone-level Cloudflare state — DNS records plus Origin Rules —
+collapsing `AutoMahn/project`'s `bootstrap-cf-dns.yml` and `bootstrap-cf-origin-rules.yml`
+and `Traide-Co/project`'s `bootstrap-cf-dns.yml`. Records and rules are JSON-array inputs,
+because `workflow_call` inputs cannot be objects and a per-record input set would cap the
+number of records a caller may declare.
+
+**The finding, from reading the two callers side by side.** `bootstrap-cf-origin-rules.yml`
+does a **full-ruleset PUT**: "replaces the entire origin ruleset each run with the canonical
+set of rules defined here". `bootstrap-cf-service-proxy.sh` *splices* a per-hostname rule
+into that same ruleset. Both target `automahn.in`. A zone has exactly one entrypoint ruleset
+per phase, so **running the origin-rules workflow deletes the service workflow's rule**, with
+no error and no output saying so — the hostname simply stops reaching its origin.
+
+We have not confirmed this has happened on the live zone (that needs a Cloudflare token we do
+not hold here); the collision is read off the two implementations, which is enough to design
+against.
+
+So the new workflow edits **by expression**: declared rules are upserted, undeclared rules are
+preserved with their server-assigned fields stripped. That is what lets it and
+`bootstrap-cf-service` share a zone. `prune_unmanaged_origin_rules: true` restores the old
+declarative behaviour for a zone with a single owner, and logs a warning naming every rule it
+drops — the old behaviour was not wrong, it was just silent.
+
+**TXT records are matched on content, not just name.** Traide's caller already did this and
+AutoMahn's did not, and Traide's is right: several TXT records legitimately share a name (SPF,
+DMARC, one token per verifying vendor). Matching on name+type alone updates whichever the API
+returns first, which can be another vendor's token. Generalising the stricter rule costs
+nothing and removes a way to silently break someone else's domain verification.
+
+**`replaces` rather than a global "clean up conflicting types" switch.** AutoMahn's caller
+deletes a stale `AAAA` before writing a `CNAME` at the same name — how a hostname moves off a
+worker route. Expressed per record, the destructive act is visible next to the record that
+needs it; a zone-wide boolean would apply it to records that never asked.
+
+**Everything is validated before the first write.** A run that creates three records and dies
+on a malformed fourth leaves the zone in a state nobody declared, and re-running does not
+obviously fix it. Validation names the offending index.
+
+**A jq scoping bug the step tests caught.** The preserve filter was
+`select(([$d[].expression] | index(.expression)) == null)` — inside the pipeline `.` is the
+array just built, so `.expression` indexes an array with a string and jq aborts. Fixed by
+binding first: `select(.expression as $e | ([$d[].expression] | index($e)) == null)`.
+actionlint and shellcheck both pass on the broken version: neither looks inside a jq program.
+This is the second time in this session that a defect invisible to the linters was found only
+by executing the shipped step body.
+
+**Not done:** no caller is migrated; the three inline workflows stay until their own repos'
+PRs. Whether AutoMahn's live zone currently has a missing Origin Rule is worth checking with a
+token when someone has one.
+
+---
 
 ## 2026-08-24 — `bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied
 
