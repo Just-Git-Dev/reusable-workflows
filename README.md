@@ -67,6 +67,7 @@ lands everywhere.
 | [`cleanup-cloud-run-revisions.yml`](docs/cleanup-cloud-run-revisions.md) | Prune inactive Cloud Run revisions, releasing the GAR digests they pin — schedule **before** `cleanup-gar-images` |
 | [`deploy-cloudflare-pages.yml`](docs/deploy-cloudflare-pages.md) | Build a static site and deploy it to Cloudflare Pages |
 | [`deploy-cloudflare-worker.yml`](docs/deploy-cloudflare-worker.md) | Deploy a Cloudflare Worker with `wrangler deploy`, with an optional change-skip and smoke check |
+| [`cloud-run-update.yml`](docs/cloud-run-update.md) | Apply config to an existing Cloud Run service — identity, sizing, scaling, env, secrets — with a health gate; never deploys an image |
 | [`bootstrap-cf-dns.yml`](docs/bootstrap-cf-dns.md) | Converge a Cloudflare zone's DNS records and Origin Rules, preserving rules other writers own |
 | [`bootstrap-cf-service.yml`](docs/bootstrap-cf-service.md) | Give a Cloud Run service a public hostname — Cloud Run domain mapping + DNS-only CNAME, or a proxied CNAME + Origin Rule host override |
 

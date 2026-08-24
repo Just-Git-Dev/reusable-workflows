@@ -1,0 +1,399 @@
+name: Update a Cloud Run service's configuration (reusable)
+
+# Applies configuration to an EXISTING Cloud Run service — runtime identity, sizing, scaling,
+# env vars, mounted secrets, probes — and then gates on the service's own health endpoint.
+#
+# It never deploys an image. `deploy-cloud-run` and `promote-image` own which revision runs;
+# this workflow owns how that revision is configured. Keeping them apart is what makes a
+# config change reviewable without a rebuild, and a rollback a pure image operation.
+#
+# EVERY SIZING INPUT DEFAULTS TO EMPTY, AND EMPTY MEANS "DO NOT TOUCH". `gcloud run services
+# update` leaves any flag you omit exactly as it was, and this workflow preserves that: a
+# caller that only wants to change max_instances passes only max_instances and nothing else
+# on the service moves. A workflow that always sent every flag would silently reset settings
+# the caller never mentioned back to this file's defaults.
+#
+# Required IAM on service_account:
+#   run.services.get, run.services.update      (roles/run.admin, or narrower)
+#   iam.serviceAccounts.actAs ON runtime_service_account, when that input is set
+# The RUNTIME service account needs its own access to any secret named in `secrets` —
+# granting that is the config repo's job, not this workflow's.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Cloud Run service to update. It must already exist.'
+        type: string
+        required: true
+      gcp_project:
+        description: 'GCP project owning the service.'
+        type: string
+        required: true
+      gcp_region:
+        description: 'Cloud Run region.'
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name.'
+        type: string
+        required: true
+      service_account:
+        description: 'Service account email to impersonate via WIF (the CI identity).'
+        type: string
+        required: true
+      runtime_service_account:
+        description: >-
+          The identity the SERVICE runs as. Distinct from service_account, which is the
+          identity this workflow runs as. Empty leaves it unchanged.
+        type: string
+        required: false
+        default: ''
+      env_vars:
+        description: >-
+          Newline-separated KEY=VALUE pairs. Values may contain commas and spaces — the
+          delimiter passed to gcloud is chosen at runtime from a character none of the values
+          uses, so a CORS header list or a DSN does not need escaping by hand.
+        type: string
+        required: false
+        default: ''
+      env_vars_mode:
+        description: >-
+          `update` (default) merges the pairs, leaving other variables alone. `set` makes the
+          service's environment EXACTLY these pairs, removing any not listed — declarative,
+          and the right choice for a caller that owns the whole environment.
+        type: string
+        required: false
+        default: 'update'
+      clear_env_vars:
+        description: >-
+          Remove every env var before applying. Only meaningful with env_vars_mode: update,
+          which otherwise cannot remove anything; with `set` it is redundant.
+        type: boolean
+        required: false
+        default: false
+      secrets:
+        description: >-
+          Newline-separated secret mounts, in gcloud's own syntax:
+            ENV_NAME=secret-name:version        (as an environment variable)
+            /path/to/file=secret-name:version   (mounted as a file)
+        type: string
+        required: false
+        default: ''
+      secrets_mode:
+        description: '`update` (default) merges; `set` makes the mounts exactly these.'
+        type: string
+        required: false
+        default: 'update'
+      labels:
+        description: 'Newline-separated KEY=VALUE labels to merge onto the service.'
+        type: string
+        required: false
+        default: ''
+      port:
+        description: 'Container port. Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      cpu:
+        description: 'CPU allocation, e.g. "1". Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      memory:
+        description: 'Memory, e.g. "512Mi". Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      concurrency:
+        description: 'Max concurrent requests per instance. Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      min_instances:
+        description: 'Minimum instances. Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      max_instances:
+        description: 'Maximum instances. Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      cpu_boost:
+        description: >-
+          "true" or "false" to set startup CPU boost. Empty (the default) leaves it
+          unchanged — a string rather than a boolean precisely so that "unset" is expressible.
+        type: string
+        required: false
+        default: ''
+      request_timeout:
+        description: 'Request timeout, e.g. "60s". Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      startup_probe:
+        description: 'gcloud --startup-probe spec, e.g. "httpGet.path=/alive,periodSeconds=3". Empty leaves it unchanged.'
+        type: string
+        required: false
+        default: ''
+      extra_args:
+        description: >-
+          Additional `gcloud run services update` flags, newline-separated, one flag per line.
+          An escape hatch for the long tail of flags that do not deserve a typed input. Each
+          line is passed as a single argument, so a value containing spaces stays intact.
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: 'Print the exact gcloud command that would run, and run nothing.'
+        type: boolean
+        required: false
+        default: false
+      health_path:
+        description: >-
+          Path on the service to check after updating, e.g. /.well-known/health. Empty skips
+          the check. Configuration changes fail in ways a revision rollout does not notice —
+          a bad DSN in a secret starts cleanly and only fails on first query.
+        type: string
+        required: false
+        default: ''
+      health_jq:
+        description: >-
+          jq filter applied to the health response, e.g. `.data.sql.status`. Empty means the
+          check asserts only the HTTP status. Use this when the endpoint returns 200 while
+          reporting a dependency as down — the case a status-code check cannot catch.
+        type: string
+        required: false
+        default: ''
+      health_expect:
+        description: 'Value health_jq must produce, e.g. "UP".'
+        type: string
+        required: false
+        default: ''
+      health_status:
+        description: 'HTTP status the health request must return.'
+        type: string
+        required: false
+        default: '200'
+      health_attempts:
+        description: 'Attempts before failing — a new revision takes a moment to serve.'
+        type: number
+        required: false
+        default: 6
+      health_interval_seconds:
+        description: 'Seconds between health attempts.'
+        type: number
+        required: false
+        default: 5
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 15
+    outputs:
+      service_url:
+        description: 'The service URL after the update.'
+        value: ${{ jobs.update.outputs.service_url }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Per service: two concurrent updates race to create revisions, and the loser's config is
+  # simply gone. Not cancel-in-progress — a cancelled update can leave a revision rolling out.
+  group: cloud-run-update-${{ inputs.gcp_project }}-${{ inputs.service }}
+  cancel-in-progress: false
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v2.4.1
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      service_url: ${{ steps.apply.outputs.service_url }}
+    steps:
+      - name: Validate the inputs
+        env:
+          ENV_MODE: ${{ inputs.env_vars_mode }}
+          SEC_MODE: ${{ inputs.secrets_mode }}
+          BOOST:    ${{ inputs.cpu_boost }}
+        run: |
+          fail() { echo "::error::$1" >&2; exit 1; }
+          case "$ENV_MODE" in update|set) ;; *) fail "env_vars_mode must be 'update' or 'set', got '$ENV_MODE'." ;; esac
+          case "$SEC_MODE" in update|set) ;; *) fail "secrets_mode must be 'update' or 'set', got '$SEC_MODE'." ;; esac
+          case "$BOOST" in ""|true|false) ;; *) fail "cpu_boost must be 'true', 'false' or empty, got '$BOOST'." ;; esac
+          echo "Inputs valid."
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Apply the configuration
+        id: apply
+        env:
+          SERVICE:   ${{ inputs.service }}
+          PROJECT:   ${{ inputs.gcp_project }}
+          REGION:    ${{ inputs.gcp_region }}
+          RUNTIME_SA: ${{ inputs.runtime_service_account }}
+          ENV_VARS:  ${{ inputs.env_vars }}
+          ENV_MODE:  ${{ inputs.env_vars_mode }}
+          CLEAR_ENV: ${{ inputs.clear_env_vars }}
+          SECRETS:   ${{ inputs.secrets }}
+          SEC_MODE:  ${{ inputs.secrets_mode }}
+          LABELS:    ${{ inputs.labels }}
+          PORT:      ${{ inputs.port }}
+          CPU:       ${{ inputs.cpu }}
+          MEMORY:    ${{ inputs.memory }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          MIN_INST:  ${{ inputs.min_instances }}
+          MAX_INST:  ${{ inputs.max_instances }}
+          BOOST:     ${{ inputs.cpu_boost }}
+          REQ_TIMEOUT: ${{ inputs.request_timeout }}
+          PROBE:     ${{ inputs.startup_probe }}
+          EXTRA:     ${{ inputs.extra_args }}
+          DRY:       ${{ inputs.dry_run }}
+        run: |
+          args=(run services update "$SERVICE" --project="$PROJECT" --region="$REGION")
+
+          # Empty means "leave it alone". gcloud omits what it is not told, and so do we.
+          add_if() { if [ -n "$2" ]; then args+=("$1=$2"); fi; }
+          add_if --service-account "$RUNTIME_SA"
+          add_if --port            "$PORT"
+          add_if --cpu             "$CPU"
+          add_if --memory          "$MEMORY"
+          add_if --concurrency     "$CONCURRENCY"
+          add_if --min-instances   "$MIN_INST"
+          add_if --max-instances   "$MAX_INST"
+          add_if --timeout         "$REQ_TIMEOUT"
+          add_if --startup-probe   "$PROBE"
+
+          case "$BOOST" in
+            true)  args+=(--cpu-boost) ;;
+            false) args+=(--no-cpu-boost) ;;
+          esac
+
+          # Collapse a newline list to KEY=VALUE pairs joined by a delimiter that appears in
+          # none of the values, using gcloud's `^delim^` escaping. Hardcoding a delimiter is
+          # how a CORS header list (`GET,POST,…`) or a DSN silently splits into junk vars.
+          joined() {
+            local raw="$1" pairs=() line delim
+            while IFS= read -r line; do
+              line="${line#"${line%%[![:space:]]*}"}"
+              line="${line%"${line##*[![:space:]]}"}"
+              if [ -n "$line" ]; then pairs+=("$line"); fi
+            done <<< "$raw"
+            if [ "${#pairs[@]}" -eq 0 ]; then return 1; fi
+            delim=""
+            for c in '@' '#' '%' '|' '~' '!' '+'; do
+              if ! printf '%s' "${pairs[*]}" | grep -qF -- "$c"; then delim="$c"; break; fi
+            done
+            if [ -z "$delim" ]; then
+              echo "::error::Could not find a delimiter absent from every value; every candidate (@ # % | ~ ! +) occurs in one of them." >&2
+              return 2
+            fi
+            local out=""
+            for p in "${pairs[@]}"; do out="${out:+$out$delim}$p"; done
+            printf '^%s^%s' "$delim" "$out"
+          }
+
+          if [ "$CLEAR_ENV" = "true" ]; then args+=(--clear-env-vars); fi
+          if v=$(joined "$ENV_VARS"); then
+            if [ "$ENV_MODE" = "set" ]; then args+=("--set-env-vars=$v"); else args+=("--update-env-vars=$v"); fi
+          elif [ "$?" = "2" ]; then exit 1
+          fi
+          if v=$(joined "$SECRETS"); then
+            if [ "$SEC_MODE" = "set" ]; then args+=("--set-secrets=$v"); else args+=("--update-secrets=$v"); fi
+          elif [ "$?" = "2" ]; then exit 1
+          fi
+          if v=$(joined "$LABELS"); then args+=("--update-labels=$v"); fi
+
+          # One flag per line, so a value containing spaces survives as one argument.
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            if [ -n "$line" ]; then args+=("$line"); fi
+          done <<< "$EXTRA"
+
+          printf 'gcloud'; printf ' %q' "${args[@]}"; printf '\n'
+          if [ "$DRY" = "true" ]; then
+            echo "dry_run: nothing was applied."
+            exit 0
+          fi
+          gcloud "${args[@]}" --quiet
+          url=$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" \
+                  --format='value(status.url)')
+          echo "service_url=$url" >> "$GITHUB_OUTPUT"
+          echo "Updated. Service URL: $url"
+
+      - name: Health check
+        if: inputs.health_path != '' && !inputs.dry_run
+        env:
+          URL:      ${{ steps.apply.outputs.service_url }}
+          HPATH:    ${{ inputs.health_path }}
+          FILTER:   ${{ inputs.health_jq }}
+          EXPECT:   ${{ inputs.health_expect }}
+          WANT:     ${{ inputs.health_status }}
+          ATTEMPTS: ${{ inputs.health_attempts }}
+          INTERVAL: ${{ inputs.health_interval_seconds }}
+        run: |
+          target="${URL}${HPATH}"
+          body=$(mktemp)
+          for i in $(seq 1 "$ATTEMPTS"); do
+            code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 15 "$target" || echo "000")
+            if [ "$code" = "$WANT" ]; then
+              if [ -z "$FILTER" ]; then
+                echo "Health check passed on attempt $i ($target -> $code)."
+                exit 0
+              fi
+              got=$(jq -r "$FILTER // empty" < "$body" 2>/dev/null || echo "")
+              if [ "$got" = "$EXPECT" ]; then
+                echo "Health check passed on attempt $i ($FILTER = $got)."
+                exit 0
+              fi
+              echo "attempt $i: HTTP $code but $FILTER is '${got:-<empty>}', want '$EXPECT'"
+            else
+              echo "attempt $i: got HTTP $code, want $WANT"
+            fi
+            sleep "$INTERVAL"
+          done
+          # A config change can start cleanly and still be broken: a bad DSN passes the
+          # startup probe and fails on first query. That is what this gate is for.
+          echo "::error::Health check failed after $ATTEMPTS attempts against $target" >&2
+          head -c 2000 "$body" >&2 || true
+          exit 1
+
+      - name: Summary
+        if: always()
+        env:
+          SERVICE: ${{ inputs.service }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION:  ${{ inputs.gcp_region }}
+          URL:     ${{ steps.apply.outputs.service_url }}
+          DRY:     ${{ inputs.dry_run }}
+          VERSION: ${{ env.WORKFLOW_VERSION }}
+        run: |
+          {
+            echo "## \`${SERVICE}\` — ${PROJECT}/${REGION}"
+            echo ""
+            if [ "$DRY" = "true" ]; then
+              echo "**Dry run** — the command was printed, nothing was applied."
+            else
+              echo "Configuration applied. ${URL:+URL: \`${URL}\`}"
+            fi
+            echo ""
+            echo "<sub>cloud-run-update ${VERSION}</sub>"
+          } >> "$GITHUB_STEP_SUMMARY"

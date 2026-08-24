@@ -40,6 +40,7 @@ SWEEP = ROOT / ".github" / "workflows" / "cleanup-secret-versions.yml"
 CFWORKER = ROOT / ".github" / "workflows" / "deploy-cloudflare-worker.yml"
 CFSERVICE = ROOT / ".github" / "workflows" / "bootstrap-cf-service.yml"
 CFDNS = ROOT / ".github" / "workflows" / "bootstrap-cf-dns.yml"
+CRUPDATE = ROOT / ".github" / "workflows" / "cloud-run-update.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -862,6 +863,27 @@ def run_cfdns_rules_step(body, *, rules, existing_rules=None, ruleset_exists=Tru
                        "SENT_FILE": str(sent)},
                       stubs={"curl": _cf_curl_stub({"entrypoint": payload})})
         r["sent"] = _sent_rows(sent)
+        return r
+
+
+def run_crupdate_apply_step(body, **kw):
+    """Drive cloud-run-update's argument assembly against a gcloud stub that records argv."""
+    env = {"SERVICE": "svc", "PROJECT": "p", "REGION": "r", "RUNTIME_SA": "",
+           "ENV_VARS": "", "ENV_MODE": "update", "CLEAR_ENV": "false",
+           "SECRETS": "", "SEC_MODE": "update", "LABELS": "", "PORT": "", "CPU": "",
+           "MEMORY": "", "CONCURRENCY": "", "MIN_INST": "", "MAX_INST": "", "BOOST": "",
+           "REQ_TIMEOUT": "", "PROBE": "", "EXTRA": "", "DRY": "false"}
+    env.update({k.upper(): v for k, v in kw.items()})
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        argv = tmp / "argv.txt"
+        gcloud = ('#!/usr/bin/env bash\n'
+                  'if [ "$3" = "describe" ]; then echo "https://svc-x.a.run.app"; exit 0; fi\n'
+                  'printf "%s\\n" "$@" > "$ARGV_FILE"\n'
+                  'exit 0\n')
+        env["ARGV_FILE"] = str(argv)
+        r = _run_body(body, env, stubs={"gcloud": gcloud})
+        r["argv"] = argv.read_text().splitlines() if argv.exists() else []
         return r
 
 
@@ -1770,6 +1792,97 @@ def main():
 
     r = run_cfdns_rules_step(body, rules=mine, dry="true")
     check("dry_run writes no ruleset", r["sent"] == [], r["sent"])
+
+    # ── cloud-run-update ────────────────────────────────────────────────────
+    print("\ncloud-run-update · Validate the inputs")
+    body = extract_step(CRUPDATE, "update", "Validate the inputs")
+
+    r = _run_body(body, {"ENV_MODE": "update", "SEC_MODE": "set", "BOOST": ""})
+    check("valid modes pass", r["rc"] == 0, r["out"])
+    r = _run_body(body, {"ENV_MODE": "merge", "SEC_MODE": "set", "BOOST": ""})
+    check("an unknown env_vars_mode is rejected", r["rc"] == 1, r["out"])
+    r = _run_body(body, {"ENV_MODE": "set", "SEC_MODE": "set", "BOOST": "yes"})
+    check("a non-boolean cpu_boost is rejected", r["rc"] == 1, r["out"])
+
+    print("\ncloud-run-update · Apply the configuration")
+    body = extract_step(CRUPDATE, "update", "Apply the configuration")
+
+    # THE CENTRAL PROPERTY: an unset input must not appear at all. A workflow that always
+    # sent every flag would reset settings the caller never mentioned to this file's defaults.
+    r = run_crupdate_apply_step(body)
+    check("a bare run targets the service only",
+          r["argv"] == ["run", "services", "update", "svc", "--project=p", "--region=r",
+                        "--quiet"], r["argv"])
+
+    r = run_crupdate_apply_step(body, max_inst="5")
+    check("only the flag that was set is sent",
+          [a for a in r["argv"] if a.startswith("--")]
+          == ["--project=p", "--region=r", "--max-instances=5", "--quiet"], r["argv"])
+
+    r = run_crupdate_apply_step(body, cpu="1", memory="512Mi", concurrency="80",
+                                min_inst="0", max_inst="3", port="8000",
+                                req_timeout="60s", runtime_sa="run@p.iam.gserviceaccount.com")
+    for want in ["--cpu=1", "--memory=512Mi", "--concurrency=80", "--min-instances=0",
+                 "--max-instances=3", "--port=8000", "--timeout=60s",
+                 "--service-account=run@p.iam.gserviceaccount.com"]:
+        check(f"{want} is passed", want in r["argv"], r["argv"])
+
+    # cpu_boost is a tri-state string precisely so "leave it alone" is expressible.
+    r = run_crupdate_apply_step(body, boost="true")
+    check("cpu_boost true sends --cpu-boost", "--cpu-boost" in r["argv"], r["argv"])
+    r = run_crupdate_apply_step(body, boost="false")
+    check("cpu_boost false sends --no-cpu-boost", "--no-cpu-boost" in r["argv"], r["argv"])
+    r = run_crupdate_apply_step(body)
+    check("cpu_boost empty sends neither",
+          not any("cpu-boost" in a for a in r["argv"]), r["argv"])
+
+    # The delimiter must be chosen, not hardcoded: a CORS method list is full of commas, and
+    # a comma-joined --set-env-vars would split it into junk variables.
+    r = run_crupdate_apply_step(
+        body, env_vars="ALLOW_METHODS=GET,POST,PUT\nREALM=abc", env_mode="set")
+    flag = [a for a in r["argv"] if a.startswith("--set-env-vars=")][0]
+    check("commas in a value survive",
+          flag == "--set-env-vars=^@^ALLOW_METHODS=GET,POST,PUT@REALM=abc", flag)
+
+    # …and when the values themselves contain the first candidate, the next one is used.
+    r = run_crupdate_apply_step(body, env_vars="MAIL=a@b.com\nX=1")
+    flag = [a for a in r["argv"] if a.startswith("--update-env-vars=")][0]
+    check("a value containing @ moves to the next delimiter",
+          flag == "--update-env-vars=^#^MAIL=a@b.com#X=1", flag)
+
+    # If every candidate occurs, guessing would corrupt the value — fail instead.
+    r = run_crupdate_apply_step(body, env_vars="X=@ #%|~!+")
+    check("no usable delimiter fails loudly", r["rc"] == 1, r["out"])
+    check("and says why", "delimiter" in r["out"], r["out"])
+
+    r = run_crupdate_apply_step(body, env_vars="A=1", env_mode="update")
+    check("update mode merges", any(a.startswith("--update-env-vars=") for a in r["argv"]),
+          r["argv"])
+    r = run_crupdate_apply_step(body, env_vars="A=1", env_mode="set")
+    check("set mode replaces", any(a.startswith("--set-env-vars=") for a in r["argv"]),
+          r["argv"])
+
+    r = run_crupdate_apply_step(body, secrets="/configs/.env=issuer-env:latest",
+                                sec_mode="set")
+    check("secrets are passed in gcloud syntax",
+          "--set-secrets=^@^/configs/.env=issuer-env:latest" in r["argv"], r["argv"])
+
+    r = run_crupdate_apply_step(body, clear_env="true", env_vars="A=1")
+    check("clear_env_vars precedes the env flags",
+          r["argv"].index("--clear-env-vars")
+          < min(i for i, a in enumerate(r["argv"]) if "env-vars=" in a and a != "--clear-env-vars"),
+          r["argv"])
+
+    # One flag per line: a spec with spaces must arrive as ONE argument, not word-split.
+    r = run_crupdate_apply_step(body, extra="--set-cloudsql-instances=p:r:db\n--description=a b c")
+    check("extra_args passes each line as one argument",
+          "--description=a b c" in r["argv"], r["argv"])
+    check("and keeps the other flag", "--set-cloudsql-instances=p:r:db" in r["argv"], r["argv"])
+
+    r = run_crupdate_apply_step(body, max_inst="9", dry="true")
+    check("dry_run calls no gcloud", r["argv"] == [], r["argv"])
+    check("dry_run prints the command it would run",
+          "--max-instances=9" in r["out"], r["out"])
 
 
     if FAILURES:

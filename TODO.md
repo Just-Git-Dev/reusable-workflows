@@ -208,8 +208,13 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
       (`engine`, `admin-ui`, `ui` — all still on `zopsmart/workflows@main`, GKE, same pattern as
       `api`). Realm-ID has only the two `project` ops callers, now repinned. `tally-extension`
       was never audited and is out of scope until it is.
-- [ ] **Reusables still to build**, each blocking specific left-inline caller workflows:
-      `bootstrap-cf`, `deploy-cloudflare-worker`, `cloud-run-update`. ~~`run-db-job`~~ —
+- [x] **Reusables still to build** — all built 2026-08-24: `deploy-cloudflare-worker`,
+      `bootstrap-cf-service` + `bootstrap-cf-dns` (the `bootstrap-cf` item split in two —
+      giving one service a hostname and managing a zone's records are different targets;
+      see DECISIONS 2026-08-24), and `cloud-run-update`. **No caller is migrated yet**;
+      each moves in its own repo's PR after the next release tag. `cloud-run-update` has
+      no adoptable caller at all until the Realm-ID hold lifts.
+      Superseded note: ~~`run-db-job`~~ —
       **built 2026-07-28** (Cloud Run Job converge + execute/wait), alongside a
       `docker_target` input on `deploy-cloud-run`. Both additive. Driven by the
       `AutoMahn/api` conversion; see DECISIONS.md 2026-07-28, which also records why the

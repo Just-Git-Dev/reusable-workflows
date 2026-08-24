@@ -178,10 +178,10 @@ def test_repo_is_internally_consistent():
     check("repo: every reusable is stamped", report.unstamped, [])
     check("repo: one version across the tree", sorted(report.versions), [report.version])
     # Hand-maintained on purpose: deriving it from the same scan would make the
-    # assertion a tautology. Bump it when a reusable is ADDED (25 as of
-    # bootstrap-cf-dns, 2026-08-24) — if it fails without one being added,
+    # assertion a tautology. Bump it when a reusable is ADDED (26 as of
+    # cloud-run-update, 2026-08-24) — if it fails without one being added,
     # a workflow has silently stopped being stamped, which is the point.
-    check("repo: stamped 25 reusables", len(report.stamps), 25)
+    check("repo: stamped 26 reusables", len(report.stamps), 26)
 
 
 def test_scan_flags_a_stale_pin(tmp_check=True):
