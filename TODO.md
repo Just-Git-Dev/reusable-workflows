@@ -63,7 +63,7 @@
 
 ## Secret Manager
 
-- [ ] **`cleanup-secret-versions.yml` — adoption IN PROGRESS 2026-08-24 (AutoMahn + Traide-Co).**
+- [x] **`cleanup-secret-versions.yml` — ✅ ADOPTED 2026-08-24 (AutoMahn + Traide-Co).**
       Zero callers since `v2.3.0`; the first adoption attempt immediately surfaced two latent
       defects in the workflow (project-wide `secrets.list` demanded to validate a name;
       `secrets_list` collapsing multi-secret lists) — fixed, with step tests, see DECISIONS
@@ -80,7 +80,21 @@
       (b) traide-in's two DISABLED versions, which are past any quarantine and are the only
       destroy candidates in the fleet. Adopt with `dry_run: true` + `enable_destroy: false`
       first, read a plan, and only then consider the destroy flip.
-      Remaining: IAM for the caller SA (see infra-provisioning) and the two caller workflows.
+      **DONE, end to end, same day.** IAM: `infra-provisioning#35` merged and APPLIED to both
+      projects (3 binds each — `secretVersionManager` + `viewer` ON `app-secrets`, project
+      `logging.viewer` → `github-cleaner`); verified live read-only afterwards, not just from
+      the run log. Callers: `AutoMahn/project#42` + `Traide-Co/project#92`, both monthly,
+      both pinned `@v2.4.1`, both shaped so the SCHEDULE NEVER ACTS.
+      **First real runs (`dry_run: true`) confirm the plan predicted from the survey:**
+      | project | latest | enabled | disabled | consumers | to disable | to destroy |
+      |---|---:|---:|---:|---:|---|---|
+      | `auto-mahn` | 10 | 2 | 0 | 6 | — | — |
+      | `traide-in` | 5 | 3 | 2 | 2 | — | 2, 1 |
+      AutoMahn's empty plan is the CORRECT result, not a misfire. traide-in's v1+v2 are
+      eligible and await a human `enable_destroy: true`.
+      These runs are also the first live proof of the #66 fixes: a resource-scoped caller
+      that never touches project-level `secretmanager.secrets.list` completed `Collect
+      target secrets` successfully.
 
 - [x] **A GSM version cleanup workflow.** ✅ **Shipped as `cleanup-secret-versions.yml`**
       (2026-08-16) — quarantine model (`ENABLED`→`DISABLED`→`DESTROYED`), `enable_destroy`
