@@ -37,6 +37,7 @@ SYNC = ROOT / ".github" / "workflows" / "sync-bundle-key.yml"
 KEYPAIR = ROOT / ".github" / "workflows" / "rotate-signing-keypair.yml"
 WORKER = ROOT / ".github" / "workflows" / "rotate-worker-signing-secret.yml"
 SWEEP = ROOT / ".github" / "workflows" / "cleanup-secret-versions.yml"
+CFWORKER = ROOT / ".github" / "workflows" / "deploy-cloudflare-worker.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -572,6 +573,89 @@ def run_collect_targets_step(body: str, *, secrets_list="", can_list=True,
         targets = (tmp / "targets.txt")
         return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
                 "targets": targets.read_text().split() if targets.exists() else []}
+
+
+def _git(cwd, *args):
+    # -c overrides, not inherited config: a developer with `tag.annotate=true` set globally
+    # would otherwise get "fatal: no tag message?" from the plain `git tag` below, and the
+    # suite would fail on their machine for a reason that has nothing to do with the step.
+    subprocess.run(["git", "-c", "tag.annotate=false", "-c", "tag.gpgSign=false",
+                    "-c", "commit.gpgSign=false", *args],
+                   cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def run_worker_changed_step(body: str, *, watch_paths, history, ref):
+    """Execute deploy-cloudflare-worker's change-skip against a REAL git repo.
+
+    The step's whole job is a `git diff` between two tags, so stubbing git would test the
+    stub. `history` is [(tag, {path: contents}), ...] applied in order; `ref` is the tag
+    being deployed.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        _git(tmp, "init", "-q", "-b", "main")
+        _git(tmp, "config", "user.email", "t@t")
+        _git(tmp, "config", "user.name", "t")
+        for tag, files in history:
+            for rel, content in files.items():
+                f = tmp / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(content)
+            _git(tmp, "add", "-A")
+            _git(tmp, "commit", "-q", "--allow-empty", "-m", tag)
+            _git(tmp, "tag", tag)
+        env = dict(os.environ)
+        env.update(WATCH_PATHS=watch_paths, REF=ref,
+                   GITHUB_OUTPUT=str(tmp / "out.txt"))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        out = (tmp / "out.txt")
+        outs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l) \
+            if out.exists() else {}
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, "skip": outs.get("skip")}
+
+
+def run_worker_deploy_step(body: str, *, version="", env_name="", dry_run="false"):
+    """Execute the wrangler invocation against a stubbed npx that records its argv."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        npx = stub / "npx"
+        npx.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" > "$ARGV_FILE"\nexit 0\n')
+        npx.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(WRANGLER_VERSION=version, WRANGLER_ENV=env_name, DRY_RUN=dry_run,
+                   ARGV_FILE=str(tmp / "argv.txt"),
+                   CLOUDFLARE_API_TOKEN="t", CLOUDFLARE_ACCOUNT_ID="a")
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        argv = (tmp / "argv.txt")
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "argv": argv.read_text().strip() if argv.exists() else ""}
+
+
+def run_worker_resolve_step(body: str, *, ref_in="", require="false",
+                            fallback="main", name_in="", worker_dir="cf-worker"):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        env = dict(os.environ)
+        env.update(REF_IN=ref_in, REQUIRE_SEMVER=require, FALLBACK_REF=fallback,
+                   WORKER_NAME_IN=name_in, WORKER_DIR=worker_dir,
+                   GITHUB_OUTPUT=str(tmp / "out.txt"))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        out = (tmp / "out.txt")
+        outs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l) \
+            if out.exists() else {}
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, **outs}
 
 
 def check(name, cond, detail=""):
@@ -1169,6 +1253,71 @@ def main():
                                  existing=("app-secrets", "api-env"))
     check("empty list sweeps every secret", r["targets"] == ["api-env", "app-secrets"], r["targets"])
     check("empty list warns", "::warning::" in r["out"], r["out"])
+
+    # ── deploy-cloudflare-worker ────────────────────────────────────────────
+    print("\ndeploy-cloudflare-worker · Resolve ref and worker name")
+    body = extract_step(CFWORKER, "deploy", "Resolve ref and worker name")
+
+    r = run_worker_resolve_step(body, ref_in="", fallback="v1.2.3", require="true")
+    check("a semver tag passes the gate", r["rc"] == 0, r["out"])
+    check("empty ref falls back to the trigger ref", r.get("ref") == "v1.2.3", r)
+    check("worker name defaults to the directory", r.get("worker_name") == "cf-worker", r)
+
+    # The gate exists for the dispatch typo: deploying 'v1.2' must cost seconds, not a roll.
+    r = run_worker_resolve_step(body, ref_in="v1.2", require="true")
+    check("a non-semver ref fails when required", r["rc"] == 1, r["out"])
+    check("the rejected ref is named", "v1.2" in r["out"], r["out"])
+
+    r = run_worker_resolve_step(body, ref_in="some-branch", require="false", name_in="w")
+    check("the gate is off by default", r["rc"] == 0, r["out"])
+    check("an explicit worker name wins", r.get("worker_name") == "w", r)
+
+    print("\ndeploy-cloudflare-worker · Decide whether the worker changed")
+    body = extract_step(CFWORKER, "deploy", "Decide whether the worker changed")
+    hist = [("v1.0.0", {"cf-worker/index.js": "a", "other/x": "1"}),
+            ("v1.1.0", {"other/x": "2"})]
+
+    r = run_worker_changed_step(body, watch_paths="", history=hist, ref="v1.1.0")
+    check("empty watch_paths never skips", r["skip"] == "false", r)
+
+    r = run_worker_changed_step(body, watch_paths="cf-worker/", history=hist, ref="v1.1.0")
+    check("untouched worker dir skips", r["skip"] == "true", r)
+
+    r = run_worker_changed_step(body, watch_paths="other/", history=hist, ref="v1.1.0")
+    check("a touched path deploys", r["skip"] == "false", r)
+
+    # Several paths: ANY of them changing must deploy, or a workflow-file edit is swallowed.
+    r = run_worker_changed_step(body, watch_paths="cf-worker/\nother/",
+                                history=hist, ref="v1.1.0")
+    check("any watched path changing deploys", r["skip"] == "false", r)
+
+    # The first release has nothing to diff against; skipping it would ship nothing, ever.
+    r = run_worker_changed_step(body, watch_paths="cf-worker/",
+                                history=[("v1.0.0", {"cf-worker/index.js": "a"})],
+                                ref="v1.0.0")
+    check("the first tag never skips", r["skip"] == "false", r)
+
+    # Blank lines in a YAML block scalar are normal; they must not become a path.
+    r = run_worker_changed_step(body, watch_paths="\n  cf-worker/  \n\n",
+                                history=hist, ref="v1.1.0")
+    check("blank/padded watch_paths lines are ignored", r["skip"] == "true", r)
+
+    print("\ndeploy-cloudflare-worker · Deploy worker")
+    body = extract_step(CFWORKER, "deploy", "Deploy worker")
+
+    r = run_worker_deploy_step(body)
+    check("default deploy exits 0", r["rc"] == 0, r["out"])
+    check("default resolves wrangler from the lockfile",
+          r["argv"] == "--yes wrangler deploy", r["argv"])
+
+    r = run_worker_deploy_step(body, version="4.42.0", env_name="staging", dry_run="true")
+    check("version, env and dry-run all reach wrangler",
+          r["argv"] == "--yes wrangler@4.42.0 deploy --env staging --dry-run", r["argv"])
+
+    # An unset optional must not become an empty argument — `--env ''` is not the same as
+    # omitting --env, and wrangler would deploy the wrong config.
+    r = run_worker_deploy_step(body, env_name="")
+    check("an empty env adds no --env flag", "--env" not in r["argv"], r["argv"])
 
 
     if FAILURES:
