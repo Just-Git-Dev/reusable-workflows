@@ -66,6 +66,7 @@ lands everywhere.
 | [`bootstrap-dashboards.yml`](docs/bootstrap-dashboards.md) | Apply Cloud Monitoring **dashboards** from the caller's `infra/dashboards/`; updates in place so dashboard ids and bookmarks survive |
 | [`cleanup-cloud-run-revisions.yml`](docs/cleanup-cloud-run-revisions.md) | Prune inactive Cloud Run revisions, releasing the GAR digests they pin — schedule **before** `cleanup-gar-images` |
 | [`deploy-cloudflare-pages.yml`](docs/deploy-cloudflare-pages.md) | Build a static site and deploy it to Cloudflare Pages |
+| [`deploy-cloudflare-worker.yml`](docs/deploy-cloudflare-worker.md) | Deploy a Cloudflare Worker with `wrangler deploy`, with an optional change-skip and smoke check |
 
 Each workflow has a `docs/<name>.md` page with its full input/secret contract and
 copy-paste caller examples. The **release model** these deploy/promote workflows

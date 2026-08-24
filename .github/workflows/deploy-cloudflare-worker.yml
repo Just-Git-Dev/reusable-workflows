@@ -1,0 +1,359 @@
+name: Deploy a Cloudflare Worker (reusable)
+
+# Deploys a Cloudflare Worker with `wrangler deploy`, from a worker directory inside the
+# caller's repo. Routes, bindings, vars and the worker name all live in that directory's
+# `wrangler.toml` — this workflow deliberately does NOT model them as inputs. Wrangler
+# already owns that contract, and duplicating it here would give two sources of truth that
+# drift silently (the config is applied by wrangler either way, so the inputs would be
+# advisory at best).
+#
+# What this DOES own is everything around the deploy: which ref to deploy, whether the
+# worker even changed, the install/test gate, and a smoke check afterwards.
+#
+# `cloudflare_api_token` needs "Account: Workers Scripts: Edit". If the worker binds R2, KV,
+# D1 or Queues, the token needs Edit on those too — wrangler reconciles bindings on deploy.
+# Mint it in the Cloudflare dashboard by hand; see rotate-cloudflare-token.yml for rotation.
+#
+# `wrangler` itself is NOT installed by this workflow. It is resolved by `npx` from the
+# worker directory's own lockfile, so the version that deploys your worker is the version
+# you committed and Dependabot updates — not a floating latest that changes under you.
+# Set `wrangler_version` only if the worker has no wrangler dependency of its own.
+#
+# Callers own the trigger — typically a `v*.*.*` tag push plus workflow_dispatch.
+
+on:
+  workflow_call:
+    inputs:
+      worker_directory:
+        description: 'Directory holding wrangler.toml (and the worker package.json).'
+        type: string
+        required: true
+      worker_name:
+        description: >-
+          Worker name, used for the concurrency group and the run summary only — the name
+          that is actually deployed comes from wrangler.toml. Empty ⇒ worker_directory.
+        type: string
+        required: false
+        default: ''
+      ref:
+        description: >-
+          Git ref to check out and deploy (branch, tag, or SHA). Empty ⇒ the ref that
+          triggered the run. Set this to re-deploy a specific tag from a workflow_dispatch.
+        type: string
+        required: false
+        default: ''
+      require_semver_ref:
+        description: >-
+          Fail before doing anything if the resolved ref is not vX.Y.Z. Off by default. Turn
+          it on when the caller deploys from tags: a workflow_dispatch typo then fails in
+          seconds instead of shipping whatever branch happened to match.
+        type: boolean
+        required: false
+        default: false
+      watch_paths:
+        description: >-
+          Newline-separated paths. If NONE of them changed between the previous vX.Y.Z tag
+          and the deployed ref, the deploy is skipped and the job succeeds. Empty (the
+          default) always deploys. Include the caller workflow file itself if you want a
+          change to it to force a deploy. Requires the ref to be a tag; on the very first
+          tag, or when no earlier tag exists, nothing is skipped.
+        type: string
+        required: false
+        default: ''
+      node_version:
+        description: >-
+          Node.js version (any setup-node spec). Defaults to 22 — the version both
+          production workers pin today — rather than to current LTS, so adopting this
+          workflow does not silently change the runtime a worker is built on. Pass '24' to
+          move to current LTS deliberately.
+        type: string
+        required: false
+        default: '22'
+      install_command:
+        description: 'Install step, run in worker_directory. Empty skips installing entirely.'
+        type: string
+        required: false
+        default: 'npm ci || npm install'
+      test_command:
+        description: >-
+          Test command run in worker_directory AFTER install and BEFORE deploy. A non-zero
+          exit fails the deploy. Empty (the default) skips it. This is the gate that stops a
+          handler regression shipping — a worker has no staging environment to catch it.
+        type: string
+        required: false
+        default: ''
+      wrangler_environment:
+        description: 'wrangler.toml environment to deploy (`--env`). Empty ⇒ the top-level config.'
+        type: string
+        required: false
+        default: ''
+      wrangler_version:
+        description: >-
+          Pin wrangler explicitly, e.g. "4.42.0". Empty (the default) resolves it from the
+          worker directory's own lockfile, which is what you want — the deploy then uses a
+          version you committed. Only set this for a worker with no wrangler dependency.
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: >-
+          Run `wrangler deploy --dry-run`: builds and validates the worker and its bindings,
+          uploads nothing. The default is FALSE because a caller wires this to a tag push and
+          means it; pass true from a workflow_dispatch to rehearse.
+        type: boolean
+        required: false
+        default: false
+      smoke_url:
+        description: >-
+          URL to fetch after deploying, e.g. "https://files.example.com/healthz". Empty (the
+          default) skips the check. A deploy that succeeded is not the same as a worker that
+          serves; this is the difference. Not run when the deploy was skipped or dry.
+        type: string
+        required: false
+        default: ''
+      smoke_status:
+        description: 'HTTP status the smoke request must return.'
+        type: string
+        required: false
+        default: '200'
+      smoke_expect:
+        description: >-
+          Newline-separated substrings that must ALL appear in the response body. Empty ⇒
+          status code only.
+        type: string
+        required: false
+        default: ''
+      smoke_attempts:
+        description: >-
+          How many times to try before failing. A freshly deployed worker propagates across
+          the edge in seconds, so one request would false-fail on an unlucky POP.
+        type: number
+        required: false
+        default: 6
+      smoke_interval_seconds:
+        description: 'Seconds between smoke attempts.'
+        type: number
+        required: false
+        default: 5
+      summary_notes:
+        description: >-
+          Extra markdown appended to the run summary — routes, bindings, which workflow owns
+          the worker's secrets. Newlines are preserved.
+        type: string
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 10
+    secrets:
+      cloudflare_api_token:
+        description: 'Cloudflare API token with "Workers Scripts: Edit" (plus Edit on any bound resource).'
+        required: true
+      cloudflare_account_id:
+        description: >-
+          Cloudflare account id. Not really a credential, but wrangler reads it from the
+          environment and account ids are the one identifier people paste into issues, so it
+          is carried as a secret to keep it out of logs. Optional when wrangler.toml sets
+          account_id.
+        required: false
+    outputs:
+      skipped:
+        description: 'true when watch_paths matched nothing and the deploy was skipped.'
+        value: ${{ jobs.deploy.outputs.skipped }}
+      worker_name:
+        description: 'The resolved worker name (input, or worker_directory).'
+        value: ${{ jobs.deploy.outputs.worker_name }}
+
+permissions:
+  contents: read
+
+concurrency:
+  # One deploy at a time per worker. NOT cancel-in-progress: wrangler is mid-upload for the
+  # duration, and cancelling it can leave the worker on a half-applied set of bindings.
+  group: cf-worker-deploy-${{ inputs.worker_name || inputs.worker_directory }}-${{ inputs.wrangler_environment }}
+  cancel-in-progress: false
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v2.4.1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    # Skip bot-authored pushes (dependabot/renovate) — they can't hold deploy creds.
+    if: |
+      github.actor != 'dependabot[bot]' &&
+      !startsWith(github.actor, 'renovate')
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      skipped: ${{ steps.changed.outputs.skip }}
+      worker_name: ${{ steps.resolve.outputs.worker_name }}
+    steps:
+      - name: Resolve ref and worker name
+        id: resolve
+        env:
+          REF_IN:        ${{ inputs.ref }}
+          REQUIRE_SEMVER: ${{ inputs.require_semver_ref }}
+          WORKER_NAME_IN: ${{ inputs.worker_name }}
+          WORKER_DIR:    ${{ inputs.worker_directory }}
+          FALLBACK_REF:  ${{ github.ref_name }}
+        run: |
+          ref="${REF_IN:-$FALLBACK_REF}"
+          if [ "$REQUIRE_SEMVER" = "true" ] && ! [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::require_semver_ref is set and '$ref' is not a vX.Y.Z tag." >&2
+            exit 1
+          fi
+          {
+            echo "ref=$ref"
+            echo "worker_name=${WORKER_NAME_IN:-$WORKER_DIR}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+          # Full history + tags: the change-skip below diffs against the PREVIOUS semver tag,
+          # which a shallow clone does not contain. Unconditional because making the fetch
+          # depth depend on watch_paths would make the skip silently wrong when it is set.
+          fetch-depth: 0
+
+      - name: Decide whether the worker changed
+        id: changed
+        env:
+          WATCH_PATHS: ${{ inputs.watch_paths }}
+          REF:         ${{ steps.resolve.outputs.ref }}
+        run: |
+          if [ -z "${WATCH_PATHS//[[:space:]]/}" ]; then
+            echo "watch_paths is empty — deploying unconditionally."
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # A `while read` loop, not `mapfile`: mapfile is bash 4+, and macOS ships bash 3.2,
+          # so the step tests that run this very body could not run on a developer's laptop.
+          # GitHub runners would have hidden that behind a green CI.
+          paths=()
+          while IFS= read -r p; do
+            p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            if [ -n "$p" ]; then paths+=("$p"); fi
+          done <<< "$WATCH_PATHS"
+          if [ "${#paths[@]}" -eq 0 ]; then
+            echo "watch_paths held no usable paths — deploying."
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          prev=$(git tag --list 'v*.*.*' --sort=-v:refname | grep -vFx "$REF" | head -1 || true)
+          if [ -z "$prev" ]; then
+            echo "No earlier vX.Y.Z tag to compare against — deploying."
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --quiet "$prev" "$REF" -- "${paths[@]}"; then
+            echo "::notice::None of the watched paths changed between $prev and $REF — skipping deploy."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changes detected between $prev and $REF — deploying."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.changed.outputs.skip != 'true'
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install
+        if: steps.changed.outputs.skip != 'true' && inputs.install_command != ''
+        working-directory: ${{ inputs.worker_directory }}
+        run: ${{ inputs.install_command }}
+
+      - name: Test
+        if: steps.changed.outputs.skip != 'true' && inputs.test_command != ''
+        working-directory: ${{ inputs.worker_directory }}
+        run: ${{ inputs.test_command }}
+
+      - name: Deploy worker
+        id: deploy
+        if: steps.changed.outputs.skip != 'true'
+        working-directory: ${{ inputs.worker_directory }}
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.cloudflare_api_token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.cloudflare_account_id }}
+          WRANGLER_VERSION:      ${{ inputs.wrangler_version }}
+          WRANGLER_ENV:          ${{ inputs.wrangler_environment }}
+          DRY_RUN:               ${{ inputs.dry_run }}
+        run: |
+          # Written as explicit `if`s, not `[ x ] && y`: an AND-list whose test fails exits
+          # non-zero, which is harmless mid-script but fails the step the moment someone
+          # appends nothing after it. Not worth leaving armed.
+          pkg="wrangler"
+          if [ -n "$WRANGLER_VERSION" ]; then pkg="wrangler@${WRANGLER_VERSION}"; fi
+          args=(deploy)
+          if [ -n "$WRANGLER_ENV" ]; then args+=(--env "$WRANGLER_ENV"); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          echo "Running: npx --yes $pkg ${args[*]}"
+          npx --yes "$pkg" "${args[@]}"
+
+      - name: Smoke check
+        if: steps.changed.outputs.skip != 'true' && inputs.dry_run != true && inputs.smoke_url != ''
+        env:
+          URL:      ${{ inputs.smoke_url }}
+          WANT:     ${{ inputs.smoke_status }}
+          EXPECT:   ${{ inputs.smoke_expect }}
+          ATTEMPTS: ${{ inputs.smoke_attempts }}
+          INTERVAL: ${{ inputs.smoke_interval_seconds }}
+        run: |
+          body=$(mktemp)
+          for i in $(seq 1 "$ATTEMPTS"); do
+            code=$(curl -sS -o "$body" -w '%{http_code}' "$URL" || echo "000")
+            if [ "$code" = "$WANT" ]; then
+              missing=0
+              while IFS= read -r want; do
+                [ -z "$want" ] && continue
+                if ! grep -qF -- "$want" "$body"; then
+                  echo "attempt $i: status $code but body is missing: $want"
+                  missing=1
+                fi
+              done <<< "$EXPECT"
+              if [ "$missing" = "0" ]; then
+                echo "Smoke check passed on attempt $i ($URL -> $code)."
+                exit 0
+              fi
+            else
+              echo "attempt $i: got HTTP $code, want $WANT"
+            fi
+            sleep "$INTERVAL"
+          done
+          echo "::error::Smoke check failed after $ATTEMPTS attempts against $URL" >&2
+          echo "--- last response body (first 2000 bytes) ---" >&2
+          head -c 2000 "$body" >&2 || true
+          exit 1
+
+      - name: Summary
+        if: always()
+        env:
+          WORKER:  ${{ steps.resolve.outputs.worker_name }}
+          REF:     ${{ steps.resolve.outputs.ref }}
+          SKIPPED: ${{ steps.changed.outputs.skip }}
+          DRY:     ${{ inputs.dry_run }}
+          WENV:    ${{ inputs.wrangler_environment }}
+          NOTES:   ${{ inputs.summary_notes }}
+          VERSION: ${{ env.WORKFLOW_VERSION }}
+        run: |
+          {
+            echo "## Worker \`${WORKER}\` — ${REF}"
+            echo ""
+            if [ "$SKIPPED" = "true" ]; then
+              echo "**Skipped** — none of \`watch_paths\` changed since the previous tag."
+            elif [ "$DRY" = "true" ]; then
+              echo "**Dry run** — built and validated, nothing uploaded."
+            else
+              echo "Deployed with \`wrangler deploy\`${WENV:+ (env: \`${WENV}\`)}."
+            fi
+            if [ -n "$NOTES" ]; then
+              echo ""
+              echo "$NOTES"
+            fi
+            echo ""
+            echo "<sub>deploy-cloudflare-worker ${VERSION}</sub>"
+          } >> "$GITHUB_STEP_SUMMARY"

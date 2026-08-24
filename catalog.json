@@ -1133,6 +1133,141 @@
       },
       "workflow": "deploy-cloudflare-pages.yml"
     },
+    "deploy-cloudflare-worker": {
+      "inputs": {
+        "dry_run": {
+          "default": false,
+          "description": "Run `wrangler deploy --dry-run`: builds and validates the worker and its bindings, uploads nothing. The default is FALSE because a caller wires this to a tag push and means it; pass true from a workflow_dispatch to rehearse.",
+          "required": false,
+          "type": "boolean"
+        },
+        "install_command": {
+          "default": "npm ci || npm install",
+          "description": "Install step, run in worker_directory. Empty skips installing entirely.",
+          "required": false,
+          "type": "string"
+        },
+        "node_version": {
+          "default": "22",
+          "description": "Node.js version (any setup-node spec). Defaults to 22 \u2014 the version both production workers pin today \u2014 rather than to current LTS, so adopting this workflow does not silently change the runtime a worker is built on. Pass '24' to move to current LTS deliberately.",
+          "required": false,
+          "type": "string"
+        },
+        "ref": {
+          "default": "",
+          "description": "Git ref to check out and deploy (branch, tag, or SHA). Empty \u21d2 the ref that triggered the run. Set this to re-deploy a specific tag from a workflow_dispatch.",
+          "required": false,
+          "type": "string"
+        },
+        "require_semver_ref": {
+          "default": false,
+          "description": "Fail before doing anything if the resolved ref is not vX.Y.Z. Off by default. Turn it on when the caller deploys from tags: a workflow_dispatch typo then fails in seconds instead of shipping whatever branch happened to match.",
+          "required": false,
+          "type": "boolean"
+        },
+        "smoke_attempts": {
+          "default": 6,
+          "description": "How many times to try before failing. A freshly deployed worker propagates across the edge in seconds, so one request would false-fail on an unlucky POP.",
+          "required": false,
+          "type": "number"
+        },
+        "smoke_expect": {
+          "default": "",
+          "description": "Newline-separated substrings that must ALL appear in the response body. Empty \u21d2 status code only.",
+          "required": false,
+          "type": "string"
+        },
+        "smoke_interval_seconds": {
+          "default": 5,
+          "description": "Seconds between smoke attempts.",
+          "required": false,
+          "type": "number"
+        },
+        "smoke_status": {
+          "default": "200",
+          "description": "HTTP status the smoke request must return.",
+          "required": false,
+          "type": "string"
+        },
+        "smoke_url": {
+          "default": "",
+          "description": "URL to fetch after deploying, e.g. \"https://files.example.com/healthz\". Empty (the default) skips the check. A deploy that succeeded is not the same as a worker that serves; this is the difference. Not run when the deploy was skipped or dry.",
+          "required": false,
+          "type": "string"
+        },
+        "summary_notes": {
+          "default": "",
+          "description": "Extra markdown appended to the run summary \u2014 routes, bindings, which workflow owns the worker's secrets. Newlines are preserved.",
+          "required": false,
+          "type": "string"
+        },
+        "test_command": {
+          "default": "",
+          "description": "Test command run in worker_directory AFTER install and BEFORE deploy. A non-zero exit fails the deploy. Empty (the default) skips it. This is the gate that stops a handler regression shipping \u2014 a worker has no staging environment to catch it.",
+          "required": false,
+          "type": "string"
+        },
+        "timeout_minutes": {
+          "default": 10,
+          "description": "Job timeout.",
+          "required": false,
+          "type": "number"
+        },
+        "watch_paths": {
+          "default": "",
+          "description": "Newline-separated paths. If NONE of them changed between the previous vX.Y.Z tag and the deployed ref, the deploy is skipped and the job succeeds. Empty (the default) always deploys. Include the caller workflow file itself if you want a change to it to force a deploy. Requires the ref to be a tag; on the very first tag, or when no earlier tag exists, nothing is skipped.",
+          "required": false,
+          "type": "string"
+        },
+        "worker_directory": {
+          "default": null,
+          "description": "Directory holding wrangler.toml (and the worker package.json).",
+          "required": true,
+          "type": "string"
+        },
+        "worker_name": {
+          "default": "",
+          "description": "Worker name, used for the concurrency group and the run summary only \u2014 the name that is actually deployed comes from wrangler.toml. Empty \u21d2 worker_directory.",
+          "required": false,
+          "type": "string"
+        },
+        "wrangler_environment": {
+          "default": "",
+          "description": "wrangler.toml environment to deploy (`--env`). Empty \u21d2 the top-level config.",
+          "required": false,
+          "type": "string"
+        },
+        "wrangler_version": {
+          "default": "",
+          "description": "Pin wrangler explicitly, e.g. \"4.42.0\". Empty (the default) resolves it from the worker directory's own lockfile, which is what you want \u2014 the deploy then uses a version you committed. Only set this for a worker with no wrangler dependency.",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "deploy": {
+          "conditional": true,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Deploy a Cloudflare Worker (reusable)",
+      "outputs": {
+        "skipped": "true when watch_paths matched nothing and the deploy was skipped.",
+        "worker_name": "The resolved worker name (input, or worker_directory)."
+      },
+      "path": ".github/workflows/deploy-cloudflare-worker.yml",
+      "secrets": {
+        "cloudflare_account_id": {
+          "description": "Cloudflare account id. Not really a credential, but wrangler reads it from the environment and account ids are the one identifier people paste into issues, so it is carried as a secret to keep it out of logs. Optional when wrangler.toml sets account_id.",
+          "required": false
+        },
+        "cloudflare_api_token": {
+          "description": "Cloudflare API token with \"Workers Scripts: Edit\" (plus Edit on any bound resource).",
+          "required": true
+        }
+      },
+      "workflow": "deploy-cloudflare-worker.yml"
+    },
     "deploy-cluster-keyed": {
       "inputs": {
         "app_version": {

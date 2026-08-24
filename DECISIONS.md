@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-24` — [`deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy](#2026-08-24--deploy-cloudflare-worker-wrangler-owns-the-workers-config-this-workflow-owns-everything-around-the-deploy)
 - `2026-08-24` — [RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists](#2026-08-24--rca-the-sweep-demanded-a-project-wide-role-to-check-a-typo-and-collapsed-multi-secret-lists)
 - `2026-08-21` — [`setup-buildx-action` 4.3.0 merged without a release: a tag is a fleet event, a patch bump is not](#2026-08-21--setup-buildx-action-430-merged-without-a-release-a-tag-is-a-fleet-event-a-patch-bump-is-not)
 - `2026-08-21` — [v2.4.0: `buildcache` leaves the default keep-set — a moving tag the default policy forbids](#2026-08-21--v240-buildcache-leaves-the-default-keep-set--a-moving-tag-the-default-policy-forbids)
@@ -73,6 +74,67 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-24 — `deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy
+
+**Decision.** New reusable, collapsing `AutoMahn/api`'s two inline worker deploys
+(`deploy-api-proxy-worker.yml`, `deploy-files-worker.yml`). It takes a `worker_directory` and
+runs `wrangler deploy`; it takes **no** input for routes, bindings, vars or the worker name.
+
+**Why not model the worker's config.** Those all live in `wrangler.toml`, and wrangler applies
+them on every deploy whether or not this workflow has an opinion. Adding inputs for them would
+produce two sources of truth where only one is load-bearing: the workflow's copy would be
+advisory, the file's copy would be real, and the two would drift without anything failing. The
+same argument the `AGENTS.md` "one reusable per target type" rule makes about `target:`
+switches applies to configuration the tool already owns.
+
+So the boundary is: **wrangler owns what the worker IS, this workflow owns whether/when/from
+what it ships** — ref selection, the change-skip, install, the test gate, dry-run, and the
+smoke check.
+
+**wrangler is deliberately not installed.** `npx` resolves it from the worker directory's own
+lockfile, so the deploying version is one that was committed and that Dependabot updates.
+Installing a floating `wrangler@latest` would mean two identical runs could deploy through
+different tooling. `wrangler_version` exists only for a worker with no wrangler dependency.
+
+**`watch_paths` — and why the checkout is unconditionally deep.** Both callers hand-rolled a
+"skip if unchanged since the previous tag" gate, because a caller wired to `v*.*.*` runs on
+every release tag including the many that touch nothing it cares about. Generalising it here
+also delivers the `watch_paths` change-skip that TODO.md had filed as a post-migration
+follow-up. `fetch-depth: 0` is unconditional rather than keyed off `watch_paths`: a shallow
+clone contains no previous tag, so a conditional depth would make the skip silently wrong for
+exactly the callers who enabled it — every run would look like a first release and deploy.
+
+**`node_version` defaults to `22`, not to current LTS `24`.** Both production workers pin 22.
+A reusable whose adoption also moves the runtime a worker is built on is asking callers to
+change two variables in one PR, and to debug the result if it breaks. The default matches
+what runs today; moving to 24 is a separate, deliberate one-line change.
+
+**Concurrency is not `cancel-in-progress`.** Unlike a Pages build, cancelling wrangler
+mid-upload can leave the worker live against a half-applied set of bindings. A queued deploy
+costs a minute.
+
+**Two portability defects were found by writing the step tests, not by CI:**
+
+1. The change-skip step used `mapfile`, which is bash 4+. macOS ships bash 3.2, so
+   `run_step_tests.py` — which executes the *shipped* body — could not run on a developer's
+   laptop at all. GitHub runners have bash 5, so CI would have stayed green and the gap would
+   have surfaced only as "the tests don't work on my machine". Replaced with a `while read`
+   loop.
+2. `run_step_tests.py`'s new git helper failed for anyone with `tag.annotate=true` set
+   globally (`fatal: no tag message?` from a plain `git tag`). Tests must not depend on
+   ambient developer config, so the helper now passes `-c tag.annotate=false -c
+   tag.gpgSign=false -c commit.gpgSign=false`.
+
+The deploy step's flag assembly was also rewritten from `[ -n "$X" ] && args+=(…)` to explicit
+`if` blocks. The AND-list form is correct where it sits, but it exits non-zero when the test
+fails, so it fails the step the moment anyone appends nothing after it — the same shape as the
+Summary-step AND-list bug that `run_step_tests.py` was built for.
+
+**Not done:** the two callers are not migrated. Callers move one repo at a time, in their own
+PRs, after this is tagged.
+
+---
 
 ## 2026-08-24 — RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists
 
