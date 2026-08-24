@@ -1,0 +1,485 @@
+name: Bootstrap a public hostname for a Cloud Run service (reusable)
+
+# Gives a Cloud Run service a public hostname on a Cloudflare zone, by one of two routes.
+# Both are idempotent: safe to re-run, nothing is created twice.
+#
+#   mode: dns-only   Cloud Run **domain mapping** + a DNS-only CNAME to ghs.googlehosted.com.
+#                    Google terminates TLS with a managed cert; Cloudflare only resolves the
+#                    name. Works on every Cloudflare plan, including Free.
+#
+#   mode: proxied    A **proxied** CNAME to the service's *.run.app host, plus an Origin Rule
+#                    that rewrites the Host header to that same host. No domain mapping.
+#                    Cloudflare terminates TLS and WAF/cache/rate-limiting apply.
+#                    *** REQUIRES CLOUDFLARE PRO OR HIGHER. *** host_header on an Origin Rule
+#                    is a paid entitlement; on Free the rules API returns 400 "not entitled
+#                    to use the HostHeader override".
+#
+# Why proxied needs the Origin Rule at all: Cloud Run routes by Host. A proxied request
+# arrives at the origin with the user-facing Host (`img.example.com`), which Cloud Run does
+# not recognise unless a domain mapping registers it — and creating one defeats the proxy.
+# So the Host is rewritten to the canonical *.run.app name, which Cloud Run always accepts.
+#
+# These are two routes to ONE target — a public hostname for one service — which is why they
+# are one workflow with a `mode`, and not a `target:` switch across unlike things.
+#
+# Required IAM on service_account (stated as PERMISSIONS, not role names — all of these can
+# be held at resource scope):
+#   run.services.get                                    (resolve the *.run.app URL)
+#   run.domainmappings.create|get                       (mode: dns-only only)
+# `roles/run.viewer` covers the first; the domain-mapping verbs need `roles/run.admin` or a
+# custom role. A `proxied` caller that passes cloud_run_url explicitly needs no GCP access
+# at all — leave wif_provider/service_account empty and no auth step runs.
+#
+# Cloudflare API token scopes:
+#   Zone:Zone:Read + Zone:DNS:Edit                      (both modes)
+#   Zone:Rulesets:Edit                                  (mode: proxied — the Origin Rule)
+#   Zone:Zone Settings:Read                             (optional; the SSL-mode check)
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: 'dns-only (Cloud Run domain mapping, any CF plan) or proxied (CF in front, needs CF Pro+).'
+        type: string
+        required: true
+      hostname:
+        description: 'Public hostname users will hit, e.g. img.example.com.'
+        type: string
+        required: true
+      cf_zone_name:
+        description: 'Apex zone on Cloudflare, e.g. example.com. The zone id is looked up from it.'
+        type: string
+        required: true
+      service:
+        description: >-
+          Cloud Run service name. Required for dns-only (it is what the domain mapping points
+          at) and for a proxied run that derives cloud_run_url.
+        type: string
+        required: false
+        default: ''
+      gcp_project:
+        description: 'GCP project owning the service.'
+        type: string
+        required: false
+        default: ''
+      gcp_region:
+        description: 'Cloud Run region.'
+        type: string
+        required: false
+        default: 'asia-southeast1'
+      wif_provider:
+        description: 'Workload Identity Federation provider resource name. Optional only for a proxied run with cloud_run_url set.'
+        type: string
+        required: false
+        default: ''
+      service_account:
+        description: 'Service account email to impersonate via WIF.'
+        type: string
+        required: false
+        default: ''
+      cloud_run_url:
+        description: >-
+          The service host WITHOUT scheme, e.g. svc-xyz-as.a.run.app. Used by mode: proxied as
+          both the CNAME target and the Host override. Empty (the default) is preferred: it is
+          read from the live service, so it cannot go stale. Set it only when the caller has
+          no GCP access — a hand-copied value silently points the Origin Rule at a dead origin
+          the day the service is recreated.
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: >-
+          Print every change without making it — zone id, the DNS record that would be written,
+          the Origin Rule that would be spliced in. Nothing is created or updated.
+        type: boolean
+        required: false
+        default: false
+      wait_for_certificate:
+        description: >-
+          mode: dns-only. Poll the domain mapping until Google has issued the managed cert.
+          Typically 5-30 minutes on a first provision and instant on re-runs. A timeout WARNS
+          rather than fails — the mapping and DNS are already correct at that point, and the
+          cert lands on Google's schedule, not ours.
+        type: boolean
+        required: false
+        default: true
+      certificate_timeout_seconds:
+        description: 'Cap on the cert wait.'
+        type: number
+        required: false
+        default: 1800
+      certificate_poll_seconds:
+        description: 'Seconds between cert polls.'
+        type: number
+        required: false
+        default: 15
+      check_ssl_mode:
+        description: >-
+          mode: proxied. Warn if the zone SSL/TLS mode is not full or strict. Anything weaker
+          (Flexible) breaks cert validation to the *.run.app origin and opens a
+          man-in-the-middle gap between Cloudflare and Google. It only WARNS: the mode is
+          zone-wide, so a per-service workflow must not flip it.
+        type: boolean
+        required: false
+        default: true
+      smoke_path:
+        description: 'Path to probe over HTTPS after bootstrapping, e.g. /healthz. Empty skips it.'
+        type: string
+        required: false
+        default: ''
+      smoke_status:
+        description: 'HTTP status the smoke probe must return. Empty accepts any response that completes a TLS handshake.'
+        type: string
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Job timeout. The default accommodates a first-time cert provision.'
+        type: number
+        required: false
+        default: 40
+    secrets:
+      cloudflare_api_token:
+        description: 'Cloudflare API token — see the scope list in this file’s header.'
+        required: true
+    outputs:
+      cloud_run_url:
+        description: 'The *.run.app host used (resolved or passed in).'
+        value: ${{ jobs.bootstrap.outputs.cloud_run_url }}
+      zone_id:
+        description: 'Cloudflare zone id resolved from cf_zone_name.'
+        value: ${{ jobs.bootstrap.outputs.zone_id }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Per hostname: two runs against one hostname would race on the same DNS record and the
+  # same Origin Rule entrypoint (which is read-modify-written whole, so the loser's rule
+  # silently disappears). Different hostnames never contend.
+  group: bootstrap-cf-service-${{ inputs.hostname }}
+  cancel-in-progress: false
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v2.4.1
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      cloud_run_url: ${{ steps.runurl.outputs.cloud_run_url }}
+      zone_id: ${{ steps.zone.outputs.zone_id }}
+    steps:
+      - name: Validate inputs
+        env:
+          MODE:     ${{ inputs.mode }}
+          SERVICE:  ${{ inputs.service }}
+          RUN_URL:  ${{ inputs.cloud_run_url }}
+          WIF:      ${{ inputs.wif_provider }}
+          SA:       ${{ inputs.service_account }}
+          PROJECT:  ${{ inputs.gcp_project }}
+        run: |
+          fail() { echo "::error::$1" >&2; exit 1; }
+          case "$MODE" in
+            dns-only|proxied) ;;
+            *) fail "mode must be 'dns-only' or 'proxied', got '$MODE'." ;;
+          esac
+
+          need_gcloud=false
+          if [ "$MODE" = "dns-only" ]; then
+            # The domain mapping IS the dns-only route; it cannot be done without gcloud.
+            [ -n "$SERVICE" ] || fail "mode: dns-only requires 'service'."
+            need_gcloud=true
+          elif [ -z "$RUN_URL" ]; then
+            # Deriving the origin host is the only reason a proxied run needs GCP.
+            [ -n "$SERVICE" ] || fail "mode: proxied needs either 'cloud_run_url' or 'service' (to resolve it)."
+            need_gcloud=true
+          fi
+
+          if [ "$need_gcloud" = "true" ]; then
+            [ -n "$WIF" ] || fail "wif_provider is required unless mode is proxied AND cloud_run_url is set."
+            [ -n "$SA" ]  || fail "service_account is required unless mode is proxied AND cloud_run_url is set."
+            [ -n "$PROJECT" ] || fail "gcp_project is required unless mode is proxied AND cloud_run_url is set."
+          fi
+          echo "need_gcloud=$need_gcloud" >> "$GITHUB_ENV"
+          echo "Validated: mode=$MODE need_gcloud=$need_gcloud"
+
+      - name: Authenticate to GCP via WIF
+        if: env.need_gcloud == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+
+      - name: Set up gcloud
+        if: env.need_gcloud == 'true'
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          # `run domain-mappings` is still beta for fully-managed Cloud Run, and the beta
+          # component is not on the runner image by default.
+          install_components: 'beta'
+
+      - name: Resolve the Cloud Run URL
+        id: runurl
+        env:
+          RUN_URL: ${{ inputs.cloud_run_url }}
+          SERVICE: ${{ inputs.service }}
+          REGION:  ${{ inputs.gcp_region }}
+          PROJECT: ${{ inputs.gcp_project }}
+        run: |
+          url="$RUN_URL"
+          if [ -z "$url" ]; then
+            raw=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
+                    --format='value(status.url)' 2>/dev/null || true)
+            if [ -z "$raw" ]; then
+              echo "::error::Could not read the URL of service '$SERVICE' in $PROJECT/$REGION." >&2
+              exit 1
+            fi
+            url="${raw#https://}"
+            url="${url#http://}"
+            echo "Resolved live service URL: $url"
+          else
+            echo "Using the caller-supplied cloud_run_url: $url"
+          fi
+          echo "cloud_run_url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Converge the Cloud Run domain mapping
+        if: inputs.mode == 'dns-only'
+        env:
+          HOST:    ${{ inputs.hostname }}
+          SERVICE: ${{ inputs.service }}
+          REGION:  ${{ inputs.gcp_region }}
+          PROJECT: ${{ inputs.gcp_project }}
+          DRY:     ${{ inputs.dry_run }}
+        run: |
+          if current=$(gcloud beta run domain-mappings describe --domain="$HOST" --region="$REGION" \
+                        --project="$PROJECT" --format='value(spec.routeName)' 2>/dev/null) \
+             && [ -n "$current" ]; then
+            if [ "$current" != "$SERVICE" ]; then
+              # Re-targeting silently would move a live hostname to a different service.
+              echo "::error::$HOST is already mapped to '$current', not '$SERVICE'. Refusing to re-target; delete the mapping deliberately if that is the intent." >&2
+              exit 1
+            fi
+            echo "Domain mapping already correct: $HOST -> $SERVICE"
+          elif [ "$DRY" = "true" ]; then
+            echo "would create domain mapping: $HOST -> $SERVICE ($REGION)"
+          else
+            gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
+              --region="$REGION" --project="$PROJECT" --quiet >/dev/null
+            echo "Created domain mapping: $HOST -> $SERVICE"
+          fi
+
+      - name: Resolve the Cloudflare zone id
+        id: zone
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_NAME:    ${{ inputs.cf_zone_name }}
+        run: |
+          resp=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
+                   "https://api.cloudflare.com/client/v4/zones?name=${ZONE_NAME}")
+          if [ "$(jq -r '.success // false' <<<"$resp")" != "true" ]; then
+            echo "::error::Cloudflare rejected the zone lookup for $ZONE_NAME" >&2
+            jq -r '.errors // .' <<<"$resp" >&2
+            exit 1
+          fi
+          zone_id=$(jq -r '.result[0].id // empty' <<<"$resp")
+          if [ -z "$zone_id" ]; then
+            echo "::error::Zone '$ZONE_NAME' not found, or the token cannot read it (needs Zone:Zone:Read)." >&2
+            exit 1
+          fi
+          echo "zone_id=$zone_id" >> "$GITHUB_OUTPUT"
+          echo "Zone $ZONE_NAME -> $zone_id"
+
+      - name: Upsert the DNS record
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_ID:      ${{ steps.zone.outputs.zone_id }}
+          HOST:         ${{ inputs.hostname }}
+          MODE:         ${{ inputs.mode }}
+          RUN_URL:      ${{ steps.runurl.outputs.cloud_run_url }}
+          DRY:          ${{ inputs.dry_run }}
+        run: |
+          api="https://api.cloudflare.com/client/v4"
+          if [ "$MODE" = "dns-only" ]; then
+            target="ghs.googlehosted.com"; proxied=false
+          else
+            target="$RUN_URL"; proxied=true
+          fi
+          body=$(jq -n --arg n "$HOST" --arg c "$target" --argjson p "$proxied" \
+                   '{type:"CNAME", name:$n, content:$c, proxied:$p, ttl:1}')
+
+          existing=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
+                       "${api}/zones/${ZONE_ID}/dns_records?type=CNAME&name=${HOST}")
+          record_id=$(jq -r '.result[0].id // empty' <<<"$existing")
+
+          if [ "$DRY" = "true" ]; then
+            echo "would upsert CNAME $HOST -> $target (proxied=$proxied)${record_id:+ [updating $record_id]}"
+            exit 0
+          fi
+          if [ -n "$record_id" ]; then
+            resp=$(curl -sS -X PATCH -H "Authorization: Bearer $CF_API_TOKEN" \
+                     -H "Content-Type: application/json" -d "$body" \
+                     "${api}/zones/${ZONE_ID}/dns_records/${record_id}")
+          else
+            resp=$(curl -sS -X POST -H "Authorization: Bearer $CF_API_TOKEN" \
+                     -H "Content-Type: application/json" -d "$body" \
+                     "${api}/zones/${ZONE_ID}/dns_records")
+          fi
+          if [ "$(jq -r '.success // false' <<<"$resp")" != "true" ]; then
+            echo "::error::Cloudflare rejected the DNS upsert for $HOST" >&2
+            jq -r '.errors // .' <<<"$resp" >&2
+            exit 1
+          fi
+          echo "CNAME $HOST -> $target (proxied=$proxied)"
+
+      - name: Upsert the Origin Rule (Host header override)
+        if: inputs.mode == 'proxied'
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_ID:      ${{ steps.zone.outputs.zone_id }}
+          HOST:         ${{ inputs.hostname }}
+          RUN_URL:      ${{ steps.runurl.outputs.cloud_run_url }}
+          DRY:          ${{ inputs.dry_run }}
+          VERSION:      ${{ env.WORKFLOW_VERSION }}
+        run: |
+          api="https://api.cloudflare.com/client/v4"
+          phase="${api}/zones/${ZONE_ID}/rulesets/phases/http_request_origin/entrypoint"
+          expr="(http.host eq \"${HOST}\")"
+          new_rule=$(jq -n --arg e "$expr" --arg h "$RUN_URL" \
+                       --arg d "Override Host -> ${RUN_URL} (managed by bootstrap-cf-service ${VERSION})" \
+                       '{expression:$e, description:$d, action:"route",
+                         action_parameters:{host_header:$h}, enabled:true}')
+
+          existing=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$phase")
+          if [ "$DRY" = "true" ]; then
+            echo "would set Origin Rule: $expr -> host_header $RUN_URL"
+            jq -r '.result.rules[]? | "  existing rule: \(.expression)"' <<<"$existing" 2>/dev/null || true
+            exit 0
+          fi
+
+          if [ "$(jq -r '.success // false' <<<"$existing")" = "true" ]; then
+            # There is exactly ONE entrypoint ruleset per phase per zone, and it is written
+            # whole. Kept rules must have their server-assigned fields stripped or the PUT
+            # 400s; and our own prior rule is dropped by expression so re-runs do not stack.
+            rules=$(jq --arg e "$expr" --argjson new "$new_rule" \
+                      '[.result.rules[]? | select(.expression != $e)
+                          | del(.id, .version, .last_updated, .ref)] + [$new]' <<<"$existing")
+            resp=$(curl -sS -X PUT -H "Authorization: Bearer $CF_API_TOKEN" \
+                     -H "Content-Type: application/json" \
+                     -d "$(jq -n --argjson r "$rules" '{rules:$r}')" "$phase")
+          else
+            resp=$(curl -sS -X POST -H "Authorization: Bearer $CF_API_TOKEN" \
+                     -H "Content-Type: application/json" \
+                     -d "$(jq -n --argjson r "$new_rule" \
+                            '{name:"default", kind:"zone", phase:"http_request_origin", rules:[$r]}')" \
+                     "${api}/zones/${ZONE_ID}/rulesets")
+          fi
+          if [ "$(jq -r '.success // false' <<<"$resp")" != "true" ]; then
+            echo "::error::Cloudflare rejected the Origin Rule. A 'not entitled to use the HostHeader override' error means this zone is on the Free plan — use mode: dns-only instead." >&2
+            jq -r '.errors // .' <<<"$resp" >&2
+            exit 1
+          fi
+          echo "Origin Rule set: $HOST -> host_header $RUN_URL"
+
+      - name: Wait for the managed certificate
+        if: inputs.mode == 'dns-only' && inputs.wait_for_certificate && !inputs.dry_run
+        env:
+          HOST:     ${{ inputs.hostname }}
+          REGION:   ${{ inputs.gcp_region }}
+          PROJECT:  ${{ inputs.gcp_project }}
+          TIMEOUT:  ${{ inputs.certificate_timeout_seconds }}
+          INTERVAL: ${{ inputs.certificate_poll_seconds }}
+        run: |
+          deadline=$(( $(date +%s) + TIMEOUT ))
+          while true; do
+            json=$(gcloud beta run domain-mappings describe --domain="$HOST" --region="$REGION" \
+                     --project="$PROJECT" --format=json 2>/dev/null || echo '{}')
+            ready=$(jq -r '.status.conditions[]? | select(.type=="Ready") | .status' <<<"$json")
+            cert=$(jq -r '.status.conditions[]? | select(.type=="CertificateProvisioned") | .status' <<<"$json")
+            if [ "$ready" = "True" ] && [ "$cert" = "True" ]; then
+              echo "Certificate provisioned."
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              # NOT a failure: the mapping and the DNS record are already correct, and the
+              # cert lands on Google's schedule. Failing here would make a green run mean
+              # "Google was quick today".
+              echo "::warning::Timed out after ${TIMEOUT}s waiting for the managed cert. Mapping and DNS are in place; verify later with: curl -I https://${HOST}/"
+              break
+            fi
+            msg=$(jq -r '.status.conditions[]? | select(.type=="CertificateProvisioned") | .message // ""' <<<"$json")
+            echo "ready=${ready:-?} cert=${cert:-?}${msg:+ ($msg)} — sleeping ${INTERVAL}s"
+            sleep "$INTERVAL"
+          done
+
+      - name: Check the zone SSL/TLS mode
+        if: inputs.mode == 'proxied' && inputs.check_ssl_mode
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_ID:      ${{ steps.zone.outputs.zone_id }}
+        run: |
+          resp=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
+                   "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/settings/ssl")
+          if [ "$(jq -r '.success // false' <<<"$resp")" != "true" ]; then
+            echo "Skipped: the token cannot read zone settings (needs Zone:Zone Settings:Read)."
+            exit 0
+          fi
+          mode=$(jq -r '.result.value' <<<"$resp")
+          case "$mode" in
+            strict|full) echo "Zone SSL mode is '$mode'." ;;
+            *) echo "::warning::Zone SSL mode is '$mode'. Anything below Full breaks cert validation to the *.run.app origin and leaves a man-in-the-middle gap between Cloudflare and Google. Fix it zone-wide, not here." ;;
+          esac
+
+      - name: Smoke probe
+        if: inputs.smoke_path != '' && !inputs.dry_run
+        env:
+          HOST: ${{ inputs.hostname }}
+          PATH_: ${{ inputs.smoke_path }}
+          WANT: ${{ inputs.smoke_status }}
+        run: |
+          url="https://${HOST}${PATH_}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo "000")
+          if [ "$code" = "000" ]; then
+            # DNS and cert propagation are both eventually consistent; a fresh hostname
+            # routinely fails here and is fine minutes later. Surfacing beats failing.
+            echo "::warning::No response yet from $url — DNS or the certificate may still be propagating."
+            exit 0
+          fi
+          if [ -n "$WANT" ] && [ "$code" != "$WANT" ]; then
+            echo "::error::$url returned HTTP $code, want $WANT" >&2
+            exit 1
+          fi
+          echo "$url -> HTTP $code"
+
+      - name: Summary
+        if: always()
+        env:
+          HOST:    ${{ inputs.hostname }}
+          MODE:    ${{ inputs.mode }}
+          RUN_URL: ${{ steps.runurl.outputs.cloud_run_url }}
+          SERVICE: ${{ inputs.service }}
+          DRY:     ${{ inputs.dry_run }}
+          VERSION: ${{ env.WORKFLOW_VERSION }}
+        run: |
+          {
+            echo "## \`${HOST}\` — mode \`${MODE}\`"
+            echo ""
+            if [ "$DRY" = "true" ]; then echo "**Dry run — nothing was changed.**"; echo ""; fi
+            if [ "$MODE" = "dns-only" ]; then
+              echo "- Domain mapping: \`${HOST}\` → \`${SERVICE}\`"
+              echo "- DNS: CNAME → \`ghs.googlehosted.com\` (DNS-only)"
+              echo "- TLS: Google-managed"
+            else
+              echo "- DNS: CNAME → \`${RUN_URL}\` (proxied)"
+              echo "- Origin Rule: Host header → \`${RUN_URL}\`"
+              echo "- TLS: terminated at Cloudflare"
+            fi
+            echo ""
+            echo "<sub>bootstrap-cf-service ${VERSION}</sub>"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -64,6 +64,131 @@
       "secrets": {},
       "workflow": "bootstrap-alerts.yml"
     },
+    "bootstrap-cf-service": {
+      "inputs": {
+        "certificate_poll_seconds": {
+          "default": 15,
+          "description": "Seconds between cert polls.",
+          "required": false,
+          "type": "number"
+        },
+        "certificate_timeout_seconds": {
+          "default": 1800,
+          "description": "Cap on the cert wait.",
+          "required": false,
+          "type": "number"
+        },
+        "cf_zone_name": {
+          "default": null,
+          "description": "Apex zone on Cloudflare, e.g. example.com. The zone id is looked up from it.",
+          "required": true,
+          "type": "string"
+        },
+        "check_ssl_mode": {
+          "default": true,
+          "description": "mode: proxied. Warn if the zone SSL/TLS mode is not full or strict. Anything weaker (Flexible) breaks cert validation to the *.run.app origin and opens a man-in-the-middle gap between Cloudflare and Google. It only WARNS: the mode is zone-wide, so a per-service workflow must not flip it.",
+          "required": false,
+          "type": "boolean"
+        },
+        "cloud_run_url": {
+          "default": "",
+          "description": "The service host WITHOUT scheme, e.g. svc-xyz-as.a.run.app. Used by mode: proxied as both the CNAME target and the Host override. Empty (the default) is preferred: it is read from the live service, so it cannot go stale. Set it only when the caller has no GCP access \u2014 a hand-copied value silently points the Origin Rule at a dead origin the day the service is recreated.",
+          "required": false,
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Print every change without making it \u2014 zone id, the DNS record that would be written, the Origin Rule that would be spliced in. Nothing is created or updated.",
+          "required": false,
+          "type": "boolean"
+        },
+        "gcp_project": {
+          "default": "",
+          "description": "GCP project owning the service.",
+          "required": false,
+          "type": "string"
+        },
+        "gcp_region": {
+          "default": "asia-southeast1",
+          "description": "Cloud Run region.",
+          "required": false,
+          "type": "string"
+        },
+        "hostname": {
+          "default": null,
+          "description": "Public hostname users will hit, e.g. img.example.com.",
+          "required": true,
+          "type": "string"
+        },
+        "mode": {
+          "default": null,
+          "description": "dns-only (Cloud Run domain mapping, any CF plan) or proxied (CF in front, needs CF Pro+).",
+          "required": true,
+          "type": "string"
+        },
+        "service": {
+          "default": "",
+          "description": "Cloud Run service name. Required for dns-only (it is what the domain mapping points at) and for a proxied run that derives cloud_run_url.",
+          "required": false,
+          "type": "string"
+        },
+        "service_account": {
+          "default": "",
+          "description": "Service account email to impersonate via WIF.",
+          "required": false,
+          "type": "string"
+        },
+        "smoke_path": {
+          "default": "",
+          "description": "Path to probe over HTTPS after bootstrapping, e.g. /healthz. Empty skips it.",
+          "required": false,
+          "type": "string"
+        },
+        "smoke_status": {
+          "default": "",
+          "description": "HTTP status the smoke probe must return. Empty accepts any response that completes a TLS handshake.",
+          "required": false,
+          "type": "string"
+        },
+        "timeout_minutes": {
+          "default": 40,
+          "description": "Job timeout. The default accommodates a first-time cert provision.",
+          "required": false,
+          "type": "number"
+        },
+        "wait_for_certificate": {
+          "default": true,
+          "description": "mode: dns-only. Poll the domain mapping until Google has issued the managed cert. Typically 5-30 minutes on a first provision and instant on re-runs. A timeout WARNS rather than fails \u2014 the mapping and DNS are already correct at that point, and the cert lands on Google's schedule, not ours.",
+          "required": false,
+          "type": "boolean"
+        },
+        "wif_provider": {
+          "default": "",
+          "description": "Workload Identity Federation provider resource name. Optional only for a proxied run with cloud_run_url set.",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "bootstrap": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Bootstrap a public hostname for a Cloud Run service (reusable)",
+      "outputs": {
+        "cloud_run_url": "The *.run.app host used (resolved or passed in).",
+        "zone_id": "Cloudflare zone id resolved from cf_zone_name."
+      },
+      "path": ".github/workflows/bootstrap-cf-service.yml",
+      "secrets": {
+        "cloudflare_api_token": {
+          "description": "Cloudflare API token \u2014 see the scope list in this file\u2019s header.",
+          "required": true
+        }
+      },
+      "workflow": "bootstrap-cf-service.yml"
+    },
     "bootstrap-dashboards": {
       "inputs": {
         "dashboard_glob": {
