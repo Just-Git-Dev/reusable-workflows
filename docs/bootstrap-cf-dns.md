@@ -4,7 +4,7 @@ Converge DNS records — and optionally Origin Rules — on **one** Cloudflare z
 every record is upserted, and re-running changes nothing.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-dns.yml@v2.4.1
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-dns.yml@v2.5.0
 ```
 
 ## This or `bootstrap-cf-service`?
@@ -129,7 +129,7 @@ permissions:
 
 jobs:
   dns:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-dns.yml@v2.4.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-dns.yml@v2.5.0
     with:
       cf_zone_name: example.com
       dry_run: ${{ inputs.dry_run }}
