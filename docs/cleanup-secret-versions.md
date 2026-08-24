@@ -168,12 +168,18 @@ jobs:
     with:
       gcp_project:     auto-mahn
       gcp_region:      asia-southeast1
-      wif_provider:    projects/750513647348/locations/global/workloadIdentityPools/github/providers/github
-      service_account: github-rotator@auto-mahn.iam.gserviceaccount.com
+      wif_provider:    projects/750513647348/locations/global/workloadIdentityPools/github-actions/providers/github
+      service_account: github-cleaner@auto-mahn.iam.gserviceaccount.com
       secrets_list:    app-secrets
       dry_run:         ${{ github.event_name == 'schedule' || inputs.dry_run }}
       enable_destroy:  ${{ github.event_name != 'schedule' && inputs.enable_destroy }}
 ```
+
+Note the identity: the **cleaner, not the rotator**. The rotator's job is to ADD a
+version; this sweep's job is to DESTROY versions. One identity holding both can, in a
+single bad run, write a broken version and remove everything you would roll back to —
+so the sweep goes to whichever identity already does destructive cleanup, and the
+rotator keeps no destroy permission at all.
 
 Note what that `dry_run` expression does: the **schedule never applies**. A
 monthly cron reports the plan and nothing more; destroying is always a human
