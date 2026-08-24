@@ -64,6 +64,64 @@
       "secrets": {},
       "workflow": "bootstrap-alerts.yml"
     },
+    "bootstrap-cf-dns": {
+      "inputs": {
+        "cf_zone_name": {
+          "default": null,
+          "description": "Apex zone, e.g. example.com. The zone id is looked up from it.",
+          "required": true,
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Print every create/update/delete without performing any of them.",
+          "required": false,
+          "type": "boolean"
+        },
+        "origin_rules": {
+          "default": "[]",
+          "description": "JSON array of Origin Rules. Each entry: hostname (required unless `expression` is given) \u2014 matched exactly expression (optional) raw Cloudflare filter expression, overriding hostname host_header (required) the Host to send to the origin origin_host (optional, default host_header) the origin to connect to origin_port (optional, default 443) sni (optional, default origin_host) SNI value description (optional) Empty array (the default) leaves the ruleset completely alone \u2014 not even read.",
+          "required": false,
+          "type": "string"
+        },
+        "prune_unmanaged_origin_rules": {
+          "default": false,
+          "description": "Delete every Origin Rule this run did not declare. OFF by default, because the entrypoint ruleset is shared: bootstrap-cf-service writes a per-hostname rule into the same document, and pruning would silently delete it. Turn this on only for a zone whose Origin Rules are owned solely by this caller.",
+          "required": false,
+          "type": "boolean"
+        },
+        "records": {
+          "default": "[]",
+          "description": "JSON array of DNS records to converge. Each entry: type (required) CNAME | A | AAAA | TXT | MX | \u2026 name (required) short (\"api\") or fully-qualified (\"api.example.com\") content (required) the record value proxied (optional, default false) \u2014 Cloudflare-proxied (orange cloud) ttl (optional, default 1 = automatic) priority (optional) for MX/SRV comment (optional) shown in the Cloudflare dashboard replaces (optional) array of record TYPES to delete at this name first, e.g. [\"AAAA\"] when a hostname moves off a worker route onto a CNAME. Destructive and explicit; nothing is deleted without it. Empty array is valid \u2014 a run that only manages origin_rules.",
+          "required": false,
+          "type": "string"
+        },
+        "timeout_minutes": {
+          "default": 10,
+          "description": "Job timeout.",
+          "required": false,
+          "type": "number"
+        }
+      },
+      "jobs": {
+        "bootstrap": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Bootstrap Cloudflare zone DNS + Origin Rules (reusable)",
+      "outputs": {
+        "zone_id": "Cloudflare zone id resolved from cf_zone_name."
+      },
+      "path": ".github/workflows/bootstrap-cf-dns.yml",
+      "secrets": {
+        "cloudflare_api_token": {
+          "description": "Cloudflare API token \u2014 see the scope list in this file\u2019s header.",
+          "required": true
+        }
+      },
+      "workflow": "bootstrap-cf-dns.yml"
+    },
     "bootstrap-cf-service": {
       "inputs": {
         "certificate_poll_seconds": {

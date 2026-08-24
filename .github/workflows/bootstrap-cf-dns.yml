@@ -1,0 +1,333 @@
+name: Bootstrap Cloudflare zone DNS + Origin Rules (reusable)
+
+# Converges DNS records, and optionally Origin Rules, on ONE Cloudflare zone. Idempotent:
+# every record is upserted, and re-running changes nothing.
+#
+# This is the ZONE-level counterpart to bootstrap-cf-service, which owns a single Cloud Run
+# service's hostname. Use that one for "give this service a public name"; use this one for
+# the zone's own records — apex, verification TXT, worker routes, and the Origin Rules that
+# steer proxied hostnames at an origin.
+#
+# Cloudflare API token scopes:
+#   Zone:Zone:Read + Zone:DNS:Edit                (records)
+#   Zone:Rulesets:Edit                            (origin_rules)
+#
+# NOTE ON ORIGIN RULES AND OTHER WRITERS. A zone has exactly ONE entrypoint ruleset for the
+# http_request_origin phase, and the API writes it as a whole document. This workflow
+# therefore edits it by expression: rules it declares are upserted, and every rule it does
+# not declare is preserved untouched. That is what lets it coexist with bootstrap-cf-service,
+# which splices in a per-hostname rule of its own. `prune_unmanaged_origin_rules: true` opts
+# into the older, declarative behaviour — it deletes every rule this run did not declare,
+# INCLUDING another workflow's. See docs/bootstrap-cf-dns.md before setting it.
+
+on:
+  workflow_call:
+    inputs:
+      cf_zone_name:
+        description: 'Apex zone, e.g. example.com. The zone id is looked up from it.'
+        type: string
+        required: true
+      records:
+        description: >-
+          JSON array of DNS records to converge. Each entry:
+            type      (required) CNAME | A | AAAA | TXT | MX | …
+            name      (required) short ("api") or fully-qualified ("api.example.com")
+            content   (required) the record value
+            proxied   (optional, default false) — Cloudflare-proxied (orange cloud)
+            ttl       (optional, default 1 = automatic)
+            priority  (optional) for MX/SRV
+            comment   (optional) shown in the Cloudflare dashboard
+            replaces  (optional) array of record TYPES to delete at this name first, e.g.
+                      ["AAAA"] when a hostname moves off a worker route onto a CNAME.
+                      Destructive and explicit; nothing is deleted without it.
+          Empty array is valid — a run that only manages origin_rules.
+        type: string
+        required: false
+        default: '[]'
+      origin_rules:
+        description: >-
+          JSON array of Origin Rules. Each entry:
+            hostname    (required unless `expression` is given) — matched exactly
+            expression  (optional) raw Cloudflare filter expression, overriding hostname
+            host_header (required) the Host to send to the origin
+            origin_host (optional, default host_header) the origin to connect to
+            origin_port (optional, default 443)
+            sni         (optional, default origin_host) SNI value
+            description (optional)
+          Empty array (the default) leaves the ruleset completely alone — not even read.
+        type: string
+        required: false
+        default: '[]'
+      prune_unmanaged_origin_rules:
+        description: >-
+          Delete every Origin Rule this run did not declare. OFF by default, because the
+          entrypoint ruleset is shared: bootstrap-cf-service writes a per-hostname rule into
+          the same document, and pruning would silently delete it. Turn this on only for a
+          zone whose Origin Rules are owned solely by this caller.
+        type: boolean
+        required: false
+        default: false
+      dry_run:
+        description: 'Print every create/update/delete without performing any of them.'
+        type: boolean
+        required: false
+        default: false
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 10
+    secrets:
+      cloudflare_api_token:
+        description: 'Cloudflare API token — see the scope list in this file’s header.'
+        required: true
+    outputs:
+      zone_id:
+        description: 'Cloudflare zone id resolved from cf_zone_name.'
+        value: ${{ jobs.bootstrap.outputs.zone_id }}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per ZONE, not per record: every record write and the single Origin Rule entrypoint all
+  # belong to one zone, and the entrypoint is read-modify-written whole.
+  group: bootstrap-cf-dns-${{ inputs.cf_zone_name }}
+  cancel-in-progress: false
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v2.4.1
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      zone_id: ${{ steps.zone.outputs.zone_id }}
+    steps:
+      - name: Validate the inputs
+        env:
+          RECORDS: ${{ inputs.records }}
+          RULES:   ${{ inputs.origin_rules }}
+        run: |
+          fail() { echo "::error::$1" >&2; exit 1; }
+          jq -e 'type == "array"' <<<"$RECORDS" >/dev/null 2>&1 || fail "records must be a JSON array."
+          jq -e 'type == "array"' <<<"$RULES"   >/dev/null 2>&1 || fail "origin_rules must be a JSON array."
+
+          # Catch a malformed entry HERE rather than half way through applying the zone —
+          # a run that writes three records and then dies on the fourth leaves the zone in a
+          # state no one declared.
+          bad=$(jq -r '[to_entries[] | select((.value.type // "") == "" or (.value.name // "") == "" or (.value.content // "") == "") | .key] | join(", ")' <<<"$RECORDS")
+          [ -z "$bad" ] || fail "records[$bad] is missing type, name or content."
+          bad=$(jq -r '[to_entries[] | select((.value.host_header // "") == "" or ((.value.hostname // "") == "" and (.value.expression // "") == "")) | .key] | join(", ")' <<<"$RULES")
+          [ -z "$bad" ] || fail "origin_rules[$bad] needs host_header, and hostname or expression."
+
+          echo "$(jq 'length' <<<"$RECORDS") record(s), $(jq 'length' <<<"$RULES") origin rule(s) declared."
+
+      - name: Resolve the Cloudflare zone id
+        id: zone
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_NAME:    ${{ inputs.cf_zone_name }}
+        run: |
+          resp=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
+                   "https://api.cloudflare.com/client/v4/zones?name=${ZONE_NAME}")
+          if [ "$(jq -r '.success // false' <<<"$resp")" != "true" ]; then
+            echo "::error::Cloudflare rejected the zone lookup for $ZONE_NAME" >&2
+            jq -r '.errors // .' <<<"$resp" >&2
+            exit 1
+          fi
+          zone_id=$(jq -r '.result[0].id // empty' <<<"$resp")
+          if [ -z "$zone_id" ]; then
+            echo "::error::Zone '$ZONE_NAME' not found, or the token cannot read it (needs Zone:Zone:Read)." >&2
+            exit 1
+          fi
+          echo "zone_id=$zone_id" >> "$GITHUB_OUTPUT"
+          echo "Zone $ZONE_NAME -> $zone_id"
+
+      - name: Converge the DNS records
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_ID:      ${{ steps.zone.outputs.zone_id }}
+          ZONE_NAME:    ${{ inputs.cf_zone_name }}
+          RECORDS:      ${{ inputs.records }}
+          DRY:          ${{ inputs.dry_run }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records"
+          auth=(-H "Authorization: Bearer $CF_API_TOKEN")
+          json=(-H "Content-Type: application/json")
+          count=$(jq 'length' <<<"$RECORDS")
+          if [ "$count" -eq 0 ]; then
+            echo "No records declared."
+            exit 0
+          fi
+
+          fqdn() {
+            case "$1" in
+              "$ZONE_NAME"|*".$ZONE_NAME") printf '%s' "$1" ;;
+              "@") printf '%s' "$ZONE_NAME" ;;
+              *) printf '%s.%s' "$1" "$ZONE_NAME" ;;
+            esac
+          }
+
+          for i in $(seq 0 $((count - 1))); do
+            rec=$(jq -c ".[$i]" <<<"$RECORDS")
+            rtype=$(jq -r '.type' <<<"$rec")
+            name=$(fqdn "$(jq -r '.name' <<<"$rec")")
+            content=$(jq -r '.content' <<<"$rec")
+
+            # Delete records of other types at this name first, when asked. This is how a
+            # hostname moves between routing models (e.g. off an AAAA worker route onto a
+            # CNAME) — leaving the old type behind would keep resolving the old path.
+            for stale_type in $(jq -r '(.replaces // [])[]' <<<"$rec"); do
+              ids=$(curl -sS "${auth[@]}" "${api}?type=${stale_type}" -G \
+                      --data-urlencode "name=${name}" | jq -r '.result[]?.id')
+              for id in $ids; do
+                if [ "$DRY" = "true" ]; then
+                  echo "would delete stale ${stale_type} at ${name} (${id})"
+                else
+                  curl -sS -X DELETE "${auth[@]}" "${api}/${id}" >/dev/null
+                  echo "deleted stale ${stale_type} at ${name}"
+                fi
+              done
+            done
+
+            body=$(jq -c --arg n "$name" \
+                     '{type, name:$n, content, ttl:(.ttl // 1)}
+                      + (if .proxied  != null then {proxied}  else {proxied:false} end)
+                      + (if .priority != null then {priority} else {} end)
+                      + (if .comment  != null then {comment}  else {} end)' <<<"$rec")
+
+            # TXT is matched on CONTENT as well as name+type. Several TXT records legitimately
+            # share one name (domain-verification tokens, SPF, DMARC); matching on name+type
+            # alone would overwrite a sibling token belonging to someone else.
+            existing=$(curl -sS "${auth[@]}" "${api}?type=${rtype}" -G \
+                         --data-urlencode "name=${name}")
+            if [ "$rtype" = "TXT" ]; then
+              rec_id=$(jq -r --arg c "$content" '[.result[]? | select(.content == $c)][0].id // empty' <<<"$existing")
+            else
+              rec_id=$(jq -r '.result[0].id // empty' <<<"$existing")
+            fi
+
+            if [ "$DRY" = "true" ]; then
+              echo "would ${rec_id:+update }${rec_id:-create }${rtype} ${name} -> ${content}"
+              continue
+            fi
+            if [ -n "$rec_id" ]; then
+              resp=$(curl -sS -X PUT "${auth[@]}" "${json[@]}" -d "$body" "${api}/${rec_id}")
+              verb="updated"
+            else
+              resp=$(curl -sS -X POST "${auth[@]}" "${json[@]}" -d "$body" "$api")
+              verb="created"
+            fi
+            if [ "$(jq -r '.success // false' <<<"$resp")" != "true" ]; then
+              echo "::error::Cloudflare rejected ${rtype} ${name}" >&2
+              jq -r '.errors // .' <<<"$resp" >&2
+              exit 1
+            fi
+            echo "${verb} ${rtype} ${name} -> ${content}"
+          done
+
+      - name: Converge the Origin Rules
+        if: inputs.origin_rules != '[]' && inputs.origin_rules != ''
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_ID:      ${{ steps.zone.outputs.zone_id }}
+          RULES:        ${{ inputs.origin_rules }}
+          PRUNE:        ${{ inputs.prune_unmanaged_origin_rules }}
+          DRY:          ${{ inputs.dry_run }}
+          VERSION:      ${{ env.WORKFLOW_VERSION }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/zones/${ZONE_ID}"
+          phase="${api}/rulesets/phases/http_request_origin/entrypoint"
+          auth=(-H "Authorization: Bearer $CF_API_TOKEN")
+
+          desired=$(jq -c --arg v "$VERSION" '[.[] |
+            (.expression // ("(http.host eq \"" + .hostname + "\")")) as $expr |
+            (.origin_host // .host_header) as $oh |
+            {expression: $expr,
+             description: (.description // ("Route " + (.hostname // $expr) + " -> " + $oh + " (managed by bootstrap-cf-dns " + $v + ")")),
+             action: "route",
+             action_parameters: {
+               host_header: .host_header,
+               origin: {host: $oh, port: (.origin_port // 443)},
+               sni: {value: (.sni // $oh)}
+             },
+             enabled: true}]' <<<"$RULES")
+
+          existing=$(curl -sS "${auth[@]}" "$phase")
+          have=$([ "$(jq -r '.success // false' <<<"$existing")" = "true" ] && echo yes || echo no)
+
+          if [ "$PRUNE" = "true" ]; then
+            # Declarative: the zone's origin rules become exactly what this run declared.
+            rules="$desired"
+            # `.expression as $e` FIRST: inside the `|` pipeline `.` is the array built by
+            # `[$d[].expression]`, so an unbound `.expression` indexes an array with a string
+            # and jq aborts. Caught by a step test; shellcheck cannot see inside jq.
+            dropped=$(jq --argjson d "$desired" '[.result.rules[]? | select(.expression as $e | ([$d[].expression] | index($e)) == null) | .expression]' <<<"$existing" 2>/dev/null || echo '[]')
+            if [ "$(jq 'length' <<<"$dropped")" -gt 0 ]; then
+              echo "::warning::prune_unmanaged_origin_rules is deleting rule(s) this run did not declare: $(jq -c . <<<"$dropped")"
+            fi
+          elif [ "$have" = "yes" ]; then
+            # Preserve everything we did not declare — bootstrap-cf-service writes its own
+            # per-hostname rule into this same document. Server-assigned fields must be
+            # stripped from kept rules or Cloudflare 400s the PUT.
+            rules=$(jq -c --argjson d "$desired" \
+                      '[.result.rules[]? | select(.expression as $e | ([$d[].expression] | index($e)) == null)
+                          | del(.id, .version, .last_updated, .ref)] + $d' <<<"$existing")
+          else
+            rules="$desired"
+          fi
+
+          if [ "$DRY" = "true" ]; then
+            echo "would write $(jq 'length' <<<"$rules") origin rule(s):"
+            jq -r '.[] | "  \(.expression) -> \(.action_parameters.host_header)"' <<<"$rules"
+            exit 0
+          fi
+
+          if [ "$have" = "yes" ]; then
+            resp=$(curl -sS -X PUT "${auth[@]}" -H "Content-Type: application/json" \
+                     -d "$(jq -nc --argjson r "$rules" '{rules:$r}')" "$phase")
+          else
+            resp=$(curl -sS -X POST "${auth[@]}" -H "Content-Type: application/json" \
+                     -d "$(jq -nc --argjson r "$rules" '{name:"default", kind:"zone", phase:"http_request_origin", rules:$r}')" \
+                     "${api}/rulesets")
+          fi
+          if [ "$(jq -r '.success // false' <<<"$resp")" != "true" ]; then
+            echo "::error::Cloudflare rejected the Origin Rules. 'not entitled to use the HostHeader override' means the zone is on the Free plan." >&2
+            jq -r '.errors // .' <<<"$resp" >&2
+            exit 1
+          fi
+          jq -r '.result.rules[]? | "  \(.expression) -> \(.action_parameters.host_header)"' <<<"$resp"
+
+      - name: Summary
+        if: always()
+        env:
+          ZONE:    ${{ inputs.cf_zone_name }}
+          RECORDS: ${{ inputs.records }}
+          RULES:   ${{ inputs.origin_rules }}
+          DRY:     ${{ inputs.dry_run }}
+          PRUNE:   ${{ inputs.prune_unmanaged_origin_rules }}
+          VERSION: ${{ env.WORKFLOW_VERSION }}
+        run: |
+          {
+            echo "## Cloudflare zone \`${ZONE}\`"
+            echo ""
+            if [ "$DRY" = "true" ]; then echo "**Dry run — nothing was changed.**"; echo ""; fi
+            echo "| type | name | content | proxied |"
+            echo "|---|---|---|---|"
+            jq -r '.[] | "| \(.type) | \(.name) | \(.content) | \(.proxied // false) |"' <<<"$RECORDS" 2>/dev/null || true
+            if [ "$(jq 'length' <<<"$RULES" 2>/dev/null || echo 0)" -gt 0 ]; then
+              echo ""
+              echo "**Origin Rules** (prune_unmanaged=\`${PRUNE}\`)"
+              echo ""
+              jq -r '.[] | "- `\(.hostname // .expression)` → Host `\(.host_header)`"' <<<"$RULES" 2>/dev/null || true
+            fi
+            echo ""
+            echo "<sub>bootstrap-cf-dns ${VERSION}</sub>"
+          } >> "$GITHUB_STEP_SUMMARY"

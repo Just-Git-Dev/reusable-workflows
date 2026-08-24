@@ -39,6 +39,7 @@ WORKER = ROOT / ".github" / "workflows" / "rotate-worker-signing-secret.yml"
 SWEEP = ROOT / ".github" / "workflows" / "cleanup-secret-versions.yml"
 CFWORKER = ROOT / ".github" / "workflows" / "deploy-cloudflare-worker.yml"
 CFSERVICE = ROOT / ".github" / "workflows" / "bootstrap-cf-service.yml"
+CFDNS = ROOT / ".github" / "workflows" / "bootstrap-cf-dns.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -782,6 +783,85 @@ def run_cf_dns_step(body, *, mode="dns-only", existing_id="", dry="false"):
         meth = tmp / "method.txt"
         r["sent"] = json.loads(sent.read_text()) if sent.exists() and sent.read_text().strip() else None
         r["method"] = meth.read_text().strip() if meth.exists() else None
+        return r
+
+
+def _cf_curl_stub(get_payload_by_kind):
+    """A curl stub that answers GETs from a lookup table and records every mutation.
+
+    get_payload_by_kind maps a substring of the URL to the JSON body to return, so one stub
+    can serve both the dns_records lookups and the ruleset entrypoint.
+    """
+    branches = "".join(
+        f'  case "$url" in *{frag}*) cat <<\'JSON\'\n{payload}\nJSON\n  return 0;; esac\n'
+        for frag, payload in get_payload_by_kind.items())
+    return (
+        '#!/usr/bin/env bash\n'
+        'method=GET; data=""; url=""\n'
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        '    -X) method="$2"; shift 2;;\n'
+        '    -d) data="$2"; shift 2;;\n'
+        '    --data-urlencode) shift 2;;\n'
+        '    -H) shift 2;;\n'
+        '    -*) shift;;\n'
+        '    *) url="$1"; shift;;\n'
+        '  esac\n'
+        'done\n'
+        'answer() {\n' + branches +
+        '  echo \'{"success":true,"result":[]}\'\n'
+        '}\n'
+        'if [ "$method" = "GET" ]; then\n'
+        '  answer\n'
+        'else\n'
+        '  printf "%s\\t%s\\t%s\\n" "$method" "$url" "$data" >> "$SENT_FILE"\n'
+        '  echo \'{"success":true,"result":{"rules":[]}}\'\n'
+        'fi\n'
+    )
+
+
+def _sent_rows(path):
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text().splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        m, u, d = parts[0], parts[1], parts[2]
+        rows.append({"method": m, "url": u,
+                     "body": json.loads(d) if d.strip().startswith("{") else d})
+    return rows
+
+
+def run_cfdns_records_step(body, *, records, existing=None, dry="false", zone="example.com"):
+    """Drive the record convergence against a stubbed Cloudflare API."""
+    payload = json.dumps({"success": True, "result": existing or []})
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        sent = tmp / "sent.tsv"
+        r = _run_body(body,
+                      {"CF_API_TOKEN": "t", "ZONE_ID": "z", "ZONE_NAME": zone,
+                       "RECORDS": json.dumps(records), "DRY": dry,
+                       "SENT_FILE": str(sent)},
+                      stubs={"curl": _cf_curl_stub({"dns_records": payload})})
+        r["sent"] = _sent_rows(sent)
+        return r
+
+
+def run_cfdns_rules_step(body, *, rules, existing_rules=None, ruleset_exists=True,
+                         prune="false", dry="false"):
+    payload = json.dumps({"success": ruleset_exists,
+                          "result": {"rules": existing_rules or []}})
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        sent = tmp / "sent.tsv"
+        r = _run_body(body,
+                      {"CF_API_TOKEN": "t", "ZONE_ID": "z", "RULES": json.dumps(rules),
+                       "PRUNE": prune, "DRY": dry, "VERSION": "vTEST",
+                       "SENT_FILE": str(sent)},
+                      stubs={"curl": _cf_curl_stub({"entrypoint": payload})})
+        r["sent"] = _sent_rows(sent)
         return r
 
 
@@ -1556,6 +1636,140 @@ def main():
 
     r = run_cf_originrule_step(body, dry="true")
     check("dry_run writes no ruleset", r["sent"] is None, r["sent"])
+
+    # ── bootstrap-cf-dns ────────────────────────────────────────────────────
+    print("\nbootstrap-cf-dns · Validate the inputs")
+    body = extract_step(CFDNS, "bootstrap", "Validate the inputs")
+
+    r = _run_body(body, {"RECORDS": "[]", "RULES": "[]"})
+    check("empty arrays are valid", r["rc"] == 0, r["out"])
+
+    r = _run_body(body, {"RECORDS": "{}", "RULES": "[]"})
+    check("a non-array records input is rejected", r["rc"] == 1, r["out"])
+
+    # Validating up front matters: a run that writes three records then dies on the fourth
+    # leaves the zone in a state nobody declared.
+    r = _run_body(body, {"RECORDS": '[{"type":"A","name":"x","content":"1.2.3.4"},'
+                                    '{"type":"A","name":"y"}]', "RULES": "[]"})
+    check("a record missing content is rejected before any write", r["rc"] == 1, r["out"])
+    check("the offending index is named", "records[1]" in r["out"], r["out"])
+
+    r = _run_body(body, {"RECORDS": "[]", "RULES": '[{"hostname":"a.example.com"}]'})
+    check("an origin rule without host_header is rejected", r["rc"] == 1, r["out"])
+
+    print("\nbootstrap-cf-dns · Converge the DNS records")
+    body = extract_step(CFDNS, "bootstrap", "Converge the DNS records")
+
+    r = run_cfdns_records_step(body, records=[
+        {"type": "CNAME", "name": "api", "content": "ghs.googlehosted.com"}])
+    check("a new record is POSTed", r["sent"][0]["method"] == "POST", r["sent"])
+    check("a short name is qualified against the zone",
+          r["sent"][0]["body"]["name"] == "api.example.com", r["sent"][0]["body"])
+    check("proxied defaults to false", r["sent"][0]["body"]["proxied"] is False,
+          r["sent"][0]["body"])
+
+    r = run_cfdns_records_step(body, records=[
+        {"type": "AAAA", "name": "files", "content": "100::", "proxied": True}],
+        existing=[{"id": "rec9", "content": "100::"}])
+    check("an existing record is PUT, not duplicated", r["sent"][0]["method"] == "PUT", r["sent"])
+    check("the existing record id is targeted", "rec9" in r["sent"][0]["url"], r["sent"][0]["url"])
+    check("proxied passes through", r["sent"][0]["body"]["proxied"] is True, r["sent"][0]["body"])
+
+    # An already-qualified name must not become api.example.com.example.com.
+    r = run_cfdns_records_step(body, records=[
+        {"type": "A", "name": "api.example.com", "content": "1.2.3.4"}])
+    check("an fqdn name is left alone",
+          r["sent"][0]["body"]["name"] == "api.example.com", r["sent"][0]["body"])
+
+    r = run_cfdns_records_step(body, records=[{"type": "A", "name": "@", "content": "1.2.3.4"}])
+    check("@ resolves to the apex", r["sent"][0]["body"]["name"] == "example.com",
+          r["sent"][0]["body"])
+
+    # THE TXT CASE: several TXT records legitimately share one name (SPF, DMARC, per-vendor
+    # verification tokens). Matching on name+type alone would overwrite someone else's token.
+    r = run_cfdns_records_step(body,
+        records=[{"type": "TXT", "name": "@", "content": "realm-verify=NEW"}],
+        existing=[{"id": "txt-other", "content": "v=spf1 -all"}])
+    check("a TXT with different content creates rather than overwrites",
+          r["sent"][0]["method"] == "POST", r["sent"])
+
+    r = run_cfdns_records_step(body,
+        records=[{"type": "TXT", "name": "@", "content": "realm-verify=NEW"}],
+        existing=[{"id": "txt-other", "content": "v=spf1 -all"},
+                  {"id": "txt-mine", "content": "realm-verify=NEW"}])
+    check("a TXT with matching content updates that one",
+          r["sent"][0]["method"] == "PUT" and "txt-mine" in r["sent"][0]["url"], r["sent"])
+
+    # `replaces` is how a hostname moves between routing models; without it nothing is deleted.
+    r = run_cfdns_records_step(body, records=[
+        {"type": "CNAME", "name": "api-cr", "content": "ghs.googlehosted.com",
+         "replaces": ["AAAA"]}], existing=[{"id": "stale1", "content": "100::"}])
+    check("replaces deletes the stale type first",
+          r["sent"][0]["method"] == "DELETE" and "stale1" in r["sent"][0]["url"], r["sent"])
+    check("and still upserts the record", r["sent"][1]["method"] in ("POST", "PUT"), r["sent"])
+
+    r = run_cfdns_records_step(body, records=[
+        {"type": "CNAME", "name": "api-cr", "content": "ghs.googlehosted.com"}],
+        existing=[{"id": "stale1", "content": "100::"}])
+    check("without replaces nothing is deleted",
+          all(x["method"] != "DELETE" for x in r["sent"]), r["sent"])
+
+    r = run_cfdns_records_step(body, records=[{"type": "A", "name": "x", "content": "1.2.3.4"}],
+                               dry="true")
+    check("dry_run writes nothing", r["sent"] == [], r["sent"])
+    check("dry_run still reports the intent", "would" in r["out"], r["out"])
+
+    print("\nbootstrap-cf-dns · Converge the Origin Rules")
+    body = extract_step(CFDNS, "bootstrap", "Converge the Origin Rules")
+    mine = [{"hostname": "api.example.com", "host_header": "svc-as.a.run.app"}]
+
+    r = run_cfdns_rules_step(body, rules=mine)
+    rules = r["sent"][0]["body"]["rules"]
+    check("the rule sets host_header, origin and sni",
+          rules[0]["action_parameters"]["host_header"] == "svc-as.a.run.app"
+          and rules[0]["action_parameters"]["origin"]["host"] == "svc-as.a.run.app"
+          and rules[0]["action_parameters"]["sni"]["value"] == "svc-as.a.run.app", rules)
+    check("hostname becomes an exact-match expression",
+          rules[0]["expression"] == '(http.host eq "api.example.com")', rules)
+
+    # THE COEXISTENCE CASE. bootstrap-cf-service splices a per-hostname rule into this same
+    # document. Default behaviour must not delete it — the inline predecessor's full-ruleset
+    # PUT did exactly that.
+    other = {"expression": '(http.host eq "img.example.com")', "action": "route",
+             "action_parameters": {"host_header": "img-as.a.run.app"},
+             "id": "srv1", "version": "2", "last_updated": "x", "ref": "r"}
+    r = run_cfdns_rules_step(body, rules=mine, existing_rules=[other])
+    exprs = [x["expression"] for x in r["sent"][0]["body"]["rules"]]
+    check("another writer's rule is preserved by default",
+          '(http.host eq "img.example.com")' in exprs, exprs)
+    kept = [x for x in r["sent"][0]["body"]["rules"]
+            if x["expression"] == '(http.host eq "img.example.com")'][0]
+    check("server-assigned fields are stripped from the kept rule",
+          not any(k in kept for k in ("id", "version", "last_updated", "ref")), kept)
+
+    r = run_cfdns_rules_step(body, rules=mine, existing_rules=[other], prune="true")
+    exprs = [x["expression"] for x in r["sent"][0]["body"]["rules"]]
+    check("prune deletes the undeclared rule",
+          '(http.host eq "img.example.com")' not in exprs, exprs)
+    check("prune warns about what it dropped", "::warning::" in r["out"], r["out"])
+
+    # Re-running must refresh in place, not stack a duplicate for the same expression.
+    stale = {"expression": '(http.host eq "api.example.com")', "action": "route",
+             "action_parameters": {"host_header": "OLD-as.a.run.app"}, "id": "s1"}
+    r = run_cfdns_rules_step(body, rules=mine, existing_rules=[stale])
+    check("a re-run does not stack a duplicate",
+          len(r["sent"][0]["body"]["rules"]) == 1, r["sent"][0]["body"])
+    check("a re-run refreshes the stale origin",
+          r["sent"][0]["body"]["rules"][0]["action_parameters"]["host_header"]
+          == "svc-as.a.run.app", r["sent"][0]["body"])
+
+    r = run_cfdns_rules_step(body, rules=mine, ruleset_exists=False)
+    check("a missing entrypoint is created", r["sent"][0]["method"] == "POST", r["sent"])
+    check("the created ruleset names the origin phase",
+          r["sent"][0]["body"]["phase"] == "http_request_origin", r["sent"][0]["body"])
+
+    r = run_cfdns_rules_step(body, rules=mine, dry="true")
+    check("dry_run writes no ruleset", r["sent"] == [], r["sent"])
 
 
     if FAILURES:
