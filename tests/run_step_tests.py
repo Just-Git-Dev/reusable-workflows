@@ -38,6 +38,7 @@ KEYPAIR = ROOT / ".github" / "workflows" / "rotate-signing-keypair.yml"
 WORKER = ROOT / ".github" / "workflows" / "rotate-worker-signing-secret.yml"
 SWEEP = ROOT / ".github" / "workflows" / "cleanup-secret-versions.yml"
 CFWORKER = ROOT / ".github" / "workflows" / "deploy-cloudflare-worker.yml"
+CFSERVICE = ROOT / ".github" / "workflows" / "bootstrap-cf-service.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -656,6 +657,132 @@ def run_worker_resolve_step(body: str, *, ref_in="", require="false",
         outs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l) \
             if out.exists() else {}
         return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, **outs}
+
+
+def _run_body(body, env_extra, *, stubs=None):
+    """Run a step body under `shell: bash` with optional stub executables on PATH."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        env = dict(os.environ)
+        if stubs:
+            bin_ = tmp / "bin"
+            bin_.mkdir()
+            for name, script in stubs.items():
+                f = bin_ / name
+                f.write_text(script)
+                f.chmod(0o755)
+            env["PATH"] = f"{bin_}:{env['PATH']}"
+        env.update({k: str(v) for k, v in env_extra.items()})
+        env["GITHUB_OUTPUT"] = str(tmp / "out.txt")
+        env["GITHUB_ENV"] = str(tmp / "env.txt")
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        res = {"rc": proc.returncode, "out": proc.stdout + proc.stderr}
+        for key, fn in (("outputs", "out.txt"), ("env", "env.txt")):
+            f = tmp / fn
+            res[key] = dict(l.split("=", 1) for l in f.read_text().splitlines()
+                            if "=" in l) if f.exists() else {}
+        return res
+
+
+def run_cf_validate_step(body, **kw):
+    env = {"MODE": "", "SERVICE": "", "RUN_URL": "", "WIF": "", "SA": "", "PROJECT": ""}
+    env.update({k.upper(): v for k, v in kw.items()})
+    return _run_body(body, env)
+
+
+def run_cf_runurl_step(body, *, run_url="", service="svc", live_url="https://svc-x-as.a.run.app"):
+    gcloud = ('#!/usr/bin/env bash\n'
+              + (f'printf "%s\\n" "{live_url}"\n' if live_url else '')
+              + 'exit 0\n')
+    return _run_body(body,
+                     {"RUN_URL": run_url, "SERVICE": service,
+                      "REGION": "r", "PROJECT": "p"},
+                     stubs={"gcloud": gcloud})
+
+
+def run_cf_originrule_step(body, *, existing_rules=None, ruleset_exists=True,
+                           host="img.example.com", run_url="svc-new-as.a.run.app",
+                           dry="false"):
+    """Drive the Origin Rule splice against a stubbed Cloudflare API.
+
+    The stub records the PUT/POST body so the test can assert what would actually be sent —
+    the splice is read-modify-write of the whole zone entrypoint, so a mistake silently
+    deletes other people's rules rather than erroring.
+    """
+    if existing_rules is None:
+        existing_rules = []
+    get_payload = json.dumps({"success": ruleset_exists,
+                              "result": {"rules": existing_rules}})
+    curl = (
+        '#!/usr/bin/env bash\n'
+        'method=GET; data=""\n'
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        '    -X) method="$2"; shift 2;;\n'
+        '    -d) data="$2"; shift 2;;\n'
+        '    *) shift;;\n'
+        '  esac\n'
+        'done\n'
+        'if [ "$method" = "GET" ]; then\n'
+        "  cat <<'JSON'\n" + get_payload + "\nJSON\n"
+        'else\n'
+        '  printf "%s" "$data" > "$SENT_FILE"\n'
+        '  printf "%s\\n" "$method" > "$SENT_METHOD"\n'
+        '  echo \'{"success":true}\'\n'
+        'fi\n'
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        r = _run_body(body,
+                      {"CF_API_TOKEN": "t", "ZONE_ID": "z", "HOST": host,
+                       "RUN_URL": run_url, "DRY": dry, "VERSION": "vTEST",
+                       "SENT_FILE": str(tmp / "sent.json"),
+                       "SENT_METHOD": str(tmp / "method.txt")},
+                      stubs={"curl": curl})
+        sent = tmp / "sent.json"
+        meth = tmp / "method.txt"
+        r["sent"] = json.loads(sent.read_text()) if sent.exists() and sent.read_text().strip() else None
+        r["method"] = meth.read_text().strip() if meth.exists() else None
+        return r
+
+
+def run_cf_dns_step(body, *, mode="dns-only", existing_id="", dry="false"):
+    get_payload = json.dumps({"success": True,
+                              "result": ([{"id": existing_id}] if existing_id else [])})
+    curl = (
+        '#!/usr/bin/env bash\n'
+        'method=GET; data=""\n'
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        '    -X) method="$2"; shift 2;;\n'
+        '    -d) data="$2"; shift 2;;\n'
+        '    *) shift;;\n'
+        '  esac\n'
+        'done\n'
+        'if [ "$method" = "GET" ]; then\n'
+        "  cat <<'JSON'\n" + get_payload + "\nJSON\n"
+        'else\n'
+        '  printf "%s" "$data" > "$SENT_FILE"\n'
+        '  printf "%s\\n" "$method" > "$SENT_METHOD"\n'
+        '  echo \'{"success":true}\'\n'
+        'fi\n'
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        r = _run_body(body,
+                      {"CF_API_TOKEN": "t", "ZONE_ID": "z", "HOST": "img.example.com",
+                       "MODE": mode, "RUN_URL": "svc-x-as.a.run.app", "DRY": dry,
+                       "SENT_FILE": str(tmp / "sent.json"),
+                       "SENT_METHOD": str(tmp / "method.txt")},
+                      stubs={"curl": curl})
+        sent = tmp / "sent.json"
+        meth = tmp / "method.txt"
+        r["sent"] = json.loads(sent.read_text()) if sent.exists() and sent.read_text().strip() else None
+        r["method"] = meth.read_text().strip() if meth.exists() else None
+        return r
 
 
 def check(name, cond, detail=""):
@@ -1318,6 +1445,117 @@ def main():
     # omitting --env, and wrangler would deploy the wrong config.
     r = run_worker_deploy_step(body, env_name="")
     check("an empty env adds no --env flag", "--env" not in r["argv"], r["argv"])
+
+
+    # ── bootstrap-cf-service ────────────────────────────────────────────────
+    print("\nbootstrap-cf-service · Validate inputs")
+    body = extract_step(CFSERVICE, "bootstrap", "Validate inputs")
+
+    r = run_cf_validate_step(body, mode="sideways")
+    check("an unknown mode is rejected", r["rc"] == 1, r["out"])
+
+    # dns-only ALWAYS needs gcloud: the domain mapping is the whole route.
+    r = run_cf_validate_step(body, mode="dns-only", service="s",
+                             wif="w", sa="a", project="p")
+    check("dns-only with full GCP inputs passes", r["rc"] == 0, r["out"])
+    check("dns-only needs gcloud", r["env"].get("need_gcloud") == "true", r["env"])
+
+    r = run_cf_validate_step(body, mode="dns-only", service="s")
+    check("dns-only without WIF fails", r["rc"] == 1, r["out"])
+
+    r = run_cf_validate_step(body, mode="dns-only", wif="w", sa="a", project="p")
+    check("dns-only without a service fails", r["rc"] == 1, r["out"])
+
+    # The one path that needs no GCP access at all — today's proxied caller.
+    r = run_cf_validate_step(body, mode="proxied", run_url="svc-x-as.a.run.app")
+    check("proxied with an explicit URL needs no GCP", r["rc"] == 0, r["out"])
+    check("proxied with an explicit URL skips auth",
+          r["env"].get("need_gcloud") == "false", r["env"])
+
+    r = run_cf_validate_step(body, mode="proxied", service="s",
+                             wif="w", sa="a", project="p")
+    check("proxied can derive the URL with WIF", r["rc"] == 0, r["out"])
+    check("deriving the URL needs gcloud", r["env"].get("need_gcloud") == "true", r["env"])
+
+    r = run_cf_validate_step(body, mode="proxied")
+    check("proxied with neither URL nor service fails", r["rc"] == 1, r["out"])
+
+    print("\nbootstrap-cf-service · Resolve the Cloud Run URL")
+    body = extract_step(CFSERVICE, "bootstrap", "Resolve the Cloud Run URL")
+
+    # The scheme must come off: it is used as a CNAME target and a Host header, and
+    # "https://x.run.app" is valid in neither.
+    r = run_cf_runurl_step(body)
+    check("a resolved URL loses its scheme",
+          r["outputs"].get("cloud_run_url") == "svc-x-as.a.run.app", r["outputs"])
+
+    r = run_cf_runurl_step(body, run_url="given-as.a.run.app")
+    check("an explicit URL is used verbatim",
+          r["outputs"].get("cloud_run_url") == "given-as.a.run.app", r["outputs"])
+
+    r = run_cf_runurl_step(body, live_url="")
+    check("an unreadable service fails loudly", r["rc"] == 1, r["out"])
+
+    print("\nbootstrap-cf-service · Upsert the DNS record")
+    body = extract_step(CFSERVICE, "bootstrap", "Upsert the DNS record")
+
+    r = run_cf_dns_step(body, mode="dns-only")
+    check("dns-only points at ghs and is unproxied",
+          r["sent"]["content"] == "ghs.googlehosted.com" and r["sent"]["proxied"] is False,
+          r["sent"])
+    check("no existing record creates", r["method"] == "POST", r["method"])
+
+    r = run_cf_dns_step(body, mode="proxied", existing_id="rec1")
+    check("proxied points at the run.app host and is proxied",
+          r["sent"]["content"] == "svc-x-as.a.run.app" and r["sent"]["proxied"] is True,
+          r["sent"])
+    check("an existing record is patched, not duplicated", r["method"] == "PATCH", r["method"])
+
+    r = run_cf_dns_step(body, mode="proxied", dry="true")
+    check("dry_run writes nothing", r["sent"] is None, r["sent"])
+    check("dry_run still says what it would do", "would upsert" in r["out"], r["out"])
+
+    print("\nbootstrap-cf-service · Upsert the Origin Rule (Host header override)")
+    body = extract_step(CFSERVICE, "bootstrap", "Upsert the Origin Rule (Host header override)")
+
+    r = run_cf_originrule_step(body, existing_rules=[])
+    check("an empty ruleset gets our rule", r["method"] == "PUT", r["method"])
+    check("the rule overrides Host to the run.app host",
+          r["sent"]["rules"][0]["action_parameters"]["host_header"] == "svc-new-as.a.run.app",
+          r["sent"])
+
+    # The entrypoint is written WHOLE, so an unrelated rule that is not preserved is silently
+    # deleted from the zone. This is the failure this test exists for.
+    other = {"expression": '(http.host eq "other.example.com")', "action": "route",
+             "action_parameters": {"host_header": "other-as.a.run.app"},
+             "id": "srv1", "version": "3", "last_updated": "x", "ref": "r1"}
+    r = run_cf_originrule_step(body, existing_rules=[other])
+    exprs = [x["expression"] for x in r["sent"]["rules"]]
+    check("an unrelated rule survives the splice",
+          '(http.host eq "other.example.com")' in exprs, exprs)
+    check("our rule is appended", len(r["sent"]["rules"]) == 2, r["sent"])
+    # CF 400s on PUT if server-assigned fields are echoed back.
+    kept = [x for x in r["sent"]["rules"] if x["expression"] != '(http.host eq "img.example.com")'][0]
+    check("server-assigned fields are stripped from kept rules",
+          not any(k in kept for k in ("id", "version", "last_updated", "ref")), kept)
+
+    # Re-running must refresh in place, not stack a second rule for the same host.
+    stale = {"expression": '(http.host eq "img.example.com")', "action": "route",
+             "action_parameters": {"host_header": "svc-OLD-as.a.run.app"}, "id": "s2"}
+    r = run_cf_originrule_step(body, existing_rules=[stale])
+    check("a re-run does not stack a duplicate rule", len(r["sent"]["rules"]) == 1, r["sent"])
+    check("a re-run refreshes a stale origin host",
+          r["sent"]["rules"][0]["action_parameters"]["host_header"] == "svc-new-as.a.run.app",
+          r["sent"])
+
+    # No entrypoint yet for this phase ⇒ create the ruleset, not PUT to a missing one.
+    r = run_cf_originrule_step(body, ruleset_exists=False)
+    check("a missing entrypoint ruleset is created", r["method"] == "POST", r["method"])
+    check("the created ruleset declares the origin phase",
+          r["sent"]["phase"] == "http_request_origin", r["sent"])
+
+    r = run_cf_originrule_step(body, dry="true")
+    check("dry_run writes no ruleset", r["sent"] is None, r["sent"])
 
 
     if FAILURES:

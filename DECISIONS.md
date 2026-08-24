@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-24` — [`bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied](#2026-08-24--bootstrap-cf-service-two-routes-to-one-hostname-and-the-origin-host-stops-being-hand-copied)
 - `2026-08-24` — [`deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy](#2026-08-24--deploy-cloudflare-worker-wrangler-owns-the-workers-config-this-workflow-owns-everything-around-the-deploy)
 - `2026-08-24` — [RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists](#2026-08-24--rca-the-sweep-demanded-a-project-wide-role-to-check-a-typo-and-collapsed-multi-secret-lists)
 - `2026-08-21` — [`setup-buildx-action` 4.3.0 merged without a release: a tag is a fleet event, a patch bump is not](#2026-08-21--setup-buildx-action-430-merged-without-a-release-a-tag-is-a-fleet-event-a-patch-bump-is-not)
@@ -74,6 +75,65 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-24 — `bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied
+
+**Decision.** New reusable, absorbing `AutoMahn/project`'s `infra/cloudflare/bootstrap-cf-service-dns-only.sh`
+(192 lines) and `bootstrap-cf-service-proxy.sh` (226 lines) together with the two thin
+workflows that wrapped them. One workflow, `mode: dns-only | proxied`.
+
+**Why one workflow with a mode, when `AGENTS.md` forbids a `target:` switch.** The rule is
+one reusable per *target type*, and both modes have the same target: a public hostname for
+one Cloud Run service. They differ in the route taken to it — Google-terminated TLS behind a
+domain mapping, versus Cloudflare-terminated TLS behind a proxied CNAME and a Host-override
+Origin Rule — and that choice is forced by the zone's Cloudflare plan, not by what the caller
+is trying to achieve. A caller on Free and a caller on Pro want the identical outcome. Two
+workflows would make every caller learn which of two names matches their billing tier.
+
+This is also why `bootstrap-cf` did **not** become one workflow: its other callers manage
+zone-level DNS records and Origin Rules, which are a genuinely different target. That split
+is `bootstrap-cf-dns`.
+
+**The origin host is now resolved, not pasted.** `bootstrap-cf-service-proxy.sh` required the
+operator to supply `CLOUD_RUN_URL` — the `*.run.app` host — by hand on every dispatch, and
+the caller workflow had no GCP credentials at all. That value changes when a service is
+recreated, and a stale one points the Origin Rule at a dead origin with **nothing failing**
+until traffic does. The workflow now reads it from the live service and strips the scheme.
+`cloud_run_url` survives as an input purely for the no-GCP-access case, documented as the
+hazard it is.
+
+Because that is the *only* reason a proxied run needs GCP, WIF is optional: `mode: proxied`
+plus an explicit `cloud_run_url` runs no auth step. `dns-only` always needs it — the domain
+mapping *is* the route.
+
+**Two things deliberately warn instead of failing.**
+
+- *Certificate wait.* Google issues the managed cert once it observes the CNAME — minutes to
+  half an hour on a first provision. On timeout the mapping and the DNS record are already
+  correct, so failing would make a green run mean "Google was quick today" rather than "the
+  hostname is configured".
+- *Zone SSL mode.* It is zone-wide. A per-service workflow that flipped it would change every
+  other hostname on the zone as a side effect. Below Full it breaks validation to the
+  `*.run.app` origin and leaves a man-in-the-middle gap — worth reporting loudly, not worth
+  fixing from here.
+
+**The Origin Rule splice is the dangerous part, so it is the most tested.** A zone has exactly
+one entrypoint ruleset per phase and it is written *whole*: a read-modify-write that forgets
+someone else's rule deletes it silently, zone-wide. Step tests assert that an unrelated
+hostname's rule survives, that server-assigned fields (`id`, `version`, `last_updated`, `ref`
+— Cloudflare 400s if echoed back) are stripped from kept rules, that a re-run refreshes our
+rule in place rather than stacking a duplicate, and that a missing entrypoint is created
+rather than PUT to.
+
+**Concurrency is per hostname, not per service or per zone.** Per zone would serialise
+unrelated hostnames; per service would let two runs for one hostname race on both the DNS
+record and the entrypoint ruleset. `cancel-in-progress` is off for the same reason as
+`deploy-cloudflare-worker`.
+
+**Not done:** the two callers are not migrated, and the two shell scripts are not deleted
+from `AutoMahn/project`. Both happen in that repo's own PR, after this is tagged.
+
+---
 
 ## 2026-08-24 — `deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy
 
