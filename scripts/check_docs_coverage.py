@@ -39,7 +39,10 @@ def main():
 
     # And the reverse: a docs page whose workflow was deleted or renamed.
     for doc in sorted(DOCS.glob("*.md")):
-        if doc.stem in {"PLATFORM", "convergence-audit", "release-process"}:
+        # Standalone guidance pages, not workflow references. They have no
+        # corresponding .yml and never will.
+        if doc.stem in {"PLATFORM", "convergence-audit", "release-process",
+                        "TESTING-STANDARD"}:
             continue
         if not (WORKFLOWS / f"{doc.stem}.yml").is_file():
             problems.append(f"{doc.stem}: docs/{doc.stem}.md has no workflow")
