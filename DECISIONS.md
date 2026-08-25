@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-08-25` — [A testing standard ships as docs, before it ships as a reusable workflow](#2026-08-25--a-testing-standard-ships-as-docs-before-it-ships-as-a-reusable-workflow)
 - `2026-08-24` — [`cloud-run-update`: empty means "do not touch", and it never deploys an image](#2026-08-24--cloud-run-update-empty-means-do-not-touch-and-it-never-deploys-an-image)
 - `2026-08-24` — [`bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules](#2026-08-24--bootstrap-cf-dns-the-full-ruleset-put-was-deleting-another-workflows-origin-rules)
 - `2026-08-24` — [`bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied](#2026-08-24--bootstrap-cf-service-two-routes-to-one-hostname-and-the-origin-host-stops-being-hand-copied)
@@ -77,6 +78,41 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-08-25 — A testing standard ships as docs, before it ships as a reusable workflow
+
+`docs/TESTING-STANDARD.md` is the first document here that is not about a workflow in
+this repo. It describes the **umbrella-repo testing pattern**: how a repository gates
+code it does not contain, the six mechanisms by which a CI gate ends up green without
+ever having run, and ten principles plus an adoption scorecard derived from fixing them.
+
+Two decisions are embedded in shipping it this way.
+
+**It goes in `reusable-workflows`, not in an app repo or the private access repo.** The
+audit that produced it covered three platforms; a document filed in one of them is
+invisible to the other two. This repo is already the fleet's public, shared-ops surface
+and the only one every platform reads. It is also the repo whose `ci-go`/`ci-node`
+bodies the standard tells callers to adopt — the guidance and the mechanism now sit
+together. The document is deliberately **project-agnostic**: no org, repo, service or
+hostname appears in it, so it can be published as-is or dropped into a template repo by
+someone outside this fleet. The three per-project remediation briefs live separately, in
+`infra-provisioning/projects/<key>/TESTING-HANDOFF.md`.
+
+**It is documentation, not a workflow — for now, and on purpose.** The obvious next step
+is an `e2e-compose.yml` reusable: sibling checkout by ref, mandatory credential presence
+check, ref echo, `compose run --rm --build`, artifact upload on failure, teardown on
+always. That would collapse several hundred lines of near-duplicate YAML across two
+umbrella repos. It is not being written yet, because the two existing implementations
+still disagree on the shape of the thing being abstracted — one drives four compose tiers
+inline from workflow YAML, the other drives a single shared `stack.sh` through a shim. An
+input contract frozen across that disagreement would encode the disagreement. The
+standard's §3.3 verb contract (`up · down · seed · reset-data · test · logs`) is the
+convergence target; once both umbrellas call a driver rather than compose directly, the
+reusable has one shape to serve and can be cut against a real second caller instead of a
+hypothesis. Same rule as everywhere else here: everything in this repo is a
+`workflow_call` input, and a body written for one caller is not yet reusable.
+
+---
 
 ## 2026-08-24 — `cloud-run-update`: empty means "do not touch", and it never deploys an image
 

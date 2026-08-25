@@ -22,6 +22,11 @@ lands everywhere.
 > using these workflows end-to-end: the access your repo is granted, an "I want to… → use
 > this" index, the full lifecycle (CI → deploy → promote → operate → rollback), and a
 > copy-paste app-repo example. The catalog below is the quick reference.
+>
+> **Designing a test strategy across several repos?** Read the
+> [testing standard](docs/TESTING-STANDARD.md) — the umbrella-repo pattern: how a repo
+> gates code it does not contain, the six ways a CI gate ends up green without ever
+> running, and the ten principles + adoption scorecard that follow from fixing them.
 
 ## Workflows
 
