@@ -1,5 +1,27 @@
 # TODO — reusable-workflows
 
+## `validate-alerts` executes MQL only — PromQL is lint-only (opened 2026-09-01)
+
+- [ ] **Add a PromQL execution layer to `validate-alerts.yml`.** Layer 2 executes queries only
+      for `conditionMonitoringQueryLanguage` (the `kind == "conditionMonitoringQueryLanguage"`
+      branch at line 220). `conditionPrometheusQueryLanguage` is in the accepted-kinds list
+      (line 141), passes the offline structural lint, and is then **never run against the API**
+      — so a PromQL policy gets a green tick from a check that did not check it. Add the
+      execution step plus a `promql_checked` output mirroring `mql_checked` (lines 70/99/339)
+      and its summary line (359).
+
+      **Why it matters now:** Managed-Prometheus/OTel-ingested metrics land as
+      `prometheus.googleapis.com/<name>/<kind>` and are naturally queried in PromQL, so the
+      first application-level alert policies in the fleet will all take this path. Merging one
+      before the gate exists ships a query nobody has ever executed.
+
+      Driven by `infra-provisioning/TODO.md` → *GoFr metrics → Google Cloud* (parked
+      2026-09-01 on gofr-dev/gofr#4112). Not blocked by it — this gate is independently
+      correct and should land **before** the first `prometheus.googleapis.com/*` policy.
+
+      This is THE PATTERN: a clean report over a surface that was never read.
+
+
 ## Fallout from immutable-tag enforcement (opened 2026-08-12, v2.1.1)
 
 - [x] **`retire-gar-packages` has no immutability handling and will fail on a locked repo.**
