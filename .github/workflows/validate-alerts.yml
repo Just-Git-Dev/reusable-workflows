@@ -332,6 +332,16 @@ jobs:
             exit 1
           fi
 
+          # An empty file is the normal case (a policy set with no MQL
+          # conditions); a MISSING one means the lint did not run. A `done <`
+          # redirect over a missing file does NOT stop the loop from reporting
+          # zero-and-fine, so it is checked explicitly.
+          QUERIES="$TMPD/mql_queries.txt"
+          if [ ! -f "$QUERIES" ]; then
+            echo "::error::${QUERIES} not found — the offline lint did not produce a query list."
+            exit 1
+          fi
+
           # Read NUL-delimited (file, query) pairs.
           while IFS= read -r -d '' f && IFS= read -r -d '' q; do
             COUNT=$((COUNT + 1))
@@ -339,7 +349,9 @@ jobs:
             # `| condition ...` is an alerting-only operator; timeSeries.query
             # rejects it. Strip the trailing clause and validate the pipeline
             # that produces the value — which is where malformed MQL lives.
-            STRIPPED=$(printf '%s' "$q" | sed -E '/^[[:space:]]*\|[[:space:]]*condition\b/d')
+            # The word boundary is spelled out: `\b` is a GNU extension, and
+            # under any other sed the whole strip silently becomes a no-op.
+            STRIPPED=$(printf '%s' "$q" | sed -E '/^[[:space:]]*\|[[:space:]]*condition([[:space:]]|$)/d')
 
             BODY=$(jq -n --arg q "$STRIPPED" '{query:$q}')
             HTTP=$(curl -sS -o "$TMPD/mql.json" -w '%{http_code}' -X POST \
@@ -369,7 +381,7 @@ jobs:
                 FAILED=$((FAILED + 1))
                 ;;
             esac
-          done < "$TMPD/mql_queries.txt"
+          done < "$QUERIES"
 
           echo "mql_checked=$COUNT" >> "$GITHUB_OUTPUT"
           if [ "$FAILED" -gt 0 ]; then

@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-01` — [RCA: testing the MQL layer found two bugs in it — a missing query list read as "zero, all fine", and a GNU-only word boundary](#2026-09-01--rca-testing-the-mql-layer-found-two-bugs-in-it--a-missing-query-list-read-as-zero-all-fine-and-a-gnu-only-word-boundary)
 - `2026-09-01` — [`validate-alerts` executed MQL only: PromQL passed a lint and was never run](#2026-09-01--validate-alerts-executed-mql-only-promql-passed-a-lint-and-was-never-run)
 - `2026-08-25` — [A testing standard ships as docs, before it ships as a reusable workflow](#2026-08-25--a-testing-standard-ships-as-docs-before-it-ships-as-a-reusable-workflow)
 - `2026-08-24` — [`cloud-run-update`: empty means "do not touch", and it never deploys an image](#2026-08-24--cloud-run-update-empty-means-do-not-touch-and-it-never-deploys-an-image)
@@ -79,6 +80,61 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-01 — RCA: testing the MQL layer found two bugs in it — a missing query list read as "zero, all fine", and a GNU-only word boundary
+
+Mirroring the new PromQL tests onto the MQL execution layer (the follow-up opened earlier the
+same day) was expected to be mechanical. It found two live defects instead — which is the
+argument for having written them, and a reminder that the untested half of a pair is untested
+regardless of how closely it resembles the tested half.
+
+**Symptom** — neither had reached a user. Both were found by the first tests ever pointed at
+this step:
+1. With `mql_queries.txt` absent, the step printed `All 0 MQL query/queries validated.` and
+   exited **0**.
+2. The `| condition` strip silently did nothing under any non-GNU `sed`, so the alerting-only
+   clause would be POSTed to `timeSeries.query`, which rejects it — every MQL policy failing
+   validation for a reason that is not the policy's fault.
+
+**Root cause**
+1. `done < "$TMPD/mql_queries.txt"` was assumed to abort the step when the file is missing. It
+   does not: under `set -e` the failed redirect kills the loop, not the script, and execution
+   continues to the success print with `COUNT=0`. The PromQL layer, written hours earlier, had
+   an explicit guard for exactly this — the assumption was never carried back to the older step.
+2. `sed -E '…condition\b…'`. `\b` is a **GNU extension**, not POSIX ERE. GitHub's ubuntu
+   runners ship GNU sed, so the pattern works in production and the defect is invisible there.
+   Any other sed treats it as a literal `b`, the line never matches, and the strip becomes a
+   no-op with no error.
+
+**Why it wasn't caught** — `validate-alerts` had **zero** tests until today. It could not have
+them: every step wrote to hardcoded `/tmp` paths that `tests/run_step_tests.py` cannot isolate.
+So the repo's own validation workflow was the one workflow whose bodies had never been executed
+by anything but a live run. Both bugs are also the sort CI structurally cannot see — #1 needs a
+state (no query list) that only arises if the lint didn't run, and #2 is invisible on the exact
+platform CI uses.
+
+**Fix**
+1. The MQL step now checks for the query list explicitly and exits 1 if it is absent, matching
+   the PromQL layer: an empty list is the normal no-MQL-policies case; a *missing* one means the
+   lint did not run, and "could not check" is never "checked and fine."
+2. The word boundary is spelled out as `condition([[:space:]]|$)` — POSIX ERE, identical
+   behaviour on GNU and BSD sed. Verified both ways.
+
+Both fixes address the root cause rather than the symptom: the guard makes the failure mode
+impossible to reach silently, and the portable pattern removes the platform dependency instead
+of documenting it.
+
+**Prevention** — 23 further step-body tests, so both execution layers now hold the same
+contract under test: valid query passes and is counted; the query travels in the right shape
+(JSON body for MQL, url-encoded form for PromQL) to the right endpoint; `| condition` is
+stripped but the pipeline survives; empty list passes with a zero count; missing list fails
+with none; `400` fails and surfaces the API's message; `403` exits and writes no count; an
+unexpected status is a failure; every query runs, and one bad one among many fails the step.
+Each of four mutations — removing the guard, reverting `\b`, downgrading `403` to a warning,
+treating `400` as a pass — was confirmed to fail them. The wider lesson is already in
+`TODO.md`: **"clean locally" and "clean in CI" are different claims**, and this is the second
+instance this week (shellcheck 0.11.0 disagreeing with the runner's was the first).
+
 
 ## 2026-09-01 — `validate-alerts` executed MQL only: PromQL passed a lint and was never run
 
