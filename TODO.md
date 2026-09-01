@@ -28,12 +28,18 @@
       `{"status":"error"}` fails, and `401`/`403` exits without writing a count. See
       DECISIONS.md 2026-09-01.
 
-- [ ] **`validate-alerts` had no tests at all before this** because every step wrote to a
+- [x] **`validate-alerts` had no tests at all before this** because every step wrote to a
       hardcoded `/tmp` path that `tests/run_step_tests.py` cannot isolate. All three steps now
       resolve through `${RUNNER_TEMP:-/tmp}` and 21 step-body tests cover the lint and the
       PromQL layer. The **MQL execution layer is still untested** — the seam now exists, so
       mirroring the PromQL tests onto it is mechanical. Worth doing: it is the layer the whole
       workflow was built for.
+
+      **Done 2026-09-01** — and it was not mechanical: the mirror found two live bugs in the
+      MQL layer. A missing query list reported `All 0 MQL query/queries validated` and exited
+      0 (`done < missing` kills the loop, not the script), and the `| condition` strip used
+      `\b`, a GNU extension that silently no-ops under any other sed. Both fixed, RCA in
+      DECISIONS.md 2026-09-01. Both execution layers now hold the same contract under test.
 
 
 ## Fallout from immutable-tag enforcement (opened 2026-08-12, v2.1.1)

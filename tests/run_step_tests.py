@@ -955,14 +955,16 @@ def run_alerts_lint_step(body: str, policies: dict, *, channel=CHANNEL_OK):
                 "mql": _nul_pairs(tmp / "mql_queries.txt")}
 
 
-def run_promql_step(body: str, *, queries, statuses=("200",), bodies=None, token="t"):
-    """Execute the PromQL exec layer against a stubbed curl.
+def _run_exec_layer(body: str, *, queries, qfile, statuses, bodies, token, write_qfile=True):
+    """Execute one query-execution layer against a stubbed curl.
 
     queries:  (file, query) pairs, as the lint would have written them
+    qfile:    name of the NUL-delimited list the layer reads
     statuses: per-call HTTP code, last value repeats
     bodies:   per-call response JSON, last value repeats
+    write_qfile: False leaves the list ABSENT — "the lint never ran", which must
+                 not read as "zero queries, all fine"
     """
-    bodies = bodies or ['{"status":"success","data":{"resultType":"vector","result":[]}}']
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         stub = tmp / "bin"
@@ -985,10 +987,10 @@ cp "$b" "$out"
 printf '%s' "${{statuses[$idx]}}"
 """)
         (stub / "curl").chmod(0o755)
-        qf = tmp / "promql_queries.txt"
-        with open(qf, "wb") as fh:
-            for f, q in queries:
-                fh.write(f.encode() + b"\x00" + q.encode() + b"\x00")
+        if write_qfile:
+            with open(tmp / qfile, "wb") as fh:
+                for f, q in queries:
+                    fh.write(f.encode() + b"\x00" + q.encode() + b"\x00")
         out = tmp / "gh_output"
         out.write_text("")
         env = dict(os.environ)
@@ -1004,6 +1006,20 @@ printf '%s' "${{statuses[$idx]}}"
         return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, "outputs": outs,
                 "calls": int(n.read_text().strip() or 0),
                 "argv": argv.read_text() if argv.exists() else ""}
+
+
+def run_promql_step(body: str, *, queries, statuses=("200",), bodies=None, **kw):
+    return _run_exec_layer(
+        body, queries=queries, qfile="promql_queries.txt", statuses=statuses,
+        bodies=bodies or ['{"status":"success","data":{"resultType":"vector","result":[]}}'],
+        token=kw.pop("token", "t"), **kw)
+
+
+def run_mql_step(body: str, *, queries, statuses=("200",), bodies=None, **kw):
+    return _run_exec_layer(
+        body, queries=queries, qfile="mql_queries.txt", statuses=statuses,
+        bodies=bodies or ['{"timeSeriesData":[]}'],
+        token=kw.pop("token", "t"), **kw)
 
 
 def check(name, cond, detail=""):
@@ -2074,6 +2090,79 @@ def main():
                         bodies=['{"status":"success"}', '{"status":"error","error":"nope"}'])
     check("every query is executed, not just the first", r["calls"] == 2, r["calls"])
     check("one bad query among many fails the step", r["rc"] != 0, r["out"])
+
+    r = run_promql_step(promql, queries=Q, write_qfile=False)
+    check("an absent query list fails rather than reporting zero checked",
+          r["rc"] != 0 and "promql_checked" not in r["outputs"], r["out"])
+
+    # ---- validate-alerts: the MQL layer, mirrored -----------------------
+    # The layer the workflow was built for, and it had no test until now. Same
+    # contract as PromQL above, minus the error-envelope case (timeSeries.query
+    # signals failure with the status code) and plus the `| condition` strip.
+    r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(MQL_COND)})
+    check("lint passes a well-formed MQL policy", r["rc"] == 0, r["out"])
+    check("lint hands the MQL query to the exec layer",
+          r["mql"] and "run.googleapis.com/request_count" in r["mql"][0][1], r["mql"])
+
+    r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(
+        "  - displayName: mql\n    conditionMonitoringQueryLanguage:\n"
+        "      query: |\n        fetch x | ratio numerator: a denominator: b\n")})
+    check("the RCA's `numerator:/denominator:` form is rejected offline", r["rc"] != 0, r["out"])
+    check("and says so in the language of the fix", "two-stream form" in r["out"], r["out"])
+
+    r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(
+        "  - displayName: mql\n    conditionMonitoringQueryLanguage:\n      duration: 300s\n")})
+    check("an MQL condition with no query fails the lint", r["rc"] != 0, r["out"])
+
+    mql = extract_step(ALERTS, "validate", "Validate MQL queries against the Monitoring API")
+    M = [("infra/alerts/policy-a.yaml", "fetch cloud_run_revision | metric 'x'")]
+
+    r = run_mql_step(mql, queries=M)
+    check("a valid MQL query passes", r["rc"] == 0, r["out"])
+    check("mql_checked counts what was executed",
+          r["outputs"].get("mql_checked") == "1", r["outputs"])
+    check("the query goes to timeSeries:query", "timeSeries:query" in r["argv"], r["argv"])
+    check("the query travels as a JSON body, not a URL parameter",
+          '"query"' in r["argv"] and "fetch cloud_run_revision" in r["argv"], r["argv"])
+
+    # `| condition` is alerting-only; timeSeries.query rejects it, so the step
+    # strips it and validates the pipeline that produces the value.
+    r = run_mql_step(mql, queries=[("f.yaml", "fetch x | metric 'y'\n| condition val() > 3")])
+    check("the alerting-only `| condition` clause is stripped before the call",
+          "condition val()" not in r["argv"], r["argv"])
+    check("but the pipeline that produces the value is still sent",
+          "fetch x" in r["argv"], r["argv"])
+
+    r = run_mql_step(mql, queries=[])
+    check("no MQL queries is not a failure", r["rc"] == 0, r["out"])
+    check("and reports zero executed", r["outputs"].get("mql_checked") == "0", r["outputs"])
+
+    r = run_mql_step(mql, queries=M, statuses=("400",),
+                     bodies=['{"error":{"message":"Unknown operator: ratio"}}'])
+    check("a rejected MQL query fails the step", r["rc"] != 0, r["out"])
+    check("and surfaces the API's own message", "Unknown operator" in r["out"], r["out"])
+
+    # THE PATTERN again: "could not check" must never report as "checked".
+    r = run_mql_step(mql, queries=M, statuses=("403",),
+                     bodies=['{"error":{"message":"Permission denied"}}'])
+    check("403 fails the MQL step rather than passing", r["rc"] != 0, r["out"])
+    check("403 writes no mql_checked at all",
+          "mql_checked" not in r["outputs"], r["outputs"])
+
+    r = run_mql_step(mql, queries=M, token="")
+    check("a missing access token fails the MQL step loudly", r["rc"] != 0, r["out"])
+
+    r = run_mql_step(mql, queries=M * 2, statuses=("200", "400"),
+                     bodies=['{"timeSeriesData":[]}', '{"error":{"message":"bad"}}'])
+    check("every MQL query is executed, not just the first", r["calls"] == 2, r["calls"])
+    check("one bad MQL query among many fails the step", r["rc"] != 0, r["out"])
+
+    r = run_mql_step(mql, queries=M, statuses=("500",), bodies=['{}'])
+    check("an unexpected HTTP code is a failure, not a pass", r["rc"] != 0, r["out"])
+
+    r = run_mql_step(mql, queries=M, write_qfile=False)
+    check("an absent MQL query list fails rather than reporting zero checked",
+          r["rc"] != 0 and "mql_checked" not in r["outputs"], r["out"])
 
 
     if FAILURES:
