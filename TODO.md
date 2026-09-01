@@ -1,8 +1,8 @@
 # TODO — reusable-workflows
 
-## `validate-alerts` executes MQL only — PromQL is lint-only (opened 2026-09-01)
+## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
 
-- [ ] **Add a PromQL execution layer to `validate-alerts.yml`.** Layer 2 executes queries only
+- [x] **Add a PromQL execution layer to `validate-alerts.yml`.** Layer 2 executes queries only
       for `conditionMonitoringQueryLanguage` (the `kind == "conditionMonitoringQueryLanguage"`
       branch at line 220). `conditionPrometheusQueryLanguage` is in the accepted-kinds list
       (line 141), passes the offline structural lint, and is then **never run against the API**
@@ -20,6 +20,20 @@
       correct and should land **before** the first `prometheus.googleapis.com/*` policy.
 
       This is THE PATTERN: a clean report over a surface that was never read.
+
+      **Shipped 2026-09-01.** PromQL queries are collected by the lint and POSTed to
+      `v1/projects/<p>/location/global/prometheus/api/v1/query`; `promql_checked` output added
+      alongside `mql_checked`; `promql_found` in the summary. No new inputs and no new IAM —
+      `monitoring.timeSeries.list` covers both read paths. A `2xx` carrying
+      `{"status":"error"}` fails, and `401`/`403` exits without writing a count. See
+      DECISIONS.md 2026-09-01.
+
+- [ ] **`validate-alerts` had no tests at all before this** because every step wrote to a
+      hardcoded `/tmp` path that `tests/run_step_tests.py` cannot isolate. All three steps now
+      resolve through `${RUNNER_TEMP:-/tmp}` and 21 step-body tests cover the lint and the
+      PromQL layer. The **MQL execution layer is still untested** — the seam now exists, so
+      mirroring the PromQL tests onto it is mechanical. Worth doing: it is the layer the whole
+      workflow was built for.
 
 
 ## Fallout from immutable-tag enforcement (opened 2026-08-12, v2.1.1)

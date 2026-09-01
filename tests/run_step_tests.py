@@ -41,6 +41,7 @@ CFWORKER = ROOT / ".github" / "workflows" / "deploy-cloudflare-worker.yml"
 CFSERVICE = ROOT / ".github" / "workflows" / "bootstrap-cf-service.yml"
 CFDNS = ROOT / ".github" / "workflows" / "bootstrap-cf-dns.yml"
 CRUPDATE = ROOT / ".github" / "workflows" / "cloud-run-update.yml"
+ALERTS = ROOT / ".github" / "workflows" / "validate-alerts.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -885,6 +886,124 @@ def run_crupdate_apply_step(body, **kw):
         r = _run_body(body, env, stubs={"gcloud": gcloud})
         r["argv"] = argv.read_text().splitlines() if argv.exists() else []
         return r
+
+
+# --- validate-alerts: the offline lint and the two query-execution layers -----
+
+CHANNEL_OK = ("type: email\n"
+              "displayName: Ops\n"
+              "labels:\n"
+              "  email_address: ops@example.com\n")
+
+
+def policy_yaml(condition: str, *, name="Test policy") -> str:
+    """A policy that passes every rule in the lint except what `condition` breaks."""
+    return (f"displayName: {name}\n"
+            "combiner: OR\n"
+            "notificationChannels:\n"
+            "  - NOTIFICATION_CHANNEL_PLACEHOLDER\n"
+            "conditions:\n"
+            f"{condition}"
+            "alertStrategy:\n"
+            "  autoClose: 1800s\n")
+
+
+PROMQL_COND = ("  - displayName: promql\n"
+               "    conditionPrometheusQueryLanguage:\n"
+               "      query: |\n"
+               "        rate(automahn_reconciler_runs_total{status=\"failed\"}[5m]) > 0\n"
+               "      duration: 300s\n")
+
+MQL_COND = ("  - displayName: mql\n"
+            "    conditionMonitoringQueryLanguage:\n"
+            "      query: |\n"
+            "        fetch cloud_run_revision | metric 'run.googleapis.com/request_count'\n"
+            "      duration: 300s\n")
+
+
+def _nul_pairs(path: Path):
+    """Read the NUL-delimited (file, query) pairs the lint hands the exec layers."""
+    if not path.exists():
+        return None
+    parts = path.read_bytes().split(b"\x00")[:-1]
+    return [(parts[i].decode(), parts[i + 1].decode()) for i in range(0, len(parts), 2)]
+
+
+def run_alerts_lint_step(body: str, policies: dict, *, channel=CHANNEL_OK):
+    """Execute the offline lint over a synthetic alerts dir."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        adir = tmp / "infra" / "alerts"
+        adir.mkdir(parents=True)
+        if channel is not None:
+            (adir / "email-channel.yaml").write_text(channel)
+        for fname, text in policies.items():
+            (adir / fname).write_text(text)
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env.update(ALERTS_DIR="infra/alerts", CHANNEL_FILE="email-channel.yaml",
+                   POLICY_GLOB="policy-*.yaml", RUNNER_TEMP=str(tmp),
+                   GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        outs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l)
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, "outputs": outs,
+                "promql": _nul_pairs(tmp / "promql_queries.txt"),
+                "mql": _nul_pairs(tmp / "mql_queries.txt")}
+
+
+def run_promql_step(body: str, *, queries, statuses=("200",), bodies=None, token="t"):
+    """Execute the PromQL exec layer against a stubbed curl.
+
+    queries:  (file, query) pairs, as the lint would have written them
+    statuses: per-call HTTP code, last value repeats
+    bodies:   per-call response JSON, last value repeats
+    """
+    bodies = bodies or ['{"status":"success","data":{"resultType":"vector","result":[]}}']
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        bd = tmp / "bodies"
+        bd.mkdir()
+        for i, b in enumerate(bodies, 1):
+            (bd / str(i)).write_text(b)
+        n = tmp / "n"
+        n.write_text("0")
+        (stub / "curl").write_text(f"""#!/usr/bin/env bash
+i=$(cat {n}); i=$((i+1)); echo "$i" > {n}
+printf '%s\\n' "$@" >> {tmp}/argv.txt
+statuses=({" ".join(statuses)})
+idx=$((i-1)); last=$(( ${{#statuses[@]}} - 1 )); [ $idx -gt $last ] && idx=$last
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+b={bd}/$((idx+1)); [ -f "$b" ] || b={bd}/$(ls {bd} | sort -n | tail -1)
+cp "$b" "$out"
+printf '%s' "${{statuses[$idx]}}"
+""")
+        (stub / "curl").chmod(0o755)
+        qf = tmp / "promql_queries.txt"
+        with open(qf, "wb") as fh:
+            for f, q in queries:
+                fh.write(f.encode() + b"\x00" + q.encode() + b"\x00")
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(ACCESS_TOKEN=token, GCP_PROJECT="proj", RUNNER_TEMP=str(tmp),
+                   GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        outs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l)
+        argv = (tmp / "argv.txt")
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, "outputs": outs,
+                "calls": int(n.read_text().strip() or 0),
+                "argv": argv.read_text() if argv.exists() else ""}
 
 
 def check(name, cond, detail=""):
@@ -1883,6 +2002,78 @@ def main():
     check("dry_run calls no gcloud", r["argv"] == [], r["argv"])
     check("dry_run prints the command it would run",
           "--max-instances=9" in r["out"], r["out"])
+
+
+    # ---- validate-alerts: PromQL is executed, not merely linted ----------
+    # TODO.md/DECISIONS 2026-09-01: conditionPrometheusQueryLanguage passed the
+    # offline lint and was then never run against the API — a green tick from a
+    # check that did not check. These pin both halves of the fix.
+    lint = extract_step(ALERTS, "validate", "Lint policy files (offline)")
+
+    r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(PROMQL_COND)})
+    check("lint passes a well-formed PromQL policy", r["rc"] == 0, r["out"])
+    check("lint reports promql_found", r["outputs"].get("promql_found") == "1", r["outputs"])
+    check("lint hands the PromQL query to the exec layer",
+          r["promql"] and "automahn_reconciler_runs_total" in r["promql"][0][1], r["promql"])
+
+    r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(MQL_COND),
+                                    "policy-b.yaml": policy_yaml(PROMQL_COND)})
+    check("MQL and PromQL are counted separately",
+          (r["outputs"].get("mql_found"), r["outputs"].get("promql_found")) == ("1", "1"),
+          r["outputs"])
+
+    r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(
+        "  - displayName: promql\n    conditionPrometheusQueryLanguage:\n      duration: 300s\n")})
+    check("a PromQL condition with no query fails the lint", r["rc"] != 0, r["out"])
+
+    r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(
+        "  - displayName: promql\n    conditionPrometheusQueryLanguage:\n"
+        "      query: up\n      duration: 300\n")})
+    check("a non-string PromQL duration fails the lint", r["rc"] != 0, r["out"])
+
+    promql = extract_step(ALERTS, "validate",
+                          "Validate PromQL queries against the Monitoring API")
+    Q = [("infra/alerts/policy-a.yaml", "up > 0")]
+
+    r = run_promql_step(promql, queries=Q)
+    check("a valid PromQL query passes", r["rc"] == 0, r["out"])
+    check("promql_checked counts what was executed",
+          r["outputs"].get("promql_checked") == "1", r["outputs"])
+    check("the query is sent to the Prometheus-compatible endpoint",
+          "prometheus/api/v1/query" in r["argv"], r["argv"])
+    check("the query travels url-encoded, not spliced into the URL",
+          "query=up > 0" in r["argv"] and "--data-urlencode" in r["argv"], r["argv"])
+
+    r = run_promql_step(promql, queries=[], statuses=("200",))
+    check("no PromQL queries is not a failure", r["rc"] == 0, r["out"])
+    check("and reports zero executed", r["outputs"].get("promql_checked") == "0", r["outputs"])
+
+    r = run_promql_step(promql, queries=Q, statuses=("400",),
+                        bodies=['{"status":"error","errorType":"bad_data",'
+                                '"error":"parse error: unexpected identifier"}'])
+    check("a rejected PromQL query fails the step", r["rc"] != 0, r["out"])
+    check("and surfaces the API's own message", "parse error" in r["out"], r["out"])
+
+    # Prometheus can answer 200 with an error envelope; a 2xx must not read as OK.
+    r = run_promql_step(promql, queries=Q,
+                        bodies=['{"status":"error","error":"execution: bad range"}'])
+    check("HTTP 200 with an error envelope still fails", r["rc"] != 0, r["out"])
+
+    # THE PATTERN: never let "could not check" report as "checked and fine".
+    r = run_promql_step(promql, queries=Q, statuses=("403",),
+                        bodies=['{"error":{"message":"Permission denied"}}'])
+    check("403 fails the step rather than passing", r["rc"] != 0, r["out"])
+    check("and says the check could not run", "could not run" in r["out"], r["out"])
+    check("403 writes no promql_checked at all — 'could not check' is not a count",
+          "promql_checked" not in r["outputs"], r["outputs"])
+
+    r = run_promql_step(promql, queries=Q, token="")
+    check("a missing access token fails loudly", r["rc"] != 0, r["out"])
+
+    r = run_promql_step(promql, queries=Q * 2, statuses=("200", "400"),
+                        bodies=['{"status":"success"}', '{"status":"error","error":"nope"}'])
+    check("every query is executed, not just the first", r["calls"] == 2, r["calls"])
+    check("one bad query among many fails the step", r["rc"] != 0, r["out"])
 
 
     if FAILURES:

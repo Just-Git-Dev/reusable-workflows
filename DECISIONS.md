@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-01` — [`validate-alerts` executed MQL only: PromQL passed a lint and was never run](#2026-09-01--validate-alerts-executed-mql-only-promql-passed-a-lint-and-was-never-run)
 - `2026-08-25` — [A testing standard ships as docs, before it ships as a reusable workflow](#2026-08-25--a-testing-standard-ships-as-docs-before-it-ships-as-a-reusable-workflow)
 - `2026-08-24` — [`cloud-run-update`: empty means "do not touch", and it never deploys an image](#2026-08-24--cloud-run-update-empty-means-do-not-touch-and-it-never-deploys-an-image)
 - `2026-08-24` — [`bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules](#2026-08-24--bootstrap-cf-dns-the-full-ruleset-put-was-deleting-another-workflows-origin-rules)
@@ -78,6 +79,53 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-01 — `validate-alerts` executed MQL only: PromQL passed a lint and was never run
+
+**The gap.** Layer 2 ran `projects.timeSeries.query` for `conditionMonitoringQueryLanguage`
+and nothing else. `conditionPrometheusQueryLanguage` was in the accepted-kinds set, so it
+cleared the offline structural lint and then fell through the execution branch untouched — a
+PromQL policy earned a green tick from a workflow whose entire reason for existing is that a
+lint cannot catch a semantically invalid query. That is THE PATTERN this repo keeps hitting: a
+clean report over a surface nothing actually read.
+
+**Why now, ahead of any caller.** No policy in the fleet uses PromQL today, so this fixes
+nothing currently broken. It is deliberately pre-emptive: metrics ingested through Managed
+Prometheus/OTel land as `prometheus.googleapis.com/<name>/<kind>` and are queried in PromQL, so
+every application-level alert policy the fleet is about to grow takes this path (see
+`infra-provisioning/DECISIONS.md` 2026-09-01). Landing the gate first means the first such
+policy cannot merge lint-only. Fixing it after would mean trusting whatever had already shipped.
+
+**What it does.** `conditionPrometheusQueryLanguage` queries are collected by the lint
+alongside the MQL ones and POSTed to the Prometheus-compatible read endpoint,
+`v1/projects/<p>/location/global/prometheus/api/v1/query`. New `promql_checked` output
+mirroring `mql_checked`, plus `promql_found` in the summary. No new inputs, no new IAM:
+`monitoring.timeSeries.list` covers both read paths, so an existing caller gains the check with
+no change at all.
+
+Two rules the new layer holds that are worth stating, because both are ways a validator lies:
+
+- **A 2xx is not consent.** The Prometheus API can answer `200` carrying
+  `{"status":"error", …}`. Reading only the HTTP code — the obvious implementation, and what
+  the MQL layer can get away with because `timeSeries.query` does not do this — would pass a
+  rejected query. The step parses the envelope.
+- **"Could not check" is never "checked and fine."** `401`/`403` exits the step and writes *no*
+  `promql_checked` at all, rather than reporting `0` validated queries as a pass. Same rule as
+  the MQL layer, restated because it is the one that decays first.
+
+**Testability was a design constraint, not an afterthought.** The step bodies wrote to
+hardcoded `/tmp` paths, which `tests/run_step_tests.py` cannot isolate — which is why
+`validate-alerts` had **zero** tests despite being the repo's validation workflow. All three
+steps now resolve their scratch paths through `${RUNNER_TEMP:-/tmp}` (the idiom
+`deploy-cloudflare-pages` already uses). That seam is what makes the 21 new step-body tests
+possible; they execute the shipped bodies verbatim, and three mutations — deleting the
+envelope check, downgrading `403` to a warning, dropping the lint's query collection — were
+each confirmed to fail them.
+
+**Not done here:** no version bump. `scripts/stamp_version.py --check` asserts the tree agrees
+with *itself*, so the stamp moves at release-sweep time, not in this PR. The additive output
+makes the next release a minor.
+
 
 ## 2026-08-25 — A testing standard ships as docs, before it ships as a reusable workflow
 

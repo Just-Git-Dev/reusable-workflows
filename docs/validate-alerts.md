@@ -25,12 +25,29 @@ Structural rules encoding the exact constraints that produced the RCA's `INVALID
 - the channel placeholder must be present, or the apply writes a literal string into the
   policy.
 
-### Layer 2 — MQL execution (needs GCP auth)
+### Layer 2 — query execution (needs GCP auth)
 
-For `conditionMonitoringQueryLanguage` policies, the query is run through
-`projects.timeSeries.query`. Short of creating the policy for real, this is the only way to
-catch a semantically invalid pipeline — the RCA's headline bug was a
-`ratio numerator:/denominator:` form that is not MQL at all.
+Every policy's query is run against the API that will later evaluate it. Short of creating the
+policy for real, this is the only way to catch a semantically invalid query — the RCA's
+headline bug was a `ratio numerator:/denominator:` form that is not MQL at all.
+
+| Condition kind | Endpoint |
+|---|---|
+| `conditionMonitoringQueryLanguage` | `projects.timeSeries.query` (MQL) |
+| `conditionPrometheusQueryLanguage` | `v1/projects/<p>/location/global/prometheus/api/v1/query` (PromQL) |
+
+Both run, and a policy set may mix them. Two rules the layer holds to in either language:
+
+- **A 2xx is not consent.** The Prometheus-compatible endpoint can answer `200` with an
+  `{"status":"error"}` envelope; reading only the status code would pass a rejected query.
+- **"Could not check" is never "checked and fine".** A `401`/`403` fails the job outright and
+  writes no `*_checked` count, rather than reporting zero validated queries as success.
+
+PromQL was **lint-only until 2026-09-01** — `conditionPrometheusQueryLanguage` was accepted by
+the structural lint and then never executed, so a PromQL policy earned a green tick from a
+check that had not checked it. Metrics ingested through Managed Prometheus/OTel land as
+`prometheus.googleapis.com/<name>/<kind>` and are queried in PromQL, so that is the path
+application-level policies take. See DECISIONS.md 2026-09-01.
 
 **Omit `gcp_project` to run layer 1 alone**, with no credentials. That is the useful default
 for a fork PR.
@@ -48,16 +65,18 @@ for a fork PR.
 
 ## Outputs
 
-`policies_checked` (files that passed the offline lint), `mql_checked` (MQL queries actually
-executed — `0` when layer 2 is skipped).
+`policies_checked` (files that passed the offline lint), `mql_checked` and `promql_checked`
+(queries actually executed in each language — `0` when layer 2 is skipped).
 
-`mql_checked` is worth asserting on in a caller: it is how you tell "layer 2 passed" from
-"layer 2 never ran".
+The two `*_checked` counts are worth asserting on in a caller: they are how you tell "layer 2
+passed" from "layer 2 never ran". A policy set that is entirely PromQL has `mql_checked: 0`
+and vice versa, so assert the one that matches your policies.
 
 ## Required IAM
 
 Layer 2 only. On `service_account`: `monitoring.timeSeries.list` —
-`roles/monitoring.viewer` is enough.
+`roles/monitoring.viewer` is enough, and covers both the MQL and the Prometheus-compatible
+read path.
 
 ## Example caller
 
