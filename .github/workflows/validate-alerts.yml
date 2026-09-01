@@ -18,11 +18,18 @@ name: Validate Cloud Monitoring alert policies (reusable)
 #      30m..168h domain; displayName must be greppable; the channel
 #      placeholder must be present or the apply writes a literal string).
 #
-#   2. MQL EXECUTION — for conditionMonitoringQueryLanguage policies, run the
-#      query through `projects.timeSeries.query`. This is the only way to catch
-#      a semantically invalid pipeline (the RCA's headline bug was a
-#      `ratio numerator:/denominator:` form that is not MQL at all), short of
-#      creating the policy for real.
+#   2. QUERY EXECUTION — run every policy's query against the API that will
+#      later evaluate it. This is the only way to catch a semantically invalid
+#      query (the RCA's headline bug was a `ratio numerator:/denominator:` form
+#      that is not MQL at all), short of creating the policy for real.
+#        - conditionMonitoringQueryLanguage -> projects.timeSeries.query
+#        - conditionPrometheusQueryLanguage -> the Prometheus-compatible
+#          .../location/global/prometheus/api/v1/query endpoint
+#      Both run; a policy set may mix them. PromQL was lint-only until
+#      2026-09-01: accepted by the structural lint and then never executed,
+#      which is a green tick from a check that did not check. Metrics ingested
+#      through Managed Prometheus/OTel are queried in PromQL, so that is the
+#      path the fleet's application-level policies take.
 #
 # Layer 2 needs GCP auth; omit gcp_project to run layer 1 alone.
 
@@ -59,7 +66,8 @@ on:
       service_account:
         description: >-
           Service account to impersonate. Required when gcp_project is set.
-          Needs monitoring.timeSeries.list (roles/monitoring.viewer or .editor).
+          Needs monitoring.timeSeries.list (roles/monitoring.viewer or .editor),
+          which covers both the MQL and the Prometheus-compatible read path.
         type: string
         required: false
         default: ''
@@ -70,6 +78,9 @@ on:
       mql_checked:
         description: 'Number of MQL queries executed against the Monitoring API.'
         value: ${{ jobs.validate.outputs.mql_checked }}
+      promql_checked:
+        description: 'Number of PromQL queries executed against the Monitoring API.'
+        value: ${{ jobs.validate.outputs.promql_checked }}
 
 permissions:
   contents: read
@@ -97,6 +108,7 @@ jobs:
     outputs:
       checked: ${{ steps.lint.outputs.checked }}
       mql_checked: ${{ steps.mql.outputs.mql_checked }}
+      promql_checked: ${{ steps.promql.outputs.promql_checked }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,7 +121,7 @@ jobs:
         run: |
           if [ -n "$GCP_PROJECT" ]; then
             if [ -z "${{ inputs.wif_provider }}" ] || [ -z "${{ inputs.service_account }}" ]; then
-              echo "::error::gcp_project is set but wif_provider/service_account are not — MQL validation cannot run."
+              echo "::error::gcp_project is set but wif_provider/service_account are not — query validation cannot run."
               exit 1
             fi
           fi
@@ -117,9 +129,13 @@ jobs:
       - name: Lint policy files (offline)
         id: lint
         run: |
-          python3 - <<'PY' | tee /tmp/lint.out
+          # RUNNER_TEMP on a runner; the fallback keeps the step runnable under
+          # tests/run_step_tests.py, which executes this body verbatim.
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          python3 - <<'PY' | tee "$TMPD/lint.out"
           import glob, os, re, sys, yaml
 
+          tmpd = os.environ.get("RUNNER_TEMP") or "/tmp"
           alerts_dir = os.environ["ALERTS_DIR"]
           channel_file = os.path.join(alerts_dir, os.environ["CHANNEL_FILE"])
           policy_glob = os.path.join(alerts_dir, os.environ["POLICY_GLOB"])
@@ -172,6 +188,7 @@ jobs:
               sys.exit(1)
 
           mql_queries = []
+          promql_queries = []
           for f in files:
               try:
                   doc = yaml.safe_load(open(f)) or {}
@@ -232,6 +249,19 @@ jobs:
                       dur = (cond[kind] or {}).get("duration")
                       if dur is not None:
                           dur_seconds(dur, f, f"conditions[{i}].duration")
+                  if kind == "conditionPrometheusQueryLanguage":
+                      cfg = cond[kind] or {}
+                      q = cfg.get("query")
+                      if not q:
+                          err(f, f"conditions[{i}] PromQL condition has no query")
+                      else:
+                          promql_queries.append((f, q))
+                      # duration and evaluationInterval are both Duration fields;
+                      # a bare integer is the shape GCP rejects.
+                      for key in ("duration", "evaluationInterval"):
+                          v = cfg.get(key)
+                          if v is not None:
+                              dur_seconds(v, f, f"conditions[{i}].{key}")
 
               strategy = doc.get("alertStrategy") or {}
 
@@ -254,21 +284,25 @@ jobs:
 
               print(f"  linted: {f}")
 
-          with open("/tmp/mql_queries.txt", "w") as fh:
-              for f, q in mql_queries:
-                  # NUL-delimited: MQL is multi-line by nature.
-                  fh.write(f"{f}\x00{q}\x00")
+          # NUL-delimited: both query languages are multi-line by nature.
+          for fname, pairs in (("mql_queries.txt", mql_queries),
+                               ("promql_queries.txt", promql_queries)):
+              with open(os.path.join(tmpd, fname), "w") as fh:
+                  for f, q in pairs:
+                      fh.write(f"{f}\x00{q}\x00")
 
           print(f"checked={len(files)}")
           print(f"mql_found={len(mql_queries)}")
+          print(f"promql_found={len(promql_queries)}")
           if errors:
               print(f"\n{len(errors)} problem(s) found across {len({e[0] for e in errors})} file(s).")
               sys.exit(1)
           print(f"\nOffline lint passed: {len(files)} policy file(s).")
           PY
           {
-            grep -E '^checked=' /tmp/lint.out
-            grep -E '^mql_found=' /tmp/lint.out
+            grep -E '^checked=' "$TMPD/lint.out"
+            grep -E '^mql_found=' "$TMPD/lint.out"
+            grep -E '^promql_found=' "$TMPD/lint.out"
           } >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP via WIF
@@ -286,6 +320,7 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
+          TMPD="${RUNNER_TEMP:-/tmp}"
           COUNT=0
           FAILED=0
 
@@ -307,7 +342,7 @@ jobs:
             STRIPPED=$(printf '%s' "$q" | sed -E '/^[[:space:]]*\|[[:space:]]*condition\b/d')
 
             BODY=$(jq -n --arg q "$STRIPPED" '{query:$q}')
-            HTTP=$(curl -sS -o /tmp/mql.json -w '%{http_code}' -X POST \
+            HTTP=$(curl -sS -o "$TMPD/mql.json" -w '%{http_code}' -X POST \
               "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/timeSeries:query" \
               -H "Authorization: Bearer ${TOKEN}" \
               -H 'Content-Type: application/json' \
@@ -318,14 +353,14 @@ jobs:
                 echo "  ✅ MQL OK: $f"
                 ;;
               400)
-                MSG=$(jq -r '.error.message // "unknown"' /tmp/mql.json)
+                MSG=$(jq -r '.error.message // "unknown"' "$TMPD/mql.json")
                 echo "::error file=${f}::MQL rejected by the Monitoring API: ${MSG}"
                 FAILED=$((FAILED + 1))
                 ;;
               401|403)
                 # Never treat "could not check" as "checked and fine" — that is
                 # precisely the silent-pass this workflow exists to prevent.
-                MSG=$(jq -r '.error.message // "unknown"' /tmp/mql.json)
+                MSG=$(jq -r '.error.message // "unknown"' "$TMPD/mql.json")
                 echo "::error::MQL validation could not run (HTTP ${HTTP}: ${MSG}). The service account needs monitoring.timeSeries.list."
                 exit 1
                 ;;
@@ -334,7 +369,7 @@ jobs:
                 FAILED=$((FAILED + 1))
                 ;;
             esac
-          done < /tmp/mql_queries.txt
+          done < "$TMPD/mql_queries.txt"
 
           echo "mql_checked=$COUNT" >> "$GITHUB_OUTPUT"
           if [ "$FAILED" -gt 0 ]; then
@@ -343,24 +378,109 @@ jobs:
           fi
           echo "All ${COUNT} MQL query/queries validated."
 
+      - name: Validate PromQL queries against the Monitoring API
+        id: promql
+        if: inputs.gcp_project != ''
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          COUNT=0
+          FAILED=0
+
+          TOKEN="${ACCESS_TOKEN}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No access token available — cannot run PromQL validation."
+            exit 1
+          fi
+
+          # An empty file is the normal case (a policy set with no PromQL
+          # conditions); a MISSING one means the lint did not run, which must
+          # not read as zero-and-fine.
+          QUERIES="$TMPD/promql_queries.txt"
+          if [ ! -f "$QUERIES" ]; then
+            echo "::error::${QUERIES} not found — the offline lint did not produce a query list."
+            exit 1
+          fi
+
+          # Read NUL-delimited (file, query) pairs.
+          while IFS= read -r -d '' f && IFS= read -r -d '' q; do
+            COUNT=$((COUNT + 1))
+
+            # The alerting condition IS the whole expression — unlike MQL there
+            # is no alerting-only trailing operator to strip. `query=` is form
+            # data, never spliced into the URL: a PromQL selector is full of
+            # characters a URL would mangle.
+            HTTP=$(curl -sS -o "$TMPD/promql.json" -w '%{http_code}' -X POST \
+              "https://monitoring.googleapis.com/v1/projects/${GCP_PROJECT}/location/global/prometheus/api/v1/query" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              --data-urlencode "query=${q}" || echo "000")
+
+            # Two error shapes reach us: Prometheus's {"status":"error","error":"…"}
+            # and Google's {"error":{"message":"…"}} for auth/quota failures.
+            MSG=$(jq -r 'if (.error | type) == "object" then (.error.message // "unknown")
+                         elif (.error | type) == "string" then .error
+                         else "unknown" end' "$TMPD/promql.json" 2>/dev/null || echo "unknown")
+
+            case "$HTTP" in
+              200)
+                # A 2xx is not consent: the Prometheus API can answer 200 with an
+                # error envelope, and reading only the status code would pass it.
+                STATUS=$(jq -r '.status // "success"' "$TMPD/promql.json" 2>/dev/null || echo "success")
+                if [ "$STATUS" = "error" ]; then
+                  echo "::error file=${f}::PromQL rejected by the Monitoring API: ${MSG}"
+                  FAILED=$((FAILED + 1))
+                else
+                  echo "  ✅ PromQL OK: $f"
+                fi
+                ;;
+              400|422)
+                echo "::error file=${f}::PromQL rejected by the Monitoring API: ${MSG}"
+                FAILED=$((FAILED + 1))
+                ;;
+              401|403)
+                # Never treat "could not check" as "checked and fine" — same rule
+                # as the MQL layer, and the reason this workflow exists.
+                echo "::error::PromQL validation could not run (HTTP ${HTTP}: ${MSG}). The service account needs monitoring.timeSeries.list."
+                exit 1
+                ;;
+              *)
+                echo "::error file=${f}::PromQL check returned HTTP ${HTTP} — treating as failure."
+                FAILED=$((FAILED + 1))
+                ;;
+            esac
+          done < "$QUERIES"
+
+          echo "promql_checked=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} of ${COUNT} PromQL query/queries failed validation."
+            exit 1
+          fi
+          echo "All ${COUNT} PromQL query/queries validated."
+
       - name: Summary
         if: always()
         env:
           CHECKED:     ${{ steps.lint.outputs.checked }}
           MQL_FOUND:   ${{ steps.lint.outputs.mql_found }}
           MQL_CHECKED: ${{ steps.mql.outputs.mql_checked }}
+          PROMQL_FOUND:   ${{ steps.lint.outputs.promql_found }}
+          PROMQL_CHECKED: ${{ steps.promql.outputs.promql_checked }}
         run: |
           {
             echo "## Alert-policy validation"
             echo ""
             echo "- Policy files linted: **${CHECKED:-0}** (from \`${ALERTS_DIR}/${POLICY_GLOB}\`)"
             echo "- MQL queries found: **${MQL_FOUND:-0}**"
+            echo "- PromQL queries found: **${PROMQL_FOUND:-0}**"
             if [ -n "$GCP_PROJECT" ]; then
               echo "- MQL queries executed against \`${GCP_PROJECT}\`: **${MQL_CHECKED:-0}**"
+              echo "- PromQL queries executed against \`${GCP_PROJECT}\`: **${PROMQL_CHECKED:-0}**"
             else
-              echo "- MQL execution: _skipped_ (no \`gcp_project\` input; offline lint only)"
+              echo "- Query execution: _skipped_ (no \`gcp_project\` input; offline lint only)"
             fi
             echo ""
             echo "_The Monitoring API has no \`validateOnly\` mode for alert policies, so this"
-            echo "is a lint plus a real MQL execution — not a server-side dry run of the policy._"
+            echo "is a lint plus a real execution of every MQL and PromQL query — not a"
+            echo "server-side dry run of the policy._"
           } >> "$GITHUB_STEP_SUMMARY"

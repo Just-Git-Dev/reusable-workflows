@@ -3306,7 +3306,7 @@
         },
         "service_account": {
           "default": "",
-          "description": "Service account to impersonate. Required when gcp_project is set. Needs monitoring.timeSeries.list (roles/monitoring.viewer or .editor).",
+          "description": "Service account to impersonate. Required when gcp_project is set. Needs monitoring.timeSeries.list (roles/monitoring.viewer or .editor), which covers both the MQL and the Prometheus-compatible read path.",
           "required": false,
           "type": "string"
         },
@@ -3326,7 +3326,8 @@
       "name": "Validate Cloud Monitoring alert policies (reusable)",
       "outputs": {
         "mql_checked": "Number of MQL queries executed against the Monitoring API.",
-        "policies_checked": "Number of policy files that passed the offline lint."
+        "policies_checked": "Number of policy files that passed the offline lint.",
+        "promql_checked": "Number of PromQL queries executed against the Monitoring API."
       },
       "path": ".github/workflows/validate-alerts.yml",
       "secrets": {},
