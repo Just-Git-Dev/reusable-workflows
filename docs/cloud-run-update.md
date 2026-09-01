@@ -4,7 +4,7 @@ Apply configuration to an **existing** Cloud Run service — runtime identity, s
 env vars, mounted secrets, probes — then gate on the service's own health endpoint.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v2.5.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v2.6.0
 ```
 
 ## It never deploys an image
@@ -123,7 +123,7 @@ permissions:
 
 jobs:
   configure:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v2.5.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v2.6.0
     with:
       service: my-api
       gcp_project: my-project
