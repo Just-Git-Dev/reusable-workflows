@@ -241,6 +241,37 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       grep in CI, or a `run_step_tests.py` case per Summary step asserting rc=0 with an empty
       env. The grep is cheaper and catches all of them at once.
 
+## Convergence — operating facts that live nowhere else in this repo
+
+Moved out of session memory 2026-09-02 (see the routing rule in `~/.claude/CLAUDE.md`). These
+are the few things about running the convergence that the repo did not already record:
+
+- **The current tag is looked up, not remembered** — `gh release list`. Consumers pin an exact
+  `vX.Y.Z`; `@v1` is a frozen legacy alias and `@main` is never acceptable.
+- **Editing any `.github/workflows/*` file through the API needs the token's `workflow` OAuth
+  scope.** `repo` alone 404s — the failure looks like a missing file, not a permission error.
+  Fix with `gh auth refresh -s workflow`.
+- **`gh pr merge` may be refused by the Claude Code permission classifier**, not by GitHub —
+  hit 2026-08-12 for both batched and single-PR forms. If it stays blocked, ask the user to run
+  it as `! gh pr merge …`.
+- **Do not build consumer monitoring.** A scheduled caller-drift scan was built and de-scoped
+  the same day (2026-08-11): this repo is public, most callers are private, and shipping an
+  org-wide scanner from a public repo is the wrong trade.
+- **`zopsmart/eazyupdates-ui` → Cloudflare Pages is PARKED (2026-08-11)**, at the user's
+  request, to do platform fixes first. Nothing live changed; the GKE path still deploys. The
+  decided-and-not-to-be-relitigated shape: serve `app.eazyupdates.com` **at the root** (drop the
+  `/user` prefix); **no DNS zone move** (a subdomain custom domain works from Google Cloud DNS
+  via CNAME — only an apex needs the zone on Cloudflare, and explicit records are mandatory
+  because the zone wildcards answer every name); **two Pages projects**, one per environment;
+  config baked at build from the committed `configs/.{stage,prod}.env`; the
+  `eazyupdates.com/user` 301 belongs on the **ingress**, not in `eazyupdates-web`'s nginx.conf.
+  Build-once/promote was rejected; nginx health endpoints dropped (no signal on a CDN). Work is
+  preserved as a git bundle at `devops/.eazyupdates-pages-wip.bundle` (branch
+  `feat/cloudflare-pages-deploy`, tip `f0728e0`) and closed PR `zopsmart/eazyupdates-ui#4440`.
+  The bundle predates the root-mount decision, so it still nests under `user/`.
+  Still open: the stage hostname; whether to adopt `ci-node`'s badges; Android App Links (the
+  apex `assetlinks.json` returns HTML — already broken); the GKE decommission tail.
+
 ## Convergence — remaining work
 
 The goal (see `docs/convergence-audit.md`, 2026-07-14) is that platform app repos drop the
@@ -453,7 +484,21 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   artifact race, retention tuning, a `github_token`, and a **second `eval` seam** to a
   credential-minting workflow that five repos depend on, to serve exactly one caller. Revisit only
   if a second frontend genuinely grows a stage environment.
-- [ ] branch protection on `main` — set `enforce_admins: true` so admin direct-pushes cannot bypass the required `actionlint + shellcheck` / SHA-pin checks (they already gate PR merges, but a direct push landed a red `main`; see DECISIONS.md 2026-07-24 SC2020 entry)
+- [x] **DONE 2026-08-11, re-verified live 2026-09-02.** Branch protection on `main`:
+      `enforce_admins: true`, PR required, **0** approving reviews, **10** required status
+      contexts. Three traps worth keeping written down:
+      - The "require a pull request before merging" toggle **is** the presence of the
+        `required_pull_request_reviews` object. Setting it to `null` to drop the review
+        requirement silently drops the require-a-PR gate too — set the object with
+        `required_approving_review_count: 0` instead.
+      - Read `enforce_admins` from `/branches/main/protection/enforce_admins`. The branch
+        object reports `"enforce_admins": null`, which looks like "off" and is not.
+      - Requiring every `ci.yml` job is safe **only because no job has an `if:`** — a skipped
+        job never reports its context and would hang every PR forever.
+      Configuration is verified; enforcement is not. `git push --dry-run` does **not** exercise
+      server-side pre-receive checks, so a clean dry-run says nothing about whether protection
+      would reject the push. Escape hatch: fixing a `main` that CI cannot pass means turning
+      `enforce_admins` off first.
 - [x] **CLOSED 2026-08-20 (v2.3.1).** `sync-bundle-key.yml` / `rotate-signing-keypair.yml` / `rotate-worker-signing-secret.yml` —
   aligned the `concurrency:` group key on the bundle (`bundle-write-<proj>-<bundle>`, identical in all three;
   `bundle_key` deliberately not in the key). `tests/run_concurrency_tests.py` + a CI job assert the three
