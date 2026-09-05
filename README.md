@@ -25,8 +25,10 @@ lands everywhere.
 >
 > **Designing a test strategy across several repos?** Read the
 > [testing standard](docs/TESTING-STANDARD.md) — the umbrella-repo pattern: how a repo
-> gates code it does not contain, the six ways a CI gate ends up green without ever
-> running, and the ten principles + adoption scorecard that follow from fixing them.
+> gates code it does not contain, the seven ways a CI gate ends up green without ever
+> running, and the eleven principles + adoption scorecard that follow from fixing them.
+> It **follows** the `testing` skill, which is the source of truth for the general rules;
+> this document is their umbrella-repo application.
 
 ## Workflows
 

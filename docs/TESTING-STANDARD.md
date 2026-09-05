@@ -2,6 +2,14 @@
 
 ### A standard for umbrella repositories and the services they don't contain
 
+> **Source of truth: the `testing` skill.** The general rules — the tiers, the placement
+> rule, seed data, skips, guards, caches — live there and are maintained there. This
+> document is the **umbrella-repo application** of that skill: the failure modes that only
+> appear when a gate spans repositories it does not contain, and the machinery for them.
+> Where a principle below is the skill's rule wearing a cross-repo hat, it says so and
+> cites the section. **Nothing here overrides the skill.** If the two ever disagree, the
+> skill is right and this file has a bug — fix it here, not there.
+
 ---
 
 ## 0. Who this is for
@@ -47,7 +55,7 @@ It has a duration. It contributes to your confidence at code review. And it has 
 in its entire life, executed a single assertion against the thing it claims to
 protect.
 
-We have now seen this defect arrive by **six independent mechanisms**. They are worth
+We have now seen this defect arrive by **seven independent mechanisms**. They are worth
 enumerating precisely, because the mitigations are different for each and because once
 you know the shapes you start seeing them everywhere.
 
@@ -115,7 +123,25 @@ audits it.
 The tell: a nonzero, *stable* skip count. Stable skips are conventions, and
 conventions belong in configuration, not in runtime control flow.
 
-### 1.7 What they have in common
+### 1.7 The guard that is inert in CI and alive on a laptop
+
+A guard in repo A asserts something about repo B — every handler struct has an E2E spec,
+every route has a UI reference. It resolves the sibling by relative path
+(`"$ROOT/../ui/e2e"`), and when that directory is absent it prints a friendly note and
+exits zero. Locally the sibling *is* checked out, so it works, and the author sees it
+work. In CI nothing checks out the sibling, so it takes the skip branch on every run it
+has ever had.
+
+The tell is not in the script — it is that **the ADR and the contributor README both
+describe it as a CI gate.** Documentation asserting a gate that does not exist is the
+most expensive version of this failure, because the documentation is the reason nobody
+checks. Cross-repo guards are the umbrella's native habitat, so this one is worth
+hunting for by hand: for each guard, name the CI job that checks out the *other* repo. If
+you cannot, the guard is decoration.
+
+See the skill's §0.4 (repo guards) for the general rule.
+
+### 1.8 What they have in common
 
 Every one of these is a gate **degrading instead of failing**. The author wrote a
 graceful path for a condition they expected to be temporary, and the temporary
@@ -125,9 +151,11 @@ That gives us the first and most important principle.
 
 ---
 
-## 2. The ten principles
+## 2. The eleven principles
 
 ### Principle 1 — A gate that cannot do its job must go red
+
+*Skill §9 (local/CI parity — a conditional check fails closed). This is that rule, and this document exists because cross-repo gates break it more than any other kind.*
 
 > **No fallback. No skip. No degrade. If a gate cannot fetch, mount, build, or reach
 > what it exists to test, it fails.**
@@ -158,6 +186,8 @@ A useful phrasing to put in the error message itself:
 
 ### Principle 2 — The SUT-span rule: a test is gated by the repo that spans its system under test
 
+*Now stated generally in skill §0 — the umbrella-owns-E2E rule is a consequence of it, not the rule. What follows is how it lands when the siblings are separate repos.*
+
 > **A test belongs in — and is gated by — the smallest repository that contains
 > everything it exercises.**
 
@@ -181,6 +211,8 @@ Moving one *down* into its service repo is almost always a net win: it gets fast
 gets atomic, and it gets run.
 
 ### Principle 3 — One stack driver, no forks
+
+*Skill §0 (one driver, no forks) carries the general rule, including its sharpest form: a fork's cost is that a fix reaches only the copy that found the bug, while the un-fixed copy's suite goes on certifying the old behaviour. It also covers the case this section does not — copies that are **structurally forced** (a git hook, a compose `command:` and a CI `run:` cannot reference each other), where the answer is a guard asserting they agree, not de-duplication.*
 
 > **The compose stack has exactly one driver script. Repos that need a different
 > composition consume it through a thin shim, never a copy.**
@@ -251,6 +283,8 @@ be run casually.
 
 ### Principle 5 — Tier your stacks, and state what each tier cannot see
 
+*Skill §0 (tiers) and §8 (the spec-generated peer-mock carve-out).*
+
 > **Every stack tier carries a written statement of the bug class it is structurally
 > incapable of catching.**
 
@@ -270,6 +304,8 @@ Write it in the compose file or the job comment, in those words. Future readers 
 otherwise assume the green mocked suite means the integration works.
 
 ### Principle 6 — Build before you trust
+
+*Skill §11. The same family of failure one layer down is the **test-result cache** — skill §11.2: a suite can truncate and re-seed its entire database and the very next run will report `ok (cached)`, because the database is outside the cache key. Rebuilding the image does not save you from that; bypassing the result cache does.*
 
 > **The harness rebuilds the image under test on every invocation, unconditionally,
 > exactly once.**
@@ -302,6 +338,8 @@ Two details that cost real debugging time to discover:
   bundle.
 
 ### Principle 7 — Exclude, don't skip
+
+*Skill §14, which now also carries the **skip taxonomy** — classify a skip by its predicate, not its reason string. The dangerous one for an umbrella: a skip guarded by the test's own precondition (`if len(subjects) < 2`), which fires exactly when the test was valuable.*
 
 > **A test that does not apply to a configuration is not *in* that configuration.**
 
@@ -362,6 +400,8 @@ Ten lines of log that convert "the e2e failed" into "the e2e failed against api
 `a1b2c3d`" — the difference between a bisect and a shrug.
 
 ### Principle 9 — Every gate is observable and leaves nothing behind
+
+*Skill §10 (failure artifacts) and §11.1 (teardown).*
 
 Four steps, on every stack-based job, no exceptions:
 
@@ -427,11 +467,52 @@ are uniquely prone to.
 
 ---
 
+### Principle 11 — Test the logic inside your config, extracted from the shipped file
+
+> **A `run:` body is code. Extract it from the workflow at run time and execute it against
+> stubs — never against a transcribed copy.**
+
+*Skill §0.5 carries the general rule and the four assertions that keep the extraction
+honest. It matters disproportionately here: in a repo whose deliverable IS configuration,
+this is not a niche tier — it is the only tier there is.*
+
+A linter can lint a `run:` body; nothing runs it. `shellcheck` accepts a step that is
+wrong at runtime, and a reusable workflow's step bodies are executed in *consumers'*
+production ops runs, which is the worst place to discover the difference.
+
+Extract, stub, and fake the clock:
+
+```bash
+# Pull the step out of the shipped workflow — a pasted copy passes forever after
+# the workflow changes.
+python3 - "$WORKFLOW" "$WORK/step.sh" <<'PY'
+import sys, yaml
+jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
+runs = [s["run"] for s in jobs["<job>"]["steps"] if "run" in s]
+if len(runs) != 1:                      # the extraction found what you meant
+    sys.exit(f"expected exactly one run: step, found {len(runs)}")
+open(sys.argv[2], "w").write(runs[0])
+PY
+```
+
+The four assertions, in cross-repo terms:
+
+- **The extraction found exactly what you meant** — assert the count, not the presence.
+- **The gate is wired in.** For a reusable workflow that means the consumer's `needs:`
+  edge, not just that the job exists.
+- **The shipped constants are in range.** The case table supplies its own `ATTEMPTS`/
+  `GRACE`, so the values the workflow actually ships are invisible to every case — read
+  them out of the file and assert their relationship, or a retry loop collapsed to one
+  attempt passes the whole suite.
+- **The exit code, where two paths share one.** "Allowed because the check was green" and
+  "allowed because no check was found" both exit 0. Pin the branch with a string the run
+  must emit.
+
 ## 3. Reference implementation
 
 ### 3.1 The test layer cake
 
-Five layers, each owned by exactly one repo per Principle 2:
+Six layers, each owned by exactly one repo per Principle 2:
 
 | Layer | Lives in | Runs in CI of | Needs a stack? | Wall clock |
 |---|---|---|---|---|
@@ -440,6 +521,7 @@ Five layers, each owned by exactly one repo per Principle 2:
 | **Integration** | service repo | service repo, every push/PR | yes, service-local | 1–3 min |
 | **E2E (mocked)** | umbrella | umbrella | yes, no real backend | 2–5 min |
 | **E2E (real)** | umbrella | umbrella | yes, full multi-repo | 8–20 min |
+| **Config-embedded** | the repo shipping the config | that repo, every push/PR | no — stubs + a faked clock | seconds |
 
 The **contract** layer deserves more attention than it usually gets: it is the cheapest
 place to catch the most expensive class of cross-repo bug. Two gates pay for
@@ -606,6 +688,22 @@ Score honestly. Every "no" is a gate you cannot currently trust.
 - [ ] Dispatch-only workflows are covered by an always-on static check
 - [ ] The skip count is zero, or every skip is justified in review
 - [ ] The harness rebuilds the image under test on every invocation
+- [ ] No test-result cache is trusted on a tier with real dependencies (skill §11.2)
+- [ ] For every cross-repo guard, a named CI job checks out the *other* repo (§1.7)
+- [ ] No skip is guarded by the test's own precondition (skill §14)
+
+**Guards that can be wrong**
+- [ ] Every guard has a `--self-test`, run in CI immediately before the guard itself
+- [ ] Each self-test burns both ways — must-fire *and* must-stay-silent on the near-misses
+- [ ] Every guard reports how many subjects it examined, not just its verdict
+- [ ] Every baseline/ratchet file carries a reason **per entry**, not one per file
+- [ ] Baselines are compared as an equality, so a fixed offender fails until it is removed
+- [ ] Each guard records its default direction — does an unlisted subject pass or fail?
+
+**Config as code**
+- [ ] Every `run:` body with a loop, a retry or a decision has an extract-and-execute test
+- [ ] Those tests extract from the shipped file; no transcribed copies
+- [ ] They assert the extraction count, the wiring, and the shipped constants
 
 **Ownership**
 - [ ] Every suite lives in the smallest repo containing its system under test
@@ -648,6 +746,12 @@ Score honestly. Every "no" is a gate you cannot currently trust.
 | `workflow_dispatch:` with no other trigger and no static check | Rots undetected until needed | Always-on lint + path check |
 | `compose run` without `--build` | Tests the previous build | `--build`, or build in the driver |
 | Bare `compose build` with shared image tags | Concurrent tag export race | Build one service |
+| A guard resolving `"$ROOT/../<sibling>"` and `exit 0` when absent | Inert in CI, alive on a laptop — while the ADR calls it a CI gate | Check the sibling out, or move the guard to the repo spanning both |
+| `if len(subjects) < 2: skip` | Skips exactly when the test was valuable | Hard-fail the precondition |
+| `go test` on a tier with a real DB and no `-count=1` | `ok (cached)` after a full truncate + re-seed | Bypass the result cache in the driver |
+| A baseline compared as a subset | A fixed offender never leaves the file | Compare as an equality |
+| A transcribed copy of a `run:` body in a test | Passes forever after the workflow changes | Extract from the shipped file |
+| A guard whose success line states no count | "Passed" and "examined nothing" print the same | State the subject count |
 | `\|\| true` on a gate command | Unconditional pass | Remove; keep only on genuinely-empty `grep` |
 | Stable nonzero skip count | Real skips hide among conventional ones | Convert to `testIgnore` / project selection |
 | `docker compose …` inline in workflow YAML | The workflow *is* the driver; unrunnable locally | Move into `stack.sh` |
