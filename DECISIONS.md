@@ -106,9 +106,16 @@ that is what this file is for. Where a principle is the skill's rule wearing a c
 now says so and cites the section, rather than restating it in words that will drift.
 
 **What the audit actually found**, for the record, since it is what these edits are made of:
-- `Realm-ID/api`'s `await_ci` promotes a tag CI never judged (`exit 0` on a missing run); the
-  issuer fixed the same defect after two bad releases and the fix was never ported. §1.7's
-  sibling failure, one layer up.
+- `Realm-ID/api`'s `await_ci` exits 0 when no CI run exists for the tagged SHA, which is the
+  shape that let `issuer` promote a red CI to prod in v0.106.0. **It is not an unported fix**,
+  which is what a first pass here recorded and what this bullet said until the claim was
+  checked: `api/.github/workflows/deploy.yml:173-186` carries a dated (2026-08-31) note saying
+  the asymmetry with `issuer` is deliberate and must not be "made consistent" without
+  re-checking why — the issuer needs its walk-back because `issuer/tests.yml` has
+  `paths-ignore`, while `api/ci.yml` has none and triggers on `branches: ['**']`, so the branch
+  is unreachable there. It is a real §1.7 hazard for a different reason: the fact that makes it
+  safe lives in a different file in a different repo, so adding a `paths-ignore` to `api/ci.yml`
+  reopens the v0.106.0 hole silently. Rationale: root `DECISIONS.md` 2026-08-31.
 - `automahn/api/scripts/check-request-struct-coverage.sh` resolves `../ui/e2e` and exits 0 when
   it is absent. No CI job checks out `ui`, so it has never run there — while ADR-033 and
   `ui/e2e/README.md` both describe it as a CI gate. That is §1.7, and it is why §1.7 is here.
