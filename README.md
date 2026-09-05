@@ -179,6 +179,21 @@ because a release happened elsewhere.
 - **Third-party actions are pinned to full commit SHAs** (version in a trailing
   comment). These workflows mint cloud credentials and dump databases, so a moved
   tag would be a supply-chain event. CI enforces this on every PR.
+  First-party `Just-Git-Dev/reusable-workflows/...@vX.Y.Z` refs are exempt on
+  purpose — semver here tracks the *input contract*, and a SHA would pin the bytes
+  and discard it. To check that exemption in a consumer repo, run the gate rather
+  than grepping for it:
+
+  ```bash
+  scripts/pin_gate_behaviour.sh ../../auth/issuer ../../automahn/ui   # any repo paths
+  scripts/pin_gate_behaviour.sh --self-test                           # prove it goes red
+  ```
+
+  It executes each repo's own `Reject mutable action refs` step under GNU grep in
+  a container and asserts all four cases, including that the exemption has not
+  widened into an org-wide hole. Not wired to CI: its subjects are sibling repos
+  absent from this checkout, so a job here would find nothing and go green. See
+  [DECISIONS.md](DECISIONS.md#2026-09-05--the-pin-gate-is-verified-by-running-it-not-by-grepping-for-it).
 - **Every `run:` declares `shell: bash`.** GitHub's implicit default is `bash -e`
   — errexit on, but **`pipefail` off** — which masks a failing head-of-pipe. An
   explicit `shell: bash` runs with `-eo pipefail`.

@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-05` — [The pin gate is verified by running it, not by grepping for it](#2026-09-05--the-pin-gate-is-verified-by-running-it-not-by-grepping-for-it)
 - `2026-09-05` — [The `testing` skill becomes source of truth; TESTING-STANDARD.md follows it](#2026-09-05--the-testing-skill-becomes-source-of-truth-testing-standardmd-follows-it)
 - `2026-09-01` — [RCA: testing the MQL layer found two bugs in it — a missing query list read as "zero, all fine", and a GNU-only word boundary](#2026-09-01--rca-testing-the-mql-layer-found-two-bugs-in-it--a-missing-query-list-read-as-zero-all-fine-and-a-gnu-only-word-boundary)
 - `2026-09-01` — [`validate-alerts` executed MQL only: PromQL passed a lint and was never run](#2026-09-01--validate-alerts-executed-mql-only-promql-passed-a-lint-and-was-never-run)
@@ -82,6 +83,65 @@ archived by age only; nothing is deleted, and both files are greppable.
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-09-05 — The pin gate is verified by running it, not by grepping for it
+
+**Context.** Consumer repos carry a `pinned` gate in `workflow-hygiene.yml` that rejects
+unpinned third-party actions while exempting first-party
+`Just-Git-Dev/reusable-workflows/...@vX.Y.Z` refs, because semver there tracks the input
+contract (2026-07-01, ADR-001). Three sessions in one day tried to confirm that exemption had
+landed across the fleet by grepping for its *implementation*:
+
+```bash
+grep -c "grep -v 'Just-Git-Dev/reusable-workflows/'" <file>
+```
+
+Two of the three got `0` and concluded the fix was missing — one filed it as a P1 against four
+repos. Both zeroes were measurement errors: one session guessed a filename that does not exist,
+the other ran from the wrong directory. `grep -c` returns `0` for "path does not resolve", not
+an error, so absence of the file and absence of the fix are indistinguishable in its output.
+
+**Decision.** Ship `scripts/pin_gate_behaviour.sh` and verify the gate behaviourally. It
+extracts the `Reject mutable action refs` step's `run:` body from each repo's own
+`workflow-hygiene.yml` (`scripts/pin_gate_extract.py`, stdlib only) and executes it against
+four inputs: the repo's real tree, a planted `actions/checkout@v4`, a planted first-party
+`@v2.6.0`, and a planted `Just-Git-Dev/other-repo@main`. Verdicts come from the gate's own exit
+status.
+
+**Why, beyond "the grep was wrong".**
+
+- *A grep for an implementation is not a test of a behaviour.* It reports green for a `grep -v`
+  that is present but broken, and red for a correct regex-only implementation. It errs in both
+  directions, which is worse than a check that errs in one.
+- *The harness must run the repo's gate, not a copy of it.* The first draft pasted the pipeline
+  into the test. That draft would have gone green against a repo whose real gate was broken —
+  reproducing the exact defect it was written to detect. The file header says never to
+  reintroduce a local copy.
+- *Under GNU grep, in a container.* Dev laptops here resolve `grep` to ugrep, whose `-P` differs
+  from CI's. A host pass is not evidence about CI.
+- *The fourth assertion exists to catch a widened exemption.* Assertions 1-3 all still pass if
+  someone broadens the exclusion from the `reusable-workflows` path to the whole `Just-Git-Dev`
+  org. Only a first-party ref that *must* be rejected distinguishes an exemption from a hole.
+- *Vacuity is reported, not silently banked.* "The gate accepts the real tree" proves nothing in
+  a repo with zero first-party callers — 7 of the 14 audited. Those print `VACUOUS` and name the
+  assertion actually carrying their coverage.
+- *`--self-test` mutates a known-good gate three ways* (exemption deleted, exemption widened to
+  the org, matcher neutered) and requires the harness to go red on each, alongside an unmutated
+  control that must stay green. A checker whose red path nobody has watched fire is not evidence.
+
+**Not wired to CI, deliberately.** Its subjects are sibling consumer repos absent from this
+repo's checkout, so a CI job here would find nothing to test and go green — the inert-gate
+failure the script exists to catch. It is an operator tool: run it by hand when the gate changes
+or when a repo's copy is in doubt.
+
+**Result.** 14 repos across RI, Traide and AutoMahn: all four assertions pass in every one, and
+the P1 was withdrawn. The alleged bug was never real; had it been, the `no-exemption` mutant in
+the self-test shows exactly the output it would have produced.
+
+**Two defects found by running the harness rather than reading it.** It reused a single staging
+path, so two back-to-back runs raced Docker Desktop's file sharing and the second saw an empty
+mount — it now stages per-PID. And an empty mount iterated the literal glob and printed a `FAIL`
+attributed to a repo it had never read; it now exits 2. A harness that can return a verdict
+about a tree it did not read is worse than one that crashes.
 ## 2026-09-05 — The `testing` skill becomes source of truth; TESTING-STANDARD.md follows it
 
 **What.** `docs/TESTING-STANDARD.md` now declares the `testing` skill as source of truth and
