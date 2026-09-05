@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-05` — [The `testing` skill becomes source of truth; TESTING-STANDARD.md follows it](#2026-09-05--the-testing-skill-becomes-source-of-truth-testing-standardmd-follows-it)
 - `2026-09-01` — [RCA: testing the MQL layer found two bugs in it — a missing query list read as "zero, all fine", and a GNU-only word boundary](#2026-09-01--rca-testing-the-mql-layer-found-two-bugs-in-it--a-missing-query-list-read-as-zero-all-fine-and-a-gnu-only-word-boundary)
 - `2026-09-01` — [`validate-alerts` executed MQL only: PromQL passed a lint and was never run](#2026-09-01--validate-alerts-executed-mql-only-promql-passed-a-lint-and-was-never-run)
 - `2026-08-25` — [A testing standard ships as docs, before it ships as a reusable workflow](#2026-08-25--a-testing-standard-ships-as-docs-before-it-ships-as-a-reusable-workflow)
@@ -80,6 +81,51 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-05 — The `testing` skill becomes source of truth; TESTING-STANDARD.md follows it
+
+**What.** `docs/TESTING-STANDARD.md` now declares the `testing` skill as source of truth and
+positions itself as that skill's umbrella-repo application. Seven rules derived from auditing
+RI, Traide and AutoMahn were written into the skill; this document gained a pointer on each
+principle the skill now owns (P1, P2, P3, P5, P6, P7, P9), one new failure mode (§1.7), one new
+principle (11), a sixth layer in the layer cake, three scorecard blocks and seven anti-pattern
+rows. README's "ten principles" was corrected to eleven.
+
+**Why one of them had to win.** The two documents had converged independently on the same rules
+— this file's Principle 1 is the skill's §9, Principle 7 is its §14 — and were beginning to
+diverge on others: Principle 2's SUT-span rule was strictly sharper than the skill's "E2E lives
+in the umbrella", while the skill had material (the skip taxonomy, guard self-tests, the
+test-result cache) this file lacked. Two documents drifting on one subject is the failure both
+of them warn about. The skill is the one loaded into every session on every project, so it is
+the one that must be right; a document that only some repos read cannot be the authority.
+
+**Why this document still exists.** The skill is project-agnostic. The failure modes here —
+a gate that spans repos it does not contain, a cross-repo checkout credential, a guard that is
+inert in CI because nothing checks out the sibling — only appear at a repository boundary, and
+that is what this file is for. Where a principle is the skill's rule wearing a cross-repo hat it
+now says so and cites the section, rather than restating it in words that will drift.
+
+**What the audit actually found**, for the record, since it is what these edits are made of:
+- `Realm-ID/api`'s `await_ci` exits 0 when no CI run exists for the tagged SHA, which is the
+  shape that let `issuer` promote a red CI to prod in v0.106.0. **It is not an unported fix**,
+  which is what a first pass here recorded and what this bullet said until the claim was
+  checked: `api/.github/workflows/deploy.yml:173-186` carries a dated (2026-08-31) note saying
+  the asymmetry with `issuer` is deliberate and must not be "made consistent" without
+  re-checking why — the issuer needs its walk-back because `issuer/tests.yml` has
+  `paths-ignore`, while `api/ci.yml` has none and triggers on `branches: ['**']`, so the branch
+  is unreachable there. It is a real §1.7 hazard for a different reason: the fact that makes it
+  safe lives in a different file in a different repo, so adding a `paths-ignore` to `api/ci.yml`
+  reopens the v0.106.0 hole silently. Rationale: root `DECISIONS.md` 2026-08-31.
+- `automahn/api/scripts/check-request-struct-coverage.sh` resolves `../ui/e2e` and exits 0 when
+  it is absent. No CI job checks out `ui`, so it has never run there — while ADR-033 and
+  `ui/e2e/README.md` both describe it as a CI gate. That is §1.7, and it is why §1.7 is here.
+- 1 of 15 AutoMahn guards has a `--self-test`. The unburned ones include the ADR-047
+  cross-tenant backstop, whose failure mode is a regex that silently matches nothing.
+- 193 skips across the three projects, concentrated on tests named as *proofs*, and the worst
+  shape is a skip guarded by the test's own two-subject precondition.
+
+**Not changed.** Principles 4, 8 and 10 are umbrella-specific and have no skill counterpart;
+they stand as written. Nothing in the skill was weakened to accommodate this file.
 
 ## 2026-09-01 — RCA: testing the MQL layer found two bugs in it — a missing query list read as "zero, all fine", and a GNU-only word boundary
 
