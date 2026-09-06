@@ -1,5 +1,47 @@
 # TODO — reusable-workflows
 
+## Release hygiene — the `WORKFLOW_VERSION` stamp (regression found 2026-09-06)
+
+`v2.6.1` shipped with **all 26 workflow files still stamping `WORKFLOW_VERSION: v2.6.0`.**
+Fixed by `v2.6.2`, which carries the stamp bump and nothing else.
+
+**Root cause: the release sweep is one command and it was never run.**
+`python3 scripts/stamp_version.py vX.Y.Z` bumps the 26 workflow stamps **and** the 49 `uses:`
+pins in `README.md` + `docs/*.md` together. Every prior release has a dedicated
+`chore(release): stamp vX` commit — v2.4.1 (#67), v2.5.0 (#74), v2.6.0 (#79); v2.4.0 folded it
+into its feature PR. `v2.6.1` was tagged **directly onto the fix commit** `4034d3d` (#83) with
+no sweep at all.
+
+⚠️ **Impact was NOT provenance-only — that first assessment was wrong.** The same skipped sweep
+left **49 doc pins saying `@v2.6.0`** at tag `v2.6.1`. The published docs at `v2.6.1` therefore
+told consumers to pin `v2.6.0` — a version *without* the GAR readback fix that release existed
+to ship. Anyone following the docs would believe they had the fix and not have it.
+
+⚠️ **A gate already exists and it was GREEN through all of this.** CI's *"version stamps and doc
+pins agree"* compares the 26 stamps to the doc pins. At `v2.6.1` both sides were consistently
+`v2.6.0`, so it passed on a completely unstamped release. **It asserts the two halves agree with
+each other; nothing asserts either equals the tag.** Same vacuous-gate shape as 2026-08-31 and
+2026-09-05 — a check that cannot fail in the case it exists to catch.
+
+- [ ] **Give the existing gate a third comparand: the tag being cut.** The check is already
+      written and already runs — it needs the tag, not a new sweep. ⚠️ Design problem shared with
+      the `v1`-alias guard in the template repo: **a tag push is not a PR event**, so this cannot
+      ride on the existing PR CI and needs its own trigger. One design solves both.
+- [ ] **Until that exists, the only control is running `scripts/stamp_version.py` before
+      tagging.** Worth stating in the release runbook as a step with no safety net, rather than
+      leaving it implied by seven prior releases having remembered it.
+
+### Consumer pin inventory (for the separate, unstarted sweep — NOT the v2.6.2 bump)
+
+AutoMahn's session reported 2026-09-06, verified in its own tree: **`automahn/` pins 14
+reusable-workflows callers across THREE versions** — `bootstrap-cf-dns.yml` and
+`bootstrap-cf-service.yml` at **v2.5.0**, `cleanup-secret-versions.yml` at **v2.4.1**, the rest
+at v2.4.0 (`cleanup-gar-images.yml:56` still v2.4.0, bump held for v2.6.2). Fleet-wide the
+spread is v2.4.0 / v2.4.1 / v2.5.0 / v2.6.0 across auth, automahn, tally-helper.
+
+Keep this OUT of any stamp/pin one-liner: different workflows, different input contracts, and
+semver here tracks the **input contract**, so each pin needs its own diff read before moving.
+
 ## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
 
 - [x] **Add a PromQL execution layer to `validate-alerts.yml`.** Layer 2 executes queries only
