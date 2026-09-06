@@ -5,31 +5,43 @@
 `v2.6.1` shipped with **all 26 workflow files still stamping `WORKFLOW_VERSION: v2.6.0`.**
 Fixed by `v2.6.2`, which carries the stamp bump and nothing else.
 
-**Root cause: the release sweep is one command and it was never run.**
-`python3 scripts/stamp_version.py vX.Y.Z` bumps the 26 workflow stamps **and** the 49 `uses:`
-pins in `README.md` + `docs/*.md` together. Every prior release has a dedicated
-`chore(release): stamp vX` commit — v2.4.1 (#67), v2.5.0 (#74), v2.6.0 (#79); v2.4.0 folded it
-into its feature PR. `v2.6.1` was tagged **directly onto the fix commit** `4034d3d` (#83) with
-no sweep at all.
+**Root cause: the sweep wasn't run before tagging — and CI CAUGHT IT AND WAS IGNORED.**
+`python3 scripts/stamp_version.py vX.Y.Z` sweeps the 26 stamps and 49 doc pins together.
+`v2.6.1` was tagged directly onto fix commit `4034d3d` (#83) without it.
 
-⚠️ **Impact was NOT provenance-only — that first assessment was wrong.** The same skipped sweep
-left **49 doc pins saying `@v2.6.0`** at tag `v2.6.1`. The published docs at `v2.6.1` therefore
-told consumers to pin `v2.6.0` — a version *without* the GAR readback fix that release existed
-to ship. Anyone following the docs would believe they had the fix and not have it.
+⚠️ **The tag-push gate already exists and already worked.** `ci.yml` triggers on
+`tags: ['v*.*.*']` and runs `stamp_version.py --check --expect "${{ github.ref_name }}"` when
+`github.ref_type == 'tag'`. On the `v2.6.1` tag push (run **34029676674**, 2026-09-06T11:14) ten
+jobs passed and *"version stamps and doc pins agree"* **FAILED**, saying:
+`repo is swept to v2.6.0 but the tag being released is v2.6.1. Run python3
+scripts/stamp_version.py v2.6.1 and merge that before tagging.` The release was published without
+reading it. **Nothing needs building here — the control exists, is correct, and was ignored.**
+(Earlier drafts of this section claimed first that no gate existed, then that it was vacuous and
+green. Both were wrong; the run log settles it.)
 
-⚠️ **A gate already exists and it was GREEN through all of this.** CI's *"version stamps and doc
-pins agree"* compares the 26 stamps to the doc pins. At `v2.6.1` both sides were consistently
-`v2.6.0`, so it passed on a completely unstamped release. **It asserts the two halves agree with
-each other; nothing asserts either equals the tag.** Same vacuous-gate shape as 2026-08-31 and
-2026-09-05 — a check that cannot fail in the case it exists to catch.
+⚠️ **Impact was NOT provenance-only.** The same skipped sweep left **49 doc pins saying
+`@v2.6.0`** at tag `v2.6.1`, so the published docs told consumers to pin a version *without* the
+GAR readback fix that release shipped.
 
-- [ ] **Give the existing gate a third comparand: the tag being cut.** The check is already
-      written and already runs — it needs the tag, not a new sweep. ⚠️ Design problem shared with
-      the `v1`-alias guard in the template repo: **a tag push is not a PR event**, so this cannot
-      ride on the existing PR CI and needs its own trigger. One design solves both.
-- [ ] **Until that exists, the only control is running `scripts/stamp_version.py` before
-      tagging.** Worth stating in the release runbook as a step with no safety net, rather than
-      leaving it implied by seven prior releases having remembered it.
+- [ ] **Runbook: never publish a release until the tag-push CI run is green.** This is the whole
+      fix and it is procedural, not code. Tagging is not the last step — it is the step that
+      starts the only check capable of catching this.
+- [ ] **Make it structural rather than remembered:** price a GitHub ruleset requiring the
+      tag-push check to pass before a release can be published. Preferred over any new script.
+- [ ] 🔴 **The gate does not assert its own COVERAGE — and this outranks the original bug.**
+      `docs/PLATFORM.md` carries **three pins at `v1.23.0`**, pointing readers at the frozen
+      legacy `v1` line. `PIN_RE` requires a literal `Just-Git-Dev/reusable-workflows/...` and
+      PLATFORM.md's examples use an `<org>/` placeholder, so **the sweep cannot fix them and the
+      check cannot see them.** The file is in the sweep's file set; its pins are invisible to the
+      regex. Adding the tag comparand does not help — PLATFORM.md stays invisible either way.
+      **An uncovered file is indistinguishable from a passing one.** Fix: assert that every file
+      containing a `uses: .../reusable-workflows/...@` pin is in the swept set, and fail on any
+      that is not — otherwise the next `docs/*.md` added is silently exempt from creation.
+      (Framing owed to AutoMahn's session, 2026-09-06.)
+- [ ] **Audit the other gates for the same two shapes** — comparands that are all derived, and
+      scopes that are assumed rather than computed. Start with `validate-alerts`, which already
+      had a vacuous-check finding on 2026-09-01 for an unrelated reason; two independent vacuity
+      findings in one layer says something about how those gates are written.
 
 ### Consumer pin inventory (for the separate, unstarted sweep — NOT the v2.6.2 bump)
 
