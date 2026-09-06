@@ -97,39 +97,59 @@ that commit was never made. Every prior release has one — `chore(release): sta
 **directly onto the fix commit** `4034d3d` (#83). The tag was cut from a commit that had never
 been prepared as a release.
 
-**Why it wasn't caught — and this is the sharp part: a gate DOES exist, and it passed.**
-`.github/workflows/ci.yml` runs **"version stamps and doc pins agree"**, which compares the 26
-workflow stamps against the `uses:` pins in `README.md` and `docs/*.md`. At `v2.6.1` both sides
-were consistently `v2.6.0`, so the check was **green on a release that was entirely unstamped**.
-It asserts the two halves agree with *each other*; **nothing asserts either equals the tag being
-cut**. That is the repo's own vacuous-gate pattern again (cf. 2026-08-31, 2026-09-05): a check
-that cannot fail in the situation it exists to catch.
+**Why it wasn't caught — IT WAS CAUGHT. The gate fired red and the release was cut anyway.**
+Two earlier versions of this entry got this wrong, in opposite directions, and both are retracted:
 
-The real release step is one command — `python3 scripts/stamp_version.py vX.Y.Z` — which sweeps
-stamps *and* doc pins together. Skipping it leaves both wrong in agreement, which is precisely
-the state the gate reads as healthy.
+1. First claim: *"nothing asserts the relationship."* **False.** `ci.yml` triggers on
+   `tags: ['v*.*.*']` and its "Check the sweep" step runs
+   `python3 scripts/stamp_version.py --check --expect "${{ github.ref_name }}"` whenever
+   `github.ref_type == 'tag'`. The tag comparand has existed all along.
+2. Second claim: *"a gate exists but is vacuous — it compares two derived values and was green."*
+   **Also false**, and it was the more confident claim. On PR events it does compare stamps to doc
+   pins; on a **tag push** it compares both against the tag itself.
 
-**Impact is WORSE than provenance — corrected.** The first assessment here (and what was told to
-three consumer sessions) was "provenance only, nothing keys off the stamp". That understated it:
-the same skipped step left **49 doc pins across `README.md` and 25 `docs/*.md` still saying
-`@v2.6.0`** at tag `v2.6.1`. So the published documentation at `v2.6.1` instructed consumers to
-pin `v2.6.0` — a version *without* the GAR readback fix that release existed to ship. A consumer
-following the docs would have believed they had taken the fix and not had it. That is a
-user-visible defect, not a cosmetic string.
+What actually happened, from the run log: the `v2.6.1` tag push triggered CI run **34029676674**
+on 2026-09-06T11:14. Ten jobs passed. The eleventh — *"version stamps and doc pins agree"* —
+**failed**, with an error naming both the problem and its remedy:
 
-**Prevention — filed, not built.** The existing gate needs a third comparand: the tag. `TODO.md`
-carries it, with the design problem it shares with the `v1`-alias guard in the template repo —
-it cannot ride on PR CI, because the event it must police is a **tag push**. One trigger design
-solves both, and neither should be attempted without it. Until then the release step is manual
-and the only real control is running `scripts/stamp_version.py` before tagging.
+> `repo is swept to v2.6.0 but the tag being released is v2.6.1. Run`
+> `python3 scripts/stamp_version.py v2.6.1` `and merge that before tagging.`
+
+The release was published without reading that run. **The control worked exactly as designed and
+was ignored.** The v2.6.2 tag push (run at 12:02) passed the same check, which confirms the gate
+is live and correct rather than merely present.
+
+**So the root cause is not a missing control, a fragile mechanism, or a vacuous check.** It is a
+release procedure that treats tagging as the last step, when tagging is the step that *starts*
+the only verification that can catch this. Every prior release passed because its sweep commit
+had already landed — not because anyone checked the tag run.
+
+**Prevention — mostly already built.** Nothing new needs writing: the gate exists, is wired to
+tag pushes, and produces an actionable error. What is missing is procedural — **do not publish a
+release until the tag-push CI run is green.** Filed in `TODO.md` as a runbook step. A GitHub
+ruleset requiring the tag-push check before a release can be published would make it structural
+rather than remembered, and that is worth pricing.
+
+**One real gap survives all this.** `docs/PLATFORM.md` carries three pins at **`v1.23.0`** that
+neither the sweep nor the check touches — `PIN_RE` requires a literal
+`Just-Git-Dev/reusable-workflows/...`, and PLATFORM.md's examples use a `<org>/` placeholder. The
+file *is* in the sweep's file set (`docs/*.md`); its pins are invisible to the **regex**. That is
+a genuine two-derived-comparands blind spot: the gate proves the pins it can see agree, and says
+nothing about coverage. Filed separately.
 
 **A note on how this surfaced, because it is the most useful part.** It came from a consumer
-session reading a file for an unrelated reason — not from any check here, and the check that
-exists was green throughout. The report understated it (one file, chronic drift); auditing seven
-prior tags made it a one-release regression; and only *fixing* it revealed the doc-pin half and
-the vacuous gate. Each step of verification made the finding bigger, and the initial confident
-"provenance only" was wrong. The lesson is not "check stamps" — it is that a green gate over a
-manual step proves the two things it compares agree, not that either is right.
+session reading a file for an unrelated reason — while this repo's own CI had already flagged it,
+in red, on the tag push, hours earlier. The report understated it (one file, chronic drift);
+auditing seven prior tags made it a one-release regression; fixing it revealed the doc-pin half;
+and only *then* did checking the tag run reveal that the control had caught it all along.
+
+Three successive claims in this entry were wrong — "provenance only", "nothing asserts it", "the
+gate is vacuous" — each stated with more confidence than the evidence supported, and each
+corrected only because someone looked one step further. The lesson is not about stamps or gates.
+**A red CI run on a tag is not a formality to be read after publishing; it is the release
+gate.** And when reconstructing why something was not caught, check whether it *was* caught
+before theorising about missing controls — the run log settles in one query what three rounds of
+reasoning got wrong.
 
 ## 2026-09-06 — GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback
 
