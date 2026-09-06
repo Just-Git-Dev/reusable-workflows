@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-06` — [GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback](#2026-09-06--gar-cleanup-was-red-on-deletions-that-had-succeeded-del_one-now-trusts-a-readback)
 - `2026-09-05` — [The pin gate is verified by running it, not by grepping for it](#2026-09-05--the-pin-gate-is-verified-by-running-it-not-by-grepping-for-it)
 - `2026-09-05` — [The `testing` skill becomes source of truth; TESTING-STANDARD.md follows it](#2026-09-05--the-testing-skill-becomes-source-of-truth-testing-standardmd-follows-it)
 - `2026-09-01` — [RCA: testing the MQL layer found two bugs in it — a missing query list read as "zero, all fine", and a GNU-only word boundary](#2026-09-01--rca-testing-the-mql-layer-found-two-bugs-in-it--a-missing-query-list-read-as-zero-all-fine-and-a-gnu-only-word-boundary)
@@ -82,6 +83,65 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-06 — GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback
+
+**Symptom.** `Cleanup GAR images` failed two consecutive nightly runs on `Realm-ID/project`
+(run 33989209302 and its predecessor), reporting `13 deletion(s) failed for unexpected
+reasons` and skipping the summary step. All 13 errors read:
+
+```
+PERMISSION_DENIED: Permission denied on operation
+projects/realm-id/locations/asia-southeast1/operations/<id> (or it may not exist)
+```
+
+**Root cause.** That 403 is not the delete being refused. `gcloud artifacts docker images
+delete` is **asynchronous**: it issues the delete, receives an operation id, then polls that
+*operation resource* — and the poll can fail after the image is already gone. The 403 is on the
+operation, not on the image. `del_one()` matched two known-benign stderrs (`referenced by
+parent manifests`, `not found`) and bucketed everything else as `FAIL`, so a post-success
+artifact failed the step.
+
+**Proven, not assumed.** All 13 digests were independently confirmed absent —
+`gcloud artifacts docker images describe` answers `Image not found` for every one. Verified
+twice, from two sides, because the first claim of "all 13" cited only three spot-checks. Two
+independent verifications agreeing is the reason this is recorded as fact rather than as a
+likely explanation.
+
+**Fix.** On an unrecognised stderr, read the image back with `images describe`; an explicit
+not-found counts as a successful delete. This is not a new pattern — it is the rule
+"Ensure immutable-tag end-state" already applies to the lock ("trust the readback, not the exit
+code"): what matters is the state the registry is actually in.
+
+**Deliberately strict, because the obvious version of this fix is dangerous.** Only an explicit
+not-found readback counts. A readback that 403s, times out, or answers anything else stays
+`FAIL`. The lazy form — "if describe fails, assume deleted" — would launder every unknown error
+into a success, including a genuine permission loss, which is a far worse failure than the
+noise it removes. There is a test for exactly that case.
+
+**Counted into `deleted`, and also reported on its own.** Into, because `deleted` is a published
+`workflow_call` output documented as "actually deleted", and a readback-confirmed delete is a
+real delete — excluding it would make that output silently under-report. Separately, because a
+run that only converges via readback is still telling you the operation poll is misbehaving, and
+that signal vanishes the moment it reads identically to a clean delete. So `recovered=N` appears
+in the log line, a `::warning::` names the count and lists the digests, and the step summary
+breaks it out. Loud, but not red.
+
+**Why it was worth fixing rather than tolerating.** Nothing was left unlocked — the immutable-tag
+re-enable is a separate `always()` step and did run. The cost was legibility: a job that is red
+every night is a job whose red is unreadable, and the next genuine failure would have arrived in
+a run list whose last thirty entries were already red.
+
+**Not a pin problem.** `del_one()` is byte-identical on v2.3.1 (what the caller pins) and on
+main/v2.6.0 — diffed before writing any code. Bumping the consumer's pin would have changed
+nothing, which is worth stating because a stale pin was the first hypothesis.
+
+**Guarded by** `tests/run_step_tests.py` — 16 new checks against a stubbed gcloud that can fail
+a delete and answer a describe independently. Confirmed non-vacuous: reverting the workflow while
+keeping the tests turns 7 of them red. The negative cases (image still present, readback 403s,
+kept-parent, already-gone) pass either way by design — they assert behaviour that must not change.
+
+---
 
 ## 2026-09-05 — The pin gate is verified by running it, not by grepping for it
 
