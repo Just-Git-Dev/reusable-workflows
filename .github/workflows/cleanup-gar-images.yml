@@ -812,7 +812,29 @@ jobs:
             elif printf '%s' "$err" | grep -qiE "not found|does not exist|NOT_FOUND"; then
               echo "OK skipped(gone) $img"
             else
-              echo "FAIL $img :: $(printf '%s' "$err" | tr '\n' ' ')"
+              # TRUST THE READBACK, NOT THE EXIT CODE — the same rule "Ensure
+              # immutable-tag end-state" already applies to the lock: what matters is the
+              # state the registry is actually in, not what one call returned.
+              #
+              # WHY THIS BRANCH EXISTS: the delete is ASYNC. gcloud issues it, gets an
+              # operation id back, then POLLS that operation resource — and the poll can
+              # fail `PERMISSION_DENIED ... operations/<id> (or it may not exist)` after
+              # the image is already gone. Bucketing that as FAIL turned 13 successful
+              # deletions into a red nightly job on realm-id (run 33989209302, 2026-09-04
+              # and 2026-09-05); all 13 digests were independently confirmed absent.
+              #
+              # Deliberately STRICT: only an explicit not-found readback counts. A readback
+              # that 403s, times out, or answers anything else stays FAIL — otherwise this
+              # branch would launder every unknown error into a success, which is a far
+              # worse failure than the noise it fixes.
+              local rb rbrc
+              rb=$(gcloud artifacts docker images describe "$img" \
+                     --project="$GCP_PROJECT" 2>&1); rbrc=$?
+              if [ "$rbrc" -ne 0 ] && printf '%s' "$rb" | grep -qiE "not found|does not exist|NOT_FOUND"; then
+                echo "OK deleted-readback $img :: $(printf '%s' "$err" | tr '\n' ' ')"
+              else
+                echo "FAIL $img :: $(printf '%s' "$err" | tr '\n' ' ')"
+              fi
             fi
             return 0
           }
@@ -841,9 +863,27 @@ jobs:
             | xargs -r -P 8 -I {} bash -c 'del_one "$@"' _ {} | tee -a /tmp/exec.log
 
           DELETED=$(grep -c '^OK deleted ' /tmp/exec.log || true)
+          # Counted INTO `deleted`, and also on its own. Into, because `deleted` is a
+          # published workflow_call output documented as "actually deleted" — a
+          # readback-confirmed delete is a real delete, and excluding it would make that
+          # output silently under-report. On its own, because a run that only converges
+          # via readback is still telling you the operation poll is 403ing, and that
+          # signal disappears the moment it reads identically to a clean delete.
+          RECOVERED=$(grep -c '^OK deleted-readback ' /tmp/exec.log || true)
+          DELETED=$((DELETED + RECOVERED))
           SKIPPED=$(grep -c '^OK skipped' /tmp/exec.log || true)
           FAILED=$(grep -c '^FAIL ' /tmp/exec.log || true)
-          echo "deleted=$DELETED skipped=$SKIPPED failed=$FAILED"
+          echo "deleted=$DELETED skipped=$SKIPPED failed=$FAILED recovered=$RECOVERED"
+
+          # Loud, but not red. The sweep did its job; something in the delete path is
+          # still misbehaving and a silent recovery would hide it until it changes shape.
+          if [ "$RECOVERED" -gt 0 ]; then
+            echo "::warning::$RECOVERED deletion(s) reported an error but the image was gone on readback."
+            echo "::warning::Usually gcloud polling the async delete's operation resource (PERMISSION_DENIED"
+            echo "::warning::on operations/<id>) AFTER the delete succeeded. The images are deleted; the"
+            echo "::warning::error is a post-success artifact. Investigate if this count grows or changes shape."
+            grep '^OK deleted-readback ' /tmp/exec.log || true
+          fi
           {
             echo "deleted=$DELETED"
             echo "skipped=$SKIPPED"
@@ -853,6 +893,10 @@ jobs:
             echo "## Execution result"
             echo ""
             echo "- Deleted: $DELETED"
+            if [ "$RECOVERED" -gt 0 ]; then
+              echo "  - of which $RECOVERED confirmed by readback (the delete call errored"
+              echo "    after the image was already gone — see the warning above)"
+            fi
             echo "- Skipped (kept-parent child / already gone): $SKIPPED"
             echo "- Failed: $FAILED"
             if [ "${DEGRADED:-false}" = "true" ]; then

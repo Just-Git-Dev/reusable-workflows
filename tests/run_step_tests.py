@@ -19,6 +19,7 @@ Usage:  python3 tests/run_step_tests.py
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -237,9 +238,16 @@ exit 0
                 "calls": calls.read_text()}
 
 
-def run_exec_step(body: str, *, degraded="false"):
+def run_exec_step(body: str, *, degraded="false", delete_err=None, describe_err=None):
     """Execute the deletion body against a stubbed gcloud, with a 2-tagged /
-    2-untagged plan. Returns which images gcloud was actually asked to delete."""
+    2-untagged plan. Returns which images gcloud was actually asked to delete.
+
+    delete_err:   if set, every `images delete` fails with this on stderr. Models the
+                  async-operation poll 403 that lands AFTER the image is already gone.
+    describe_err: if set, `images describe` fails with this on stderr; otherwise describe
+                  SUCCEEDS, i.e. the image is still present. Only meaningful with
+                  delete_err, since describe is reached solely from the fallback branch.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         stub = tmp / "bin"
@@ -247,8 +255,21 @@ def run_exec_step(body: str, *, degraded="false"):
         deleted = tmp / "deleted"
         deleted.write_text("")
         gcloud = stub / "gcloud"
-        gcloud.write_text(f'#!/usr/bin/env bash\nfor a in "$@"; do case "$a" in *@sha256:*) '
-                          f'echo "$a" >> {deleted} ;; esac; done\nexit 0\n')
+        # `delete` records what it was asked to remove, then optionally fails; `describe`
+        # answers separately. Anything else exits 0 so unrelated calls stay inert.
+        gcloud.write_text(
+            "#!/usr/bin/env bash\n"
+            'verb=""\n'
+            'for a in "$@"; do case "$a" in delete) verb=delete ;; describe) verb=describe ;; esac; done\n'
+            'if [ "$verb" = delete ]; then\n'
+            f'  for a in "$@"; do case "$a" in *@sha256:*) echo "$a" >> {deleted} ;; esac; done\n'
+            + (f'  echo {shlex.quote(delete_err)} >&2; exit 1\n' if delete_err else "  exit 0\n")
+            + 'fi\n'
+            'if [ "$verb" = describe ]; then\n'
+            + (f'  echo {shlex.quote(describe_err)} >&2; exit 1\n' if describe_err
+               else "  echo 'name: some/image'; exit 0\n")
+            + 'fi\n'
+            "exit 0\n")
         gcloud.chmod(0o755)
         plan = {"to_delete": [
             {"image": "r/img@sha256:t1", "tags": ["v1.0.0"]},
@@ -1257,6 +1278,61 @@ def main():
           "2" in r["out"] and "tagged" in r["out"].lower(), r["out"])
     check("degraded run reports it in the summary",
           "tagged" in r["summary"].lower(), r["summary"])
+
+    # ---- GAR executor: the async-operation poll 403 (2026-09-06) ----
+    # gcloud's delete is ASYNC: it returns an operation id, then polls that operation
+    # resource — and the poll can 403 AFTER the image is already gone. del_one() bucketed
+    # any unrecognised stderr as FAIL, so 13 successful deletions failed the nightly job
+    # on realm-id (run 33989209302); all 13 digests were independently confirmed absent.
+    OP_403 = ("PERMISSION_DENIED: Permission denied on operation "
+              "projects/p/locations/asia-southeast1/operations/abc123 (or it may not exist)")
+    GONE = "NOT_FOUND: Image not found."
+
+    r = run_exec_step(execstep, delete_err=OP_403, describe_err=GONE)
+    check("op-poll 403 + gone on readback does NOT fail the job", r["rc"] == 0, r["out"])
+    check("op-poll 403 + gone on readback counts as deleted",
+          "deleted=4" in r["output"], r["output"])
+    check("readback recoveries are counted separately, not silently folded in",
+          "recovered=4" in r["out"], r["out"])
+    check("readback recovery warns rather than passing silently",
+          "::warning::" in r["out"] and "readback" in r["out"], r["out"])
+    check("readback recovery is visible in the summary",
+          "readback" in r["summary"].lower(), r["summary"])
+
+    # The negative that keeps the branch honest. If the image is STILL THERE, the delete
+    # really did fail and must stay red — otherwise this fix launders every unknown error
+    # into a success, which is far worse than the noise it removes.
+    r = run_exec_step(execstep, delete_err=OP_403, describe_err=None)
+    check("error + image still present still FAILS the job", r["rc"] != 0, r["out"])
+    check("error + image still present is reported as failed",
+          "failed=4" in r["output"], r["output"])
+    check("error + image still present is not counted as deleted",
+          "deleted=0" in r["output"], r["output"])
+
+    # A readback that fails for its OWN reason (denied, not absent) is not evidence of
+    # deletion. Only an explicit not-found counts.
+    r = run_exec_step(execstep, delete_err=OP_403,
+                      describe_err="PERMISSION_DENIED: caller lacks artifactregistry.repositories.get")
+    check("readback that 403s is NOT treated as proof of deletion", r["rc"] != 0, r["out"])
+    check("readback that 403s is reported as failed", "failed=4" in r["output"], r["output"])
+
+    # The pre-existing classifications must not regress: both are recognised BEFORE the
+    # readback branch, so neither should ever reach a describe call.
+    r = run_exec_step(execstep, delete_err="is referenced by parent manifests")
+    check("kept-parent still classified without a readback", r["rc"] == 0, r["out"])
+    check("kept-parent still counts as skipped, not deleted",
+          "skipped=4" in r["output"] and "deleted=0" in r["output"], r["output"])
+    check("kept-parent does not trigger the readback warning",
+          "recovered=0" in r["out"], r["out"])
+
+    r = run_exec_step(execstep, delete_err="NOT_FOUND: Requested entity was not found.")
+    check("already-gone still classified without a readback", r["rc"] == 0, r["out"])
+    check("already-gone still counts as skipped",
+          "skipped=4" in r["output"], r["output"])
+
+    # And a clean run must not gain a phantom recovery count.
+    r = run_exec_step(execstep, degraded="false")
+    check("clean run reports zero recoveries", "recovered=0" in r["out"], r["out"])
 
     # ---- GAR end-state: the repo must end an applied run LOCKED by default ----
     relock = extract_step(GAR, "cleanup", "Ensure immutable-tag end-state")
