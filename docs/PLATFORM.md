@@ -147,8 +147,10 @@ full input/secret contract. Grant `id-token: write` for any WIF workflow. Cross-
 
 ## 6. Worked example — a full app repo
 
-Two workflows in *your* repo wire the whole pipeline. Pin an exact release tag (check Releases
-for the latest; `v1.11.0` shown).
+Two workflows in *your* repo wire the whole pipeline. **Replace `vX.Y.Z` below with an exact
+release tag** — check [Releases](https://github.com/Just-Git-Dev/reusable-workflows/releases) for
+the current one. The placeholder is deliberate: a real version baked into this example goes stale
+silently, and §7 is emphatic that you must pin an exact tag and must not use the frozen `v1` line.
 
 ```yaml
 # .github/workflows/ci.yml
@@ -157,7 +159,7 @@ on: [push, pull_request]
 permissions: { contents: read }
 jobs:
   ci:
-    uses: <org>/reusable-workflows/.github/workflows/ci-go.yml@v1.23.0
+    uses: <org>/reusable-workflows/.github/workflows/ci-go.yml@vX.Y.Z
     with: { go_version_file: go.mod, coverage_threshold: 50 }
 ```
 
@@ -172,7 +174,7 @@ permissions: { contents: read, id-token: write }   # id-token: write ⇒ keyless
 jobs:
   stage:
     if: github.ref == 'refs/heads/development'
-    uses: <org>/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v1.23.0
+    uses: <org>/reusable-workflows/.github/workflows/deploy-cloud-run.yml@vX.Y.Z
     with:
       gcp_project: my-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}     # from access onboarding (§4)
@@ -182,7 +184,7 @@ jobs:
       service: api-stage
   prod:
     if: startsWith(github.ref, 'refs/tags/v')
-    uses: <org>/reusable-workflows/.github/workflows/promote-image.yml@v1.23.0
+    uses: <org>/reusable-workflows/.github/workflows/promote-image.yml@vX.Y.Z
     with:
       gcp_region: asia-southeast1
       gar_project: my-project
