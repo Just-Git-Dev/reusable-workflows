@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-06` — [RCA: `v2.6.1` shipped stamping `v2.6.0` — the release stamp is a step, not a property](#2026-09-06--rca-v261-shipped-stamping-v260--the-release-stamp-is-a-step-not-a-property)
 - `2026-09-06` — [GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback](#2026-09-06--gar-cleanup-was-red-on-deletions-that-had-succeeded-del_one-now-trusts-a-readback)
 - `2026-09-05` — [The pin gate is verified by running it, not by grepping for it](#2026-09-05--the-pin-gate-is-verified-by-running-it-not-by-grepping-for-it)
 - `2026-09-05` — [The `testing` skill becomes source of truth; TESTING-STANDARD.md follows it](#2026-09-05--the-testing-skill-becomes-source-of-truth-testing-standardmd-follows-it)
@@ -83,6 +84,52 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-06 — RCA: `v2.6.1` shipped stamping `v2.6.0` — the release stamp is a step, not a property
+
+**Symptom.** At tag `v2.6.1`, **all 26 workflow files** carried `WORKFLOW_VERSION: v2.6.0`.
+Reported by a consumer session that noticed it on `cleanup-cloud-run-revisions.yml`; the audit
+showed it was every file, not one.
+
+**Root cause.** The stamp is hand-maintained and bumped in a **dedicated release commit**, and
+that commit was never made. Every prior release has one — `chore(release): stamp v2.4.1` (#67),
+`v2.5.0` (#74), `v2.6.0` (#79); `v2.4.0` folded the bump into its feature PR. `v2.6.1` was tagged
+**directly onto the fix commit** `4034d3d` (#83). The tag was cut from a commit that had never
+been prepared as a release.
+
+**Why it wasn't caught — and this is the sharp part: a gate DOES exist, and it passed.**
+`.github/workflows/ci.yml` runs **"version stamps and doc pins agree"**, which compares the 26
+workflow stamps against the `uses:` pins in `README.md` and `docs/*.md`. At `v2.6.1` both sides
+were consistently `v2.6.0`, so the check was **green on a release that was entirely unstamped**.
+It asserts the two halves agree with *each other*; **nothing asserts either equals the tag being
+cut**. That is the repo's own vacuous-gate pattern again (cf. 2026-08-31, 2026-09-05): a check
+that cannot fail in the situation it exists to catch.
+
+The real release step is one command — `python3 scripts/stamp_version.py vX.Y.Z` — which sweeps
+stamps *and* doc pins together. Skipping it leaves both wrong in agreement, which is precisely
+the state the gate reads as healthy.
+
+**Impact is WORSE than provenance — corrected.** The first assessment here (and what was told to
+three consumer sessions) was "provenance only, nothing keys off the stamp". That understated it:
+the same skipped step left **49 doc pins across `README.md` and 25 `docs/*.md` still saying
+`@v2.6.0`** at tag `v2.6.1`. So the published documentation at `v2.6.1` instructed consumers to
+pin `v2.6.0` — a version *without* the GAR readback fix that release existed to ship. A consumer
+following the docs would have believed they had taken the fix and not had it. That is a
+user-visible defect, not a cosmetic string.
+
+**Prevention — filed, not built.** The existing gate needs a third comparand: the tag. `TODO.md`
+carries it, with the design problem it shares with the `v1`-alias guard in the template repo —
+it cannot ride on PR CI, because the event it must police is a **tag push**. One trigger design
+solves both, and neither should be attempted without it. Until then the release step is manual
+and the only real control is running `scripts/stamp_version.py` before tagging.
+
+**A note on how this surfaced, because it is the most useful part.** It came from a consumer
+session reading a file for an unrelated reason — not from any check here, and the check that
+exists was green throughout. The report understated it (one file, chronic drift); auditing seven
+prior tags made it a one-release regression; and only *fixing* it revealed the doc-pin half and
+the vacuous gate. Each step of verification made the finding bigger, and the initial confident
+"provenance only" was wrong. The lesson is not "check stamps" — it is that a green gate over a
+manual step proves the two things it compares agree, not that either is right.
 
 ## 2026-09-06 — GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback
 
