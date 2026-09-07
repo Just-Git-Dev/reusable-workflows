@@ -158,6 +158,15 @@ jobs:
           }
           PLACEHOLDER = "NOTIFICATION_CHANNEL_PLACEHOLDER"
 
+          # Actionability floor. The shortest documentation shipped by any
+          # consumer today is 104 chars, so this bar has headroom and lands
+          # green everywhere -- it exists to catch the empty and the one-liner,
+          # not to grade prose. Raising it means clearing the backlog first.
+          DOC_MIN_CHARS = 80
+
+          def _norm(t):
+              return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+
           def dur_seconds(v, f, where):
               """Durations are strings like '300s'. Anything else is a config bug."""
               if not isinstance(v, str) or not v.endswith("s"):
@@ -199,10 +208,12 @@ jobs:
                   err(f, "policy file must be a YAML mapping")
                   continue
 
-              # The apply loop extracts displayName with awk and hard-fails on
-              # empty, so an absent one breaks the run rather than the policy.
+              # bootstrap-alerts keys idempotence off displayName and hard-fails
+              # on a missing one, so an absent name breaks the whole run rather
+              # than just this policy. Both sides parse with yaml.safe_load; they
+              # disagreed until 2026-09-07 (see DECISIONS.md).
               if not doc.get("displayName"):
-                  err(f, "missing displayName (the apply loop greps for it)")
+                  err(f, "missing displayName (the apply loop matches on it)")
 
               combiner = doc.get("combiner")
               if combiner is not None and combiner not in COMBINERS:
@@ -215,6 +226,28 @@ jobs:
                   err(f, "notificationChannels is empty — the policy would notify nobody")
               elif PLACEHOLDER not in chans:
                   err(f, f"notificationChannels must contain {PLACEHOLDER}; got {chans!r}")
+
+              # ---- actionability ------------------------------------------
+              # An alert a responder cannot act on is worse than no alert: it
+              # trains the whole channel to be ignored, and then the actionable
+              # one is missed too. A linter CANNOT judge whether a condition is
+              # worth paging on -- that stays a human review call (an expected
+              # 401 was deleted on exactly that ground). What it can enforce is
+              # the part that is objective: whoever gets paged at 03:00 is told
+              # what to do, and the incident is capable of clearing.
+              docu = (doc.get("documentation") or {})
+              content = (docu.get("content") or "").strip() if isinstance(docu, dict) else ""
+              if not content:
+                  err(f, "no documentation.content — a paged responder gets a title and "
+                         "no triage steps; say what broke, what to check first, and where "
+                         "the runbook is")
+              elif len(content) < DOC_MIN_CHARS:
+                  err(f, f"documentation.content is {len(content)} chars; under "
+                         f"{DOC_MIN_CHARS} it cannot carry triage steps. Name the impact "
+                         "and the first thing to check.")
+              elif _norm(content) == _norm(str(doc.get("displayName") or "")):
+                  err(f, "documentation.content merely restates displayName — it adds "
+                         "nothing the responder did not already have")
 
               conditions = doc.get("conditions") or []
               if not conditions:
@@ -275,6 +308,12 @@ jobs:
                   else:
                       dur_seconds(rl, f, "alertStrategy.notificationRateLimit.period")
 
+              # Required, not merely range-checked: an incident that never
+              # auto-closes stays open forever and hides the next real one, so
+              # the alert stops carrying information.
+              if not strategy.get("autoClose"):
+                  err(f, "no alertStrategy.autoClose — the incident would never clear "
+                         "on its own and would mask the next occurrence")
               ac = strategy.get("autoClose")
               if ac is not None:
                   secs = dur_seconds(ac, f, "alertStrategy.autoClose")

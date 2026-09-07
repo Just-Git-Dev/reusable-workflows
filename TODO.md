@@ -1,5 +1,27 @@
 # TODO — reusable-workflows
 
+## RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)
+
+`auth` hand-rolled `infra/alerts/apply-alerts.sh` instead of calling this repo's
+`bootstrap-alerts.yml`, so it re-implements skip-if-exists **without** a `force_update`
+escape — editing a `policy-*.json` is a silent no-op against the live policy. The blocker
+that made it reach for a local script is fixed as of 2026-09-07 (JSON policy files are now
+read by both the linter and the applier; see `DECISIONS.md`).
+
+- [ ] `auth/infra/alerts/policy-*.json` — add `"notificationChannels":
+      ["NOTIFICATION_CHANNEL_PLACEHOLDER"]` to each; the files currently carry no such key
+      because the script passes `--notification-channels` on the CLI, and
+      `validate-alerts.yml` **fails** a policy without it (correctly — it would notify nobody).
+- [ ] `auth/infra/alerts/email-channel.json` — no channel file exists yet; the script takes
+      the channel id from the `NOTIFY_CHANNEL` env var instead.
+- [ ] `auth/.github/workflows/` — add a thin caller with `channel_file: email-channel.json`
+      and `policy_glob: 'policy-*.json'`, then retire `apply-alerts.sh`.
+
+**Cross-repo: the checklist above is auth-repo work, not ours.** Recorded here only so the
+platform side knows why `realm-id` is the one project not on the shared alerts body.
+Still uncovered there and the reason this surfaced: the OTel→GMP app metrics
+`app_http_response` / `app_sql_*` have no alert policy at all — uptime only.
+
 ## Release hygiene — the `WORKFLOW_VERSION` stamp (regression found 2026-09-06)
 
 `v2.6.1` shipped with **all 26 workflow files still stamping `WORKFLOW_VERSION: v2.6.0`.**

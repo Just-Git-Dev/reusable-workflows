@@ -52,6 +52,33 @@ application-level policies take. See DECISIONS.md 2026-09-01.
 **Omit `gcp_project` to run layer 1 alone**, with no credentials. That is the useful default
 for a fork PR.
 
+## Actionability — an alert nobody can act on is a defect
+
+An alert a responder cannot act on is worse than no alert: it trains the whole channel to be
+ignored, and then the actionable one is missed too. Three rules enforce the objective half of
+that (added 2026-09-07):
+
+| Rule | Why |
+|---|---|
+| `documentation.content` must be present | Otherwise the page is a title and nothing else — no impact, no first check, no runbook |
+| …and at least **80 characters** | Under that it cannot carry triage steps. The shortest documentation shipped by any consumer today is 104 chars, so the bar has headroom |
+| …and must not merely restate `displayName` | A restatement adds nothing the responder did not already have |
+| `alertStrategy.autoClose` must be set | An incident that never clears stays open forever and masks the next occurrence |
+
+**What this deliberately does NOT check.** Whether a *condition* deserves to page at all is a
+human review call and stays one — a linter cannot know that a 401 on an unauthenticated route
+is the expected behaviour rather than an incident. That judgement produced the deletion of
+`auth_bearerless_reject` on RealmID, and no rule here would have caught it. Two review
+questions worth asking that this gate cannot:
+
+- **Would the responder do something different at 03:00 because this fired?** If the answer is
+  "look at it in the morning", it is a dashboard, not an alert.
+- **Can the condition fire for an expected, healthy state?** An alert counting *all* 401s on
+  `/auth/*` fires on correct rejections. Scope the filter to the failure, not the surface.
+
+Raising the 80-char floor means clearing the fleet's backlog first — a gate nobody can merge
+past is a gate someone disables.
+
 ## Inputs
 
 | Input | Required | Default | Notes |
