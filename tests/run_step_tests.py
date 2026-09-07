@@ -43,6 +43,7 @@ CFSERVICE = ROOT / ".github" / "workflows" / "bootstrap-cf-service.yml"
 CFDNS = ROOT / ".github" / "workflows" / "bootstrap-cf-dns.yml"
 CRUPDATE = ROOT / ".github" / "workflows" / "cloud-run-update.yml"
 ALERTS = ROOT / ".github" / "workflows" / "validate-alerts.yml"
+BOOTSTRAP = ROOT / ".github" / "workflows" / "bootstrap-alerts.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -917,16 +918,32 @@ CHANNEL_OK = ("type: email\n"
               "  email_address: ops@example.com\n")
 
 
-def policy_yaml(condition: str, *, name="Test policy") -> str:
-    """A policy that passes every rule in the lint except what `condition` breaks."""
+DOC_OK = ("The API is returning 5xx above the error budget. Impact: callers see "
+          "failures. Check the newest Cloud Run revision first, then the database "
+          "connection pool. Runbook: infra/docs/dr-runbook.md.")
+
+
+def policy_yaml(condition: str, *, name="Test policy", documentation=DOC_OK,
+                auto_close="1800s") -> str:
+    """A policy that passes every rule in the lint except what `condition` breaks.
+
+    `documentation` and `auto_close` are parameterised because the actionability
+    rules are the one thing every OTHER test here needs to satisfy silently --
+    they are the must-stay-silent half of that gate's burn-in.
+    """
+    doc = ""
+    if documentation is not None:
+        body = documentation.replace("\n", " ")
+        doc = "documentation:\n" f"  content: {body!r}\n" "  mimeType: text/markdown\n"
+    strategy = "alertStrategy:\n" + (f"  autoClose: {auto_close}\n" if auto_close else "")
     return (f"displayName: {name}\n"
             "combiner: OR\n"
+            f"{doc}"
             "notificationChannels:\n"
             "  - NOTIFICATION_CHANNEL_PLACEHOLDER\n"
             "conditions:\n"
             f"{condition}"
-            "alertStrategy:\n"
-            "  autoClose: 1800s\n")
+            f"{strategy}")
 
 
 PROMQL_COND = ("  - displayName: promql\n"
@@ -1041,6 +1058,98 @@ def run_mql_step(body: str, *, queries, statuses=("200",), bodies=None, **kw):
         body, queries=queries, qfile="mql_queries.txt", statuses=statuses,
         bodies=bodies or ['{"timeSeriesData":[]}'],
         token=kw.pop("token", "t"), **kw)
+
+
+# --- bootstrap-alerts: displayName extraction must be format-agnostic --------
+#
+# The applier and validate-alerts' linter must agree on what a policy file IS.
+# They did not: the linter parsed with yaml.safe_load (which accepts JSON) while
+# the applier scraped `displayName` with a column-0-anchored awk match, so a JSON
+# policy set passed the gate and then failed the apply with "No displayName
+# found" -- naming the one field that was plainly present. `policy_glob` is a
+# caller-settable input and gcloud's --policy-from-file takes JSON, so JSON is a
+# supported path, not a misuse. These tests execute both step bodies as shipped.
+
+CHANNEL_JSON = json.dumps({
+    "type": "email",
+    "displayName": "Ops",
+    "labels": {"email_address": "ops@example.com"},
+}, indent=2)
+
+
+def policy_json(name="Test policy") -> str:
+    return json.dumps({
+        "displayName": name,
+        "combiner": "OR",
+        "notificationChannels": ["NOTIFICATION_CHANNEL_PLACEHOLDER"],
+        "conditions": [],
+        "alertStrategy": {"autoClose": "1800s"},
+    }, indent=2)
+
+
+def _bootstrap_gcloud(tmp: Path, existing) -> Path:
+    """A gcloud stub that reports `existing` displayNames as already present."""
+    (tmp / "existing.txt").write_text("\n".join(existing) + "\n")
+    stub = tmp / "bin"
+    stub.mkdir(exist_ok=True)
+    g = stub / "gcloud"
+    g.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> "{tmp}/argv.txt"\n'
+        # `alpha monitoring {policies,channels} list` -> $4
+        'if [ "$4" = "list" ]; then\n'
+        '  f=""\n'
+        '  for a in "$@"; do case "$a" in --filter=*) f="${a#--filter=}";; esac; done\n'
+        '  while IFS= read -r e; do\n'
+        '    [ -n "$e" ] || continue\n'
+        '    case "$f" in *"$e"*) echo "projects/p/x/1"; exit 0;; esac\n'
+        f'  done < "{tmp}/existing.txt"\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$4" = "create" ]; then echo "projects/p/x/created"; exit 0; fi\n'
+        'exit 0\n')
+    g.chmod(0o755)
+    return stub
+
+
+def _bootstrap_run(body, files, env_extra, *, existing=()):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        adir = tmp / "infra" / "alerts"
+        adir.mkdir(parents=True)
+        for fname, text in files.items():
+            (adir / fname).write_text(text)
+        stub = _bootstrap_gcloud(tmp, existing)
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="proj", ALERTS_DIR="infra/alerts",
+                   RUNNER_TEMP=str(tmp), GITHUB_OUTPUT=str(out))
+        env.update({k: str(v) for k, v in env_extra.items()})
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        outs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l)
+        argv = tmp / "argv.txt"
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "outputs": outs,
+                "argv": argv.read_text() if argv.exists() else ""}
+
+
+def run_bootstrap_channel_step(body, *, channel, channel_file="email-channel.yaml",
+                               existing=()):
+    return _bootstrap_run(body, {channel_file: channel},
+                          {"CHANNEL_FILE": channel_file}, existing=existing)
+
+
+def run_bootstrap_apply_step(body, policies, *, policy_glob="policy-*.yaml",
+                             force_update="false", existing=()):
+    return _bootstrap_run(body, policies,
+                          {"POLICY_GLOB": policy_glob, "FORCE_UPDATE": force_update,
+                           "CHANNEL_NAME": "projects/p/notificationChannels/9"},
+                          existing=existing)
 
 
 def check(name, cond, detail=""):
@@ -2240,6 +2349,126 @@ def main():
     check("an absent MQL query list fails rather than reporting zero checked",
           r["rc"] != 0 and "mql_checked" not in r["outputs"], r["out"])
 
+
+
+    # ---- bootstrap-alerts: JSON and YAML policy sets behave identically -----
+    chan = extract_step(BOOTSTRAP, "apply", "Ensure notification channel")
+    apply_ = extract_step(BOOTSTRAP, "apply", "Apply alert policies")
+    print("\nbootstrap-alerts · displayName extraction")
+
+    # Regression guard for the YAML path that already worked.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.yaml": policy_yaml(PROMQL_COND)})
+    check("a YAML policy still applies", r["rc"] == 0, r["out"])
+    check("and is counted as created", r["outputs"].get("created") == "1", r["outputs"])
+
+    # THE BUG: this set passes validate-alerts' lint (yaml.safe_load reads JSON)
+    # and, before the fix, died in the applier claiming displayName was missing.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": policy_json()},
+                                 policy_glob="policy-*.json")
+    check("a JSON policy applies rather than failing on displayName",
+          r["rc"] == 0, r["out"])
+    check("and is counted as created", r["outputs"].get("created") == "1", r["outputs"])
+    check("the parsed displayName reaches the existence check",
+          "Test policy" in r["argv"], r["argv"])
+
+    # Idempotence must key off the same parsed name, or every run re-creates.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": policy_json()},
+                                 policy_glob="policy-*.json", existing=("Test policy",))
+    check("an existing JSON policy is skipped, not duplicated",
+          r["outputs"].get("skipped") == "1", r["outputs"])
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": policy_json()},
+                                 policy_glob="policy-*.json", existing=("Test policy",),
+                                 force_update="true")
+    check("force_update updates the existing JSON policy",
+          r["outputs"].get("updated") == "1", r["outputs"])
+
+    # A genuinely nameless policy must still fail -- the fix must not turn a
+    # real error into a pass.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": json.dumps({"combiner": "OR"})},
+                                 policy_glob="policy-*.json")
+    check("a policy with no displayName still fails", r["rc"] != 0, r["out"])
+    check("and says so specifically", "no top-level displayName" in r["out"], r["out"])
+
+    # Unparseable input is a failure, not a silent skip.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": "{ not: [valid"},
+                                 policy_glob="policy-*.json")
+    check("an unparseable policy file fails the step", r["rc"] != 0, r["out"])
+    check("and is reported as unparseable", "unparseable" in r["out"], r["out"])
+
+    # A scalar/list top level would make .get() explode; it must be caught.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": "[1, 2]"},
+                                 policy_glob="policy-*.json")
+    check("a non-mapping policy file fails cleanly",
+          r["rc"] != 0 and "not a mapping" in r["out"], r["out"])
+
+    # The channel step carried the identical awk; it must accept JSON too.
+    r = run_bootstrap_channel_step(chan, channel=CHANNEL_JSON,
+                                   channel_file="email-channel.json")
+    check("a JSON channel file resolves a channel", r["rc"] == 0, r["out"])
+    check("and the channel name is exported",
+          r["outputs"].get("name", "").startswith("projects/"), r["outputs"])
+    r = run_bootstrap_channel_step(chan, channel=CHANNEL_OK)
+    check("a YAML channel file still resolves", r["rc"] == 0, r["out"])
+    r = run_bootstrap_channel_step(chan, channel="type: email\n")
+    check("a channel file with no displayName fails", r["rc"] != 0, r["out"])
+
+
+    # ---- validate-alerts: an alert nobody can act on is a defect ------------
+    # A linter cannot decide whether a CONDITION deserves to page -- that stays
+    # a human call. It can decide whether the responder was told anything at
+    # all. Burned in both directions, per the gate rules in the testing skill.
+    lint_a = extract_step(ALERTS, "validate", "Lint policy files (offline)")
+    print("\nvalidate-alerts · actionability")
+
+    # MUST STAY SILENT: a fully-documented policy is untouched by the new rules.
+    r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(PROMQL_COND)})
+    check("a documented policy passes", r["rc"] == 0, r["out"])
+    check("and the lint reports how many it examined",
+          r["outputs"].get("checked") == "1", r["outputs"])
+
+    # MUST FIRE: no documentation at all.
+    r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(PROMQL_COND,
+                                                                  documentation=None)})
+    check("an undocumented policy fails", r["rc"] != 0, r["out"])
+    check("and says the responder gets no triage steps",
+          "no documentation.content" in r["out"], r["out"])
+
+    # MUST FIRE: documentation present but too thin to carry triage steps.
+    r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(
+        PROMQL_COND, documentation="It broke.")})
+    check("a one-line documentation fails", r["rc"] != 0, r["out"])
+    check("and names the length it measured", "chars" in r["out"], r["out"])
+
+    # MUST FIRE: documentation that only echoes the title adds nothing.
+    r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(
+        PROMQL_COND, name="A" * 90, documentation="a" * 90)})
+    check("documentation that restates displayName fails", r["rc"] != 0, r["out"])
+    check("and says so specifically", "restates displayName" in r["out"], r["out"])
+
+    # MUST FIRE: an incident that can never clear.
+    r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(PROMQL_COND,
+                                                                  auto_close=None)})
+    check("a policy that never auto-closes fails", r["rc"] != 0, r["out"])
+    check("and explains that it would mask the next occurrence",
+          "mask the next" in r["out"], r["out"])
+
+    # The bar must not be so low it passes anything non-empty: a string one
+    # char under the floor fails, one char over it passes. Without this pair
+    # the threshold could be zero and every case above would still be green.
+    r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(
+        PROMQL_COND, documentation="x" * 79)})
+    check("79 chars of documentation is below the floor", r["rc"] != 0, r["out"])
+    r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(
+        PROMQL_COND, documentation="x" * 81)})
+    check("81 chars clears the floor", r["rc"] == 0, r["out"])
+
+    # The real consumer policies must all pass, or the gate lands red on the
+    # fleet -- clear the backlog before the gate, never after.
+    for repo_doc in (104, 141, 806):
+        r = run_alerts_lint_step(lint_a, {"policy-a.yaml": policy_yaml(
+            PROMQL_COND, documentation="y" * repo_doc)})
+        check(f"a real consumer's {repo_doc}-char documentation passes",
+              r["rc"] == 0, r["out"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

@@ -5,6 +5,8 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-07` — [`validate-alerts` enforces actionability: a page must carry triage, and clear](#2026-09-07--validate-alerts-enforces-actionability-a-page-must-carry-triage-and-clear)
+- `2026-09-07` — [RCA: `bootstrap-alerts` rejected the JSON policies its own linter had just accepted](#2026-09-07--rca-bootstrap-alerts-rejected-the-json-policies-its-own-linter-had-just-accepted)
 - `2026-09-06` — [RCA: `v2.6.1` shipped stamping `v2.6.0` — the release stamp is a step, not a property](#2026-09-06--rca-v261-shipped-stamping-v260--the-release-stamp-is-a-step-not-a-property)
 - `2026-09-06` — [GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback](#2026-09-06--gar-cleanup-was-red-on-deletions-that-had-succeeded-del_one-now-trusts-a-readback)
 - `2026-09-05` — [The pin gate is verified by running it, not by grepping for it](#2026-09-05--the-pin-gate-is-verified-by-running-it-not-by-grepping-for-it)
@@ -84,6 +86,126 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-07 — `validate-alerts` enforces actionability: a page must carry triage, and clear
+
+**Context.** Asked to make sure the platform carries no useless — non-actionable — alerts.
+The rule already existed as owner practice: an expected 401 was deleted from RealmID as an
+alert on 2026-09-06 because a correct rejection is not something anyone acts on (and its
+filter counted every `/auth/*` 401 regardless of cause). Nothing encoded it, so it held only
+as long as someone remembered it at review time.
+
+**What was audited first, not assumed.** All 12 policy files across the three consumers were
+read: automahn 5, tally-helper 5, auth 2. Every one already carries `documentation.content`
+(104–2003 chars) and `alertStrategy.autoClose: 1800s`. So there is no backlog of
+non-actionable alerts to clear — the practice is universal, and only the *enforcement* was
+missing. That is the ideal shape for a new gate: it ratchets existing behaviour rather than
+demanding a migration.
+
+**Decision.** `validate-alerts.yml` gains three rules, alongside the "notifies nobody" rule
+they extend:
+
+1. `documentation.content` must be present — otherwise the page is a bare title with no
+   impact, no first check and no runbook.
+2. …and at least **80 characters**, and not merely a restatement of `displayName`.
+3. `alertStrategy.autoClose` must be set — previously only range-checked when present. An
+   incident that never clears stays open forever and masks the next occurrence, so the alert
+   stops carrying information.
+
+**Where the floor came from.** 80, against a shipped minimum of 104 (automahn's
+`policy-latency-p95`). The bar catches the empty and the one-liner; it does not grade prose,
+and it is not a proxy for quality. Deliberately set *below* the fleet minimum so the gate
+lands green everywhere — a gate nobody can merge past is a gate someone disables. Raising it
+means clearing the backlog first.
+
+**What this deliberately does NOT do.** It cannot decide whether a *condition* deserves to
+page. A linter has no way to know that a 401 on an unauthenticated route is expected
+behaviour rather than an incident — precisely the judgement behind the
+`auth_bearerless_reject` deletion, which none of these rules would have caught. Claiming
+otherwise would be worse than the gap, because it would retire the human review that actually
+catches this class. `docs/validate-alerts.md` states the limit and carries the two review
+questions the gate cannot ask (would the responder act differently at 03:00; can the
+condition fire for a healthy state).
+
+**Verification.** Burned in both directions per the testing skill's gate rules. **Must fire:**
+no documentation, a one-line documentation, documentation restating the title, and a missing
+`autoClose` — each asserted by the message it emits, not merely by a moved exit code.
+**Must stay silent:** a fully documented policy, and every pre-existing `validate-alerts` test
+(the shared `policy_yaml` fixture now carries documentation, so the whole suite is the
+silent half of the burn). The threshold itself is pinned by a boundary pair — 79 chars fails,
+81 passes — without which `DOC_MIN_CHARS` could have been zero and every other case would
+still have gone green.
+
+**Then verified against reality rather than fixtures.** The lint was extracted as shipped and
+run over each consumer's *real* alerts directory: automahn `checked=5` rc=0, tally-helper
+`checked=5` rc=0, auth `checked=2` rc=1 — auth failing only on its two pre-existing gaps (no
+channel file, no `notificationChannels`, both already in `TODO.md`) with **zero actionability
+failures**. Synthetic fixtures of the right length would have proven nothing about the fleet.
+
+**Also corrected here.** `validate-alerts.yml` claimed in a comment and an error message that
+"the apply loop extracts displayName with awk" / "greps for it". That stopped being true with
+the same-day fix above; both now describe matching, and cite the entry.
+
+## 2026-09-07 — RCA: `bootstrap-alerts` rejected the JSON policies its own linter had just accepted
+
+**Context.** A peer session handed over RealmID's app-metric SLO alerts: `realm-id` has
+uptime alerting only, and the OTel→GMP metrics `app_http_response` / `app_sql_*` have no
+coverage. Investigating what the platform owed that work surfaced a prior question — why
+does `auth` not call `bootstrap-alerts` at all? Its `.github/workflows/` has no alerts
+caller (only `cleanup-gar-images` and `cleanup-cloud-run-revisions`, both `@v2.6.2`); it
+hand-rolled `infra/alerts/apply-alerts.sh` instead, reproducing the skip-if-exists trap
+that `force_update` already solves here.
+
+**Symptom.** A caller pointing `policy_glob` at a JSON policy set passes `validate-alerts`
+and then fails the apply with `::error::No displayName found in <file>` — naming the one
+field that is plainly present and correctly spelled in the file.
+
+**Root cause.** The linter and the applier did not agree on what a policy file *is*.
+`validate-alerts.yml` parses with `yaml.safe_load`, which accepts JSON (JSON is a subset of
+YAML). `bootstrap-alerts.yml` scraped the name with
+`awk '/^displayName:/ { sub(...); print; exit }'` — a **column-0-anchored, YAML-only**
+match. Against `  "displayName": "..."` it matches nothing, `$DISPLAY` is empty, and the
+step's own empty-check fires with a message that describes the file rather than the parse.
+Both the "Ensure notification channel" and "Apply alert policies" steps carried it.
+
+This is a supported path, not a misuse: `policy_glob` and `channel_file` are
+caller-settable inputs, gcloud's `--policy-from-file` takes JSON, and JSON is exactly what
+`gcloud alpha monitoring policies describe` emits — so exporting a live policy and
+committing it is the obvious adoption route.
+
+**Why it wasn't caught.** `bootstrap-alerts.yml` had **zero coverage in
+`tests/run_step_tests.py`** — the suite tests `validate-alerts`' lint and both of its
+query-execution layers, but never executed a `bootstrap-alerts` step body. actionlint and
+shellcheck both pass the awk line; it is valid shell that is wrong at runtime, which is the
+precise gap `run_step_tests.py` exists to close (see 2026-09-01). And no in-repo fixture was
+JSON, so the format asymmetry had nothing to show up against. Neither repo's CI could see
+it either, because the two halves live in different workflows and only the linter half was
+ever run against a real policy set.
+
+**Fix.** Both steps now read `displayName` with the **same** `yaml.safe_load` the linter
+uses, via a small reader written to a temp file once per step (hoisted out of the policy
+loop). PyYAML is preinstalled on the runner image — `validate-alerts.yml` already depends on
+that with no pip step, so this adds no install. The error messages now distinguish
+*unparseable* / *not a mapping* / *no top-level displayName*, so the next failure names the
+actual defect. Defaults are unchanged (`policy-*.yaml`, `email-channel.yaml`): this is a bug
+fix, not an input-contract change, and existing YAML callers are untouched.
+
+**Prevention.** `tests/run_step_tests.py` gains 16 checks executing both step bodies as
+shipped — the YAML path as a regression guard, the JSON path for the bug, idempotence
+(skip-by-`displayName`) and `force_update` on the JSON path, and three negative cases
+proving the fix did **not** convert a real error into a pass. Per the anti-vacuity rule the
+suite was proven **red first**: run against `git show HEAD:` (the pre-fix body), the JSON
+policy case failed with the exact `No displayName found` message above and the JSON channel
+case failed too, while the YAML case stayed green — confirming the bug was JSON-only and the
+new checks actually bind. The durable lesson is the general one: **when two workflows gate
+the same artifact, they must share a parser, not merely a convention** — a linter that is
+more permissive than its applier turns a green gate into a false promise.
+
+**Not done here (deliberate).** Writing the RealmID SLO policies themselves is app-repo
+work — under the ownership split in the workspace `CLAUDE.md`, app repos own their
+resources and `reusable-workflows` owns only the shared ops bodies. The auth-side adoption
+steps (add `NOTIFICATION_CHANNEL_PLACEHOLDER` to each policy file, add a thin caller, retire
+`apply-alerts.sh`) are documented in `docs/bootstrap-alerts.md` and tracked in `TODO.md`.
 
 ## 2026-09-06 — RCA: `v2.6.1` shipped stamping `v2.6.0` — the release stamp is a step, not a property
 
