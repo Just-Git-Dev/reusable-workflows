@@ -119,7 +119,7 @@ permissions:
 
 jobs:
   validate:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/validate-alerts.yml@v2.6.2
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/validate-alerts.yml@v2.7.0
     with:
       # Omit the three GCP inputs to run the offline lint only.
       gcp_project: my-gcp-project

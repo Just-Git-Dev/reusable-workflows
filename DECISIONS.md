@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-07` — [`v2.7.0` is a minor, not a patch: the gate can newly fail a caller that never changed](#2026-09-07--v270-is-a-minor-not-a-patch-the-gate-can-newly-fail-a-caller-that-never-changed)
 - `2026-09-07` — [`validate-alerts` enforces actionability: a page must carry triage, and clear](#2026-09-07--validate-alerts-enforces-actionability-a-page-must-carry-triage-and-clear)
 - `2026-09-07` — [RCA: `bootstrap-alerts` rejected the JSON policies its own linter had just accepted](#2026-09-07--rca-bootstrap-alerts-rejected-the-json-policies-its-own-linter-had-just-accepted)
 - `2026-09-06` — [RCA: `v2.6.1` shipped stamping `v2.6.0` — the release stamp is a step, not a property](#2026-09-06--rca-v261-shipped-stamping-v260--the-release-stamp-is-a-step-not-a-property)
@@ -86,6 +87,22 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-07 — `v2.7.0` is a minor, not a patch: the gate can newly fail a caller that never changed
+
+**Decision.** The alerts parser fix and the actionability gate ship together as **`v2.7.0`**,
+a minor bump, even though no `workflow_call` input was added, removed or made required.
+
+**Why not a patch.** Semver here tracks the *input contract*, and by that reading alone this
+would be a patch. But the actionability gate makes `validate-alerts` reject policy files it
+previously accepted: a consumer pinning the new tag with an unchanged repo can go red. The
+audit says none of the 12 live policies will (all already comply — see the entry below), yet
+"no caller is affected today" is a measurement, not a guarantee for callers we do not own.
+A minor is the signal that a pin bump warrants reading the diff.
+
+**Not re-cut as a patch on `v2.6.x`.** The frozen `v1` alias and the existing `v2.6.2` pins
+stay exactly where they are; nothing is republished under a tag consumers already resolved.
+
 
 ## 2026-09-07 — `validate-alerts` enforces actionability: a page must carry triage, and clear
 
