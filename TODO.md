@@ -1,5 +1,24 @@
 # TODO — reusable-workflows
 
+## Two items rehomed from the inflight tracker (opened 2026-09-08)
+
+Both were carried as live state in `~/.claude/inflight/` for several sessions. Neither is
+live state — they are backlog, so they belong here. Recorded verbatim; neither is started.
+
+- [ ] **CI guard: assert the `v1` alias points at the newest `v1.x` tag.** `v1` is a frozen
+      legacy alias (see the pinning rule in `CLAUDE.md` and line 326 below), but nothing
+      verifies it still resolves to the newest `v1.x` release — it can silently drift behind
+      and a legacy caller then gets an older input contract than `v1` implies. Wanted as a
+      release-time check alongside the `WORKFLOW_VERSION` stamp sweep, which has the same
+      shape of failure (see "Release hygiene" below — that one shipped wrong in `v2.6.1`).
+
+- [ ] **Owed to AutoMahn: audit `validate-alerts` for derived-comparand and assumed-scope
+      gates.** The linter's checks were reviewed for MQL execution (closed 2026-09-01, below)
+      but not for two classes it may pass vacuously: a threshold compared against a value the
+      policy itself derives, and a check that assumes a scope the policy never declares. Until
+      audited, a green `validate-alerts` is weaker evidence than it reads as.
+
+
 ## RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)
 
 `auth` hand-rolled `infra/alerts/apply-alerts.sh` instead of calling this repo's
