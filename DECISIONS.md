@@ -5,6 +5,8 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-13` — [RCA: 17 `DECISIONS.md` index links pointed at nothing, because the anchor ate a space the em dash left behind](#2026-09-13--rca-17-decisionsmd-index-links-pointed-at-nothing-because-the-anchor-ate-a-space-the-em-dash-left-behind)
+- `2026-09-13` — [`TODO.md` gets a status index and an archive split; ten checkboxes were lying](#2026-09-13--todomd-gets-a-status-index-and-an-archive-split-ten-checkboxes-were-lying)
 - `2026-09-07` — [`v2.7.0` is a minor, not a patch: the gate can newly fail a caller that never changed](#2026-09-07--v270-is-a-minor-not-a-patch-the-gate-can-newly-fail-a-caller-that-never-changed)
 - `2026-09-07` — [`validate-alerts` enforces actionability: a page must carry triage, and clear](#2026-09-07--validate-alerts-enforces-actionability-a-page-must-carry-triage-and-clear)
 - `2026-09-07` — [RCA: `bootstrap-alerts` rejected the JSON policies its own linter had just accepted](#2026-09-07--rca-bootstrap-alerts-rejected-the-json-policies-its-own-linter-had-just-accepted)
@@ -45,23 +47,23 @@ archived by age only; nothing is deleted, and both files are greppable.
 - `2026-08-11` — [The `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
 - `2026-08-11` — [Default-on badges must not fail CI for callers without a coverage report (bug fix)](#2026-08-11--default-on-badges-must-not-fail-ci-for-callers-without-a-coverage-report-bug-fix)
 - `2026-08-11` — [README badges on by default; the badge job stops dictating caller permissions](#2026-08-11--readme-badges-on-by-default-the-badge-job-stops-dictating-caller-permissions)
-- `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11-private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
-- `2026-07-28` — [`promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)](#2026-07-28-promote-image-races-the-build-it-promotes-from-bounded-source_wait_seconds-plus-the-first-executable-run-body-tests-bug-fix)
-- `2026-07-28` — [`run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out](#2026-07-28-run-db-job-built-docker_target-added-the-runner-side-prebuild-hook-deliberately-left-out)
-- `2026-07-27` — [`deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)](#2026-07-27-deploy-cloud-run-summary-step-fails-a-successful-job-when-there-is-no-service-url-bug-fix)
-- `2026-07-27` — [Secret-distribution workflows refuse values too short to be a credential](#2026-07-27-secret-distribution-workflows-refuse-values-too-short-to-be-a-credential)
-- `2026-07-27` — [build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo](#2026-07-27-build-oncepromote-to-prod-build_only-release-relative-gar-retention-and-the-first-tests-in-this-repo)
-- `2026-07-27` — [`DECISIONS.md` restructured: index + age-based archive (no deletions)](#2026-07-27-decisionsmd-restructured-index--age-based-archive-no-deletions)
-- `2026-07-27` — [Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep](#2026-07-27-fleet-wide-caller-repin-to-v1150-driven-by-an-annotation-sweep)
-- `2026-07-27` — [`ci-go`/`ci-node`: opt-in README badges close the last test-and-lint parity gap](#2026-07-27-ci-goci-node-opt-in-readme-badges-close-the-last-test-and-lint-parity-gap)
-- `2026-07-24` — [actions-group major bumps (#18): Node-24 runner floor is the only breaking change](#2026-07-24-actions-group-major-bumps-18-node-24-runner-floor-is-the-only-breaking-change)
-- `2026-07-24` — [`retire-gar-packages` shellcheck SC2020 breaking CI on every PR (bug fix)](#2026-07-24-retire-gar-packages-shellcheck-sc2020-breaking-ci-on-every-pr-bug-fix)
-- `2026-07-15` — [`ci-go` secret renamed `github_token` → `go_private_token` (bug fix)](#2026-07-15-ci-go-secret-renamed-github_token-go_private_token-bug-fix)
-- `2026-07-15` — [forward-only extended to the stage build workflows (opt-in)](#2026-07-15-forward-only-extended-to-the-stage-build-workflows-opt-in)
-- `2026-07-15` — [forward-only guard on `promote-image` (phase 3; opt-in)](#2026-07-15-forward-only-guard-on-promote-image-phase-3-opt-in)
-- `2026-07-15` — [live-commit stamping across deploy/promote (phase 2 of the release-process plan)](#2026-07-15-live-commit-stamping-across-deploypromote-phase-2-of-the-release-process-plan)
-- `2026-07-15` — [`rollback-service` built; no pin (push-based, not GitOps); triggers stay caller-owned](#2026-07-15-rollback-service-built-no-pin-push-based-not-gitops-triggers-stay-caller-owned)
-- `2026-07-15` — [release-process model documented; transient rollback fenced out-of-band](#2026-07-15-release-process-model-documented-transient-rollback-fenced-out-of-band)
+- `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11--private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
+- `2026-07-28` — [`promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)](#2026-07-28--promote-image-races-the-build-it-promotes-from-bounded-source_wait_seconds-plus-the-first-executable-run-body-tests-bug-fix)
+- `2026-07-28` — [`run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out](#2026-07-28--run-db-job-built-docker_target-added-the-runner-side-prebuild-hook-deliberately-left-out)
+- `2026-07-27` — [`deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)](#2026-07-27--deploy-cloud-run-summary-step-fails-a-successful-job-when-there-is-no-service-url-bug-fix)
+- `2026-07-27` — [Secret-distribution workflows refuse values too short to be a credential](#2026-07-27--secret-distribution-workflows-refuse-values-too-short-to-be-a-credential)
+- `2026-07-27` — [build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo](#2026-07-27--build-oncepromote-to-prod-build_only-release-relative-gar-retention-and-the-first-tests-in-this-repo)
+- `2026-07-27` — [`DECISIONS.md` restructured: index + age-based archive (no deletions)](#2026-07-27--decisionsmd-restructured-index--age-based-archive-no-deletions)
+- `2026-07-27` — [Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep](#2026-07-27--fleet-wide-caller-repin-to-v1150-driven-by-an-annotation-sweep)
+- `2026-07-27` — [`ci-go`/`ci-node`: opt-in README badges close the last test-and-lint parity gap](#2026-07-27--ci-goci-node-opt-in-readme-badges-close-the-last-test-and-lint-parity-gap)
+- `2026-07-24` — [actions-group major bumps (#18): Node-24 runner floor is the only breaking change](#2026-07-24--actions-group-major-bumps-18-node-24-runner-floor-is-the-only-breaking-change)
+- `2026-07-24` — [`retire-gar-packages` shellcheck SC2020 breaking CI on every PR (bug fix)](#2026-07-24--retire-gar-packages-shellcheck-sc2020-breaking-ci-on-every-pr-bug-fix)
+- `2026-07-15` — [`ci-go` secret renamed `github_token` → `go_private_token` (bug fix)](#2026-07-15--ci-go-secret-renamed-github_token--go_private_token-bug-fix)
+- `2026-07-15` — [forward-only extended to the stage build workflows (opt-in)](#2026-07-15--forward-only-extended-to-the-stage-build-workflows-opt-in)
+- `2026-07-15` — [forward-only guard on `promote-image` (phase 3; opt-in)](#2026-07-15--forward-only-guard-on-promote-image-phase-3-opt-in)
+- `2026-07-15` — [live-commit stamping across deploy/promote (phase 2 of the release-process plan)](#2026-07-15--live-commit-stamping-across-deploypromote-phase-2-of-the-release-process-plan)
+- `2026-07-15` — [`rollback-service` built; no pin (push-based, not GitOps); triggers stay caller-owned](#2026-07-15--rollback-service-built-no-pin-push-based-not-gitops-triggers-stay-caller-owned)
+- `2026-07-15` — [release-process model documented; transient rollback fenced out-of-band](#2026-07-15--release-process-model-documented-transient-rollback-fenced-out-of-band)
 
 <details><summary>Archived — 10 earlier entries in <code>DECISIONS-ARCHIVE.md</code></summary>
 
@@ -87,6 +89,82 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-13 — RCA: 17 `DECISIONS.md` index links pointed at nothing, because the anchor ate a space the em dash left behind
+
+**Symptom.** 17 of the 58 index links in `DECISIONS.md` resolved nowhere — clicking one stayed
+put. The entries were all present and correctly titled; only the links were wrong. Two other
+patterns existed side by side: the 2026-09-07 block used `#2026-09-07--v2…` (two hyphens) and
+the 2026-08-11 block used `#2026-08-11-private…` (one), so the file disagreed with itself.
+
+**Root cause.** GitHub builds a heading anchor by lowercasing the *rendered* text, deleting
+characters that are neither word characters, whitespace, nor hyphens, then replacing each
+remaining space with a hyphen. It does **not** collapse runs of whitespace. A heading
+`## 2026-08-11 — Private npm…` therefore loses the `—` but keeps *both* spaces around it and
+anchors as `2026-08-11--private-npm…`. The index lines that were wrong had collapsed that pair
+to a single hyphen.
+
+**Why it wasn't caught.** Nothing checked. The index is hand-maintained prose, the links only
+fail on click, and the two conventions coexisted for a month without either looking anomalous.
+
+**Fix.** Every index anchor is now regenerated from its own heading rather than retyped, with
+markdown links rendered to their text first — a heading ending `— [ADR-003](docs/adr/…)`
+contributes `adr-003` to the anchor and not the URL. 17 rewritten here, 41 already correct.
+
+**Prevention.** `scripts/check_doc_anchors.py` parses every in-page `#anchor` link in
+`DECISIONS.md`, `DECISIONS-ARCHIVE.md`, `TODO.md`, `TODO-ARCHIVE.md` and `README.md`, and
+asserts each resolves to a heading in that same file. Wired into `ci.yml` next to
+`check_docs_coverage.py`, so it runs on every PR rather than when someone remembers.
+
+It was proven to fail before it was trusted: reintroducing the exact shipped defect on one
+index line (collapsing the date's `--` to `-`) makes it exit 1 naming that line, and it
+returns to 0 when restored. A gate green on its first run has proven nothing.
+
+**Two measurement errors worth recording**, both the same shape as the bug:
+- The first checker ignored that a markdown link in a heading renders to its text, so it
+  reported one *correct* link as broken. The true count is **39 across both repos, not 40**.
+- The generator that produced this cleanup's new `TODO.md` indexes had the identical
+  whitespace-collapsing bug. It was caught before commit only because the checker was written
+  first and run against my own output.
+
+## 2026-09-13 — `TODO.md` gets a status index and an archive split; ten checkboxes were lying
+
+`TODO.md` had grown to 625 lines with no navigation: the only way to find live work was to
+read it. Two entries also carried an **open** checkbox over text that said the work was done
+(`node_modules` caching, build-once/promote for frontends). Both are the repo's
+"resolution above, `~~struck~~` original below" convention — the content was right, the
+checkbox state was not, so `grep -c '^- \[ \]'` overstated the backlog by 2.
+
+**Decided.** Three changes, applied together:
+
+1. **Checkbox state must match the text.** The two struck originals are now `[x]`. The
+   convention of keeping the original below its resolution stays — it is good history — but a
+   preserved original is closed, not open. Open count: 31 → **29**.
+2. **Fully-closed sections move to [`TODO-ARCHIVE.md`](TODO-ARCHIVE.md)** — the same
+   split-by-state-only treatment `DECISIONS.md` already gets, and for the same reason: the log
+   stays complete and greppable while the working file stays readable. Two sections, 7 closed
+   items, 65 lines out. `TODO.md`: 625 → **560** lines.
+3. **A `## Index` at the top**, listing each section with a status (ACTIVE / REFERENCE), an
+   anchor link and its open count.
+
+**Rejected: line numbers in the index.** They were the obvious mirror of how the sections were
+being referenced, and they rot on the first edit — this file already carried a stale
+"see … line 326 below" pointing at a wrapped `DECISIONS.md.` continuation, broken well before
+this restructure. Anchor links survive edits. The stale pointer was removed rather than
+repaired, since the rule it referenced is stated in `CLAUDE.md` anyway.
+
+**Status is per section, not per item.** A section is ACTIVE unless every item in it is closed
+(→ archive), it is waiting on someone outside the repo (BLOCKED), it is deliberately not being
+worked (PARKED), or it is reference prose rather than a work list (REFERENCE). Keep the index
+current by hand when a section opens or closes; it is one line.
+
+**Verification.** Item conservation was asserted mechanically, not eyeballed: 57 checkbox items
+before, 57 after across both files, plus a line-multiset diff proving no prose was dropped. The
+diff surfaced exactly one removed line — the stale cross-reference above — which is how the
+check earned its keep.
+
+**Not done:** no item was reworded, reprioritised, or closed on judgement. Only state that the
+text already asserted was corrected.
 
 ## 2026-09-07 — `v2.7.0` is a minor, not a patch: the gate can newly fail a caller that never changed
 

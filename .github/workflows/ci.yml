@@ -64,6 +64,12 @@ jobs:
       # one failure a generator structurally cannot see, so it needs its own gate.
       - run: python3 scripts/check_docs_coverage.py
 
+      # The DECISIONS.md index is hand-maintained and 17 of its 58 links pointed
+      # at nothing: GitHub does NOT collapse the two spaces left when it strips an
+      # em dash, so `## <date> — <title>` anchors as `<date>--<title>`. A dead
+      # in-page anchor fails silently on click, which is why it survived a month.
+      - run: python3 scripts/check_doc_anchors.py
+
   version-sweep:
     name: version stamps and doc pins agree
     runs-on: ubuntu-latest
