@@ -1,12 +1,28 @@
 # TODO — reusable-workflows
 
+## Index
+29 open across 8 live sections. 8 closed items archived.
+
+Status is the section's own, not per item; keep it current by hand when a
+section opens or closes. Closed sections live in
+[TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
+
+- **ACTIVE** — [Two items rehomed from the inflight tracker (opened 2026-09-08)](#two-items-rehomed-from-the-inflight-tracker-opened-2026-09-08) — 2 open
+- **ACTIVE** — [RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)](#realmid-realm-id-has-no-alerts-caller--adopt-bootstrap-alerts-opened-2026-09-07) — 3 open
+- **ACTIVE** — [Release hygiene — the `WORKFLOW_VERSION` stamp (regression found 2026-09-06)](#release-hygiene--the-workflow_version-stamp-regression-found-2026-09-06) — 4 open
+- **ACTIVE** — [Build attestations](#build-attestations) — 1 open
+- **ACTIVE** — [Secret Manager](#secret-manager) — 1 open, 2 closed
+- **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
+- **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
+- **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
 ## Two items rehomed from the inflight tracker (opened 2026-09-08)
 
 Both were carried as live state in `~/.claude/inflight/` for several sessions. Neither is
 live state — they are backlog, so they belong here. Recorded verbatim; neither is started.
 
 - [ ] **CI guard: assert the `v1` alias points at the newest `v1.x` tag.** `v1` is a frozen
-      legacy alias (see the pinning rule in `CLAUDE.md` and line 326 below), but nothing
+      legacy alias (see the pinning rule in `CLAUDE.md`), but nothing
       verifies it still resolves to the newest `v1.x` release — it can silently drift behind
       and a legacy caller then gets an older input contract than `v1` implies. Wanted as a
       release-time check alongside the `WORKFLOW_VERSION` stamp sweep, which has the same
@@ -17,7 +33,6 @@ live state — they are backlog, so they belong here. Recorded verbatim; neither
       but not for two classes it may pass vacuously: a threshold compared against a value the
       policy itself derives, and a check that assumes a scope the policy never declares. Until
       audited, a green `validate-alerts` is weaker evidence than it reads as.
-
 
 ## RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)
 
@@ -94,87 +109,6 @@ spread is v2.4.0 / v2.4.1 / v2.5.0 / v2.6.0 across auth, automahn, tally-helper.
 
 Keep this OUT of any stamp/pin one-liner: different workflows, different input contracts, and
 semver here tracks the **input contract**, so each pin needs its own diff read before moving.
-
-## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
-
-- [x] **Add a PromQL execution layer to `validate-alerts.yml`.** Layer 2 executes queries only
-      for `conditionMonitoringQueryLanguage` (the `kind == "conditionMonitoringQueryLanguage"`
-      branch at line 220). `conditionPrometheusQueryLanguage` is in the accepted-kinds list
-      (line 141), passes the offline structural lint, and is then **never run against the API**
-      — so a PromQL policy gets a green tick from a check that did not check it. Add the
-      execution step plus a `promql_checked` output mirroring `mql_checked` (lines 70/99/339)
-      and its summary line (359).
-
-      **Why it matters now:** Managed-Prometheus/OTel-ingested metrics land as
-      `prometheus.googleapis.com/<name>/<kind>` and are naturally queried in PromQL, so the
-      first application-level alert policies in the fleet will all take this path. Merging one
-      before the gate exists ships a query nobody has ever executed.
-
-      Driven by `infra-provisioning/TODO.md` → *GoFr metrics → Google Cloud* (parked
-      2026-09-01 on gofr-dev/gofr#4112). Not blocked by it — this gate is independently
-      correct and should land **before** the first `prometheus.googleapis.com/*` policy.
-
-      This is THE PATTERN: a clean report over a surface that was never read.
-
-      **Shipped 2026-09-01.** PromQL queries are collected by the lint and POSTed to
-      `v1/projects/<p>/location/global/prometheus/api/v1/query`; `promql_checked` output added
-      alongside `mql_checked`; `promql_found` in the summary. No new inputs and no new IAM —
-      `monitoring.timeSeries.list` covers both read paths. A `2xx` carrying
-      `{"status":"error"}` fails, and `401`/`403` exits without writing a count. See
-      DECISIONS.md 2026-09-01.
-
-- [x] **`validate-alerts` had no tests at all before this** because every step wrote to a
-      hardcoded `/tmp` path that `tests/run_step_tests.py` cannot isolate. All three steps now
-      resolve through `${RUNNER_TEMP:-/tmp}` and 21 step-body tests cover the lint and the
-      PromQL layer. The **MQL execution layer is still untested** — the seam now exists, so
-      mirroring the PromQL tests onto it is mechanical. Worth doing: it is the layer the whole
-      workflow was built for.
-
-      **Done 2026-09-01** — and it was not mechanical: the mirror found two live bugs in the
-      MQL layer. A missing query list reported `All 0 MQL query/queries validated` and exited
-      0 (`done < missing` kills the loop, not the script), and the `| condition` strip used
-      `\b`, a GNU extension that silently no-ops under any other sed. Both fixed, RCA in
-      DECISIONS.md 2026-09-01. Both execution layers now hold the same contract under test.
-
-
-## Fallout from immutable-tag enforcement (opened 2026-08-12, v2.1.1)
-
-- [x] **`retire-gar-packages` has no immutability handling and will fail on a locked repo.**
-      Done 2026-08-13 — detect → pre-flight → unlock → act → `always()` restore, mirroring
-      `cleanup-gar-images` but with no policy input (a retirement preserves the repo's
-      protection, it does not decide it) and no degraded mode (a package delete is
-      all-or-nothing, so a locked repo with no update permission fails BEFORE anything is
-      deleted). Header IAM corrected to `roles/artifactregistry.admin`. 17 step-body tests.
-      See DECISIONS.md 2026-08-13.
-
-- [x] **`retire-gar-packages` has no `docs/` page and no README catalog row.** Done
-      2026-08-13 — `docs/retire-gar-packages.md` + README row under "Backups, alerts &
-      housekeeping". Covers the live-reference safety rule, the immutability sequence and why
-      it has no policy input and no degraded mode, and the `artifactregistry.admin`-not-
-      repoAdmin requirement.
-
-- [x] ~~**`keep_tags` defaults to `latest,buildcache` — both are MOVING tags**~~ — **Done
-      2026-08-21 (v2.4.0).** Half of this was already stale: the `latest` half was answered by
-      the 2026-08-13 `cleanup_latest_tag` work (`keep_tags` protects the DIGEST during the
-      sweep, `cleanup_latest_tag` removes the stranded POINTER after it — different objects,
-      so no conflict). Only `buildcache` was open, and the fleet decided it: **zero registry
-      build caches exist** — all 19 active repos scanned, every cache is `type=gha`, no
-      `cache-to: type=registry` anywhere — while 2 of the 3 `cleanup-gar-images` callers run
-      `enforce` and none overrides `keep_tags`. Dropped `buildcache` from the default, added a
-      run-time warning when a caller opts back into it under `enforce`, and rewrote the docs
-      section to state the `preserve`/`unlock` assumption it always relied on. See
-      DECISIONS.md 2026-08-21.
-
-- [x] ~~**`SERVICE_ACCOUNT` is referenced but never set in `cleanup-gar-images.yml`.**~~ —
-      **Done 2026-08-21 (v2.4.0).** `SERVICE_ACCOUNT: ${{ inputs.service_account }}` added to
-      the `Verify permission to toggle immutability` step's `env:`, so both immutability
-      warnings now name the identity that needs the role instead of printing the generic
-      fallback. Rode along with the `keep_tags` change — same file, same feature area.
-
-- [x] **13 of 15 fleet call sites are still pinned `@v2.0.0`.** Done 2026-08-13 — all 15
-      repinned to `@v2.1.2` across 6 repos (Realm-ID/{issuer, ui, project},
-      Traide-Co/{project, website, webapp}), all merged. `fleet_drift.py` now reports
-      15/15 at latest, zero stale, zero mutable. See DECISIONS.md 2026-08-13.
 
 ## Build attestations
 
@@ -335,37 +269,6 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       script's last statement, so its status becomes the step's. Either a shellcheck-style
       grep in CI, or a `run_step_tests.py` case per Summary step asserting rc=0 with an empty
       env. The grep is cheaper and catches all of them at once.
-
-## Convergence — operating facts that live nowhere else in this repo
-
-Moved out of session memory 2026-09-02 (see the routing rule in `~/.claude/CLAUDE.md`). These
-are the few things about running the convergence that the repo did not already record:
-
-- **The current tag is looked up, not remembered** — `gh release list`. Consumers pin an exact
-  `vX.Y.Z`; `@v1` is a frozen legacy alias and `@main` is never acceptable.
-- **Editing any `.github/workflows/*` file through the API needs the token's `workflow` OAuth
-  scope.** `repo` alone 404s — the failure looks like a missing file, not a permission error.
-  Fix with `gh auth refresh -s workflow`.
-- **`gh pr merge` may be refused by the Claude Code permission classifier**, not by GitHub —
-  hit 2026-08-12 for both batched and single-PR forms. If it stays blocked, ask the user to run
-  it as `! gh pr merge …`.
-- **Do not build consumer monitoring.** A scheduled caller-drift scan was built and de-scoped
-  the same day (2026-08-11): this repo is public, most callers are private, and shipping an
-  org-wide scanner from a public repo is the wrong trade.
-- **`zopsmart/eazyupdates-ui` → Cloudflare Pages is PARKED (2026-08-11)**, at the user's
-  request, to do platform fixes first. Nothing live changed; the GKE path still deploys. The
-  decided-and-not-to-be-relitigated shape: serve `app.eazyupdates.com` **at the root** (drop the
-  `/user` prefix); **no DNS zone move** (a subdomain custom domain works from Google Cloud DNS
-  via CNAME — only an apex needs the zone on Cloudflare, and explicit records are mandatory
-  because the zone wildcards answer every name); **two Pages projects**, one per environment;
-  config baked at build from the committed `configs/.{stage,prod}.env`; the
-  `eazyupdates.com/user` 301 belongs on the **ingress**, not in `eazyupdates-web`'s nginx.conf.
-  Build-once/promote was rejected; nginx health endpoints dropped (no signal on a CDN). Work is
-  preserved as a git bundle at `devops/.eazyupdates-pages-wip.bundle` (branch
-  `feat/cloudflare-pages-deploy`, tip `f0728e0`) and closed PR `zopsmart/eazyupdates-ui#4440`.
-  The bundle predates the root-mount decision, so it still nests under `user/`.
-  Still open: the stage hostname; whether to adopt `ci-node`'s badges; Android App Links (the
-  apex `assetlinks.json` returns HTML — already broken); the GKE decommission tail.
 
 ## Convergence — remaining work
 
@@ -531,7 +434,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   install skipped on a hit, with a `::notice::` because lifecycle scripts then don't run.
   **Unverified on a real runner** — no measurement yet of the saving on a large tree; do that
   when `eazyupdates-ui` or another big caller adopts it. Original entry:
-- [ ] ~~`ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.**~~ Both
+- [x] ~~`ci-node.yml` / `deploy-cloudflare-pages.yml` — **optional `node_modules` caching.**~~ Both
   rely on `setup-node`'s cache, which covers only `~/.npm`; npm still unpacks and links the tree
   on every run. `eazyupdates-ui`'s outgoing GKE workflow caches `node_modules` itself, keyed on
   `hashFiles('package-lock.json')` with no `restore-keys` (a prefix fallback would restore a tree
@@ -570,7 +473,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   URL. Node deliberately held at `22` (reusable defaults to 24) — bump separately.
   **Unproven until the first `v*.*.*` tag after merge.** `website` (`npx wrangler`) is untouched
   and still the tail.
-- [ ] ~~build-once/promote for frontends~~ — **considered and rejected 2026-08-11.** Adding
+- [x] ~~build-once/promote for frontends~~ — **considered and rejected 2026-08-11.** Adding
   `build_only` + cross-run artifact download + a `predeploy_command` seam to
   `deploy-cloudflare-pages` (so one bundle could serve stage and prod, differing only in a
   generated `environment.js`) was scoped for the eazyupdates-ui migration and dropped. A fleet
@@ -623,3 +526,34 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   sweep or a rotation.
   (c) a version awaiting destruction is `DISABLED`, so the sweep's current DISABLED-selection
   would re-enter it as a candidate next run. No-op, error, or does it reset the clock?
+
+## Convergence — operating facts that live nowhere else in this repo
+
+Moved out of session memory 2026-09-02 (see the routing rule in `~/.claude/CLAUDE.md`). These
+are the few things about running the convergence that the repo did not already record:
+
+- **The current tag is looked up, not remembered** — `gh release list`. Consumers pin an exact
+  `vX.Y.Z`; `@v1` is a frozen legacy alias and `@main` is never acceptable.
+- **Editing any `.github/workflows/*` file through the API needs the token's `workflow` OAuth
+  scope.** `repo` alone 404s — the failure looks like a missing file, not a permission error.
+  Fix with `gh auth refresh -s workflow`.
+- **`gh pr merge` may be refused by the Claude Code permission classifier**, not by GitHub —
+  hit 2026-08-12 for both batched and single-PR forms. If it stays blocked, ask the user to run
+  it as `! gh pr merge …`.
+- **Do not build consumer monitoring.** A scheduled caller-drift scan was built and de-scoped
+  the same day (2026-08-11): this repo is public, most callers are private, and shipping an
+  org-wide scanner from a public repo is the wrong trade.
+- **`zopsmart/eazyupdates-ui` → Cloudflare Pages is PARKED (2026-08-11)**, at the user's
+  request, to do platform fixes first. Nothing live changed; the GKE path still deploys. The
+  decided-and-not-to-be-relitigated shape: serve `app.eazyupdates.com` **at the root** (drop the
+  `/user` prefix); **no DNS zone move** (a subdomain custom domain works from Google Cloud DNS
+  via CNAME — only an apex needs the zone on Cloudflare, and explicit records are mandatory
+  because the zone wildcards answer every name); **two Pages projects**, one per environment;
+  config baked at build from the committed `configs/.{stage,prod}.env`; the
+  `eazyupdates.com/user` 301 belongs on the **ingress**, not in `eazyupdates-web`'s nginx.conf.
+  Build-once/promote was rejected; nginx health endpoints dropped (no signal on a CDN). Work is
+  preserved as a git bundle at `devops/.eazyupdates-pages-wip.bundle` (branch
+  `feat/cloudflare-pages-deploy`, tip `f0728e0`) and closed PR `zopsmart/eazyupdates-ui#4440`.
+  The bundle predates the root-mount decision, so it still nests under `user/`.
+  Still open: the stage hostname; whether to adopt `ci-node`'s badges; Android App Links (the
+  apex `assetlinks.json` returns HTML — already broken); the GKE decommission tail.
