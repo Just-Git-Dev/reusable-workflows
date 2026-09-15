@@ -44,6 +44,23 @@ live state — they are backlog, so they belong here. Recorded verbatim; neither
       policy itself derives, and a check that assumes a scope the policy never declares. Until
       audited, a green `validate-alerts` is weaker evidence than it reads as.
 
+      ✅ **AUDITED 2026-09-15 — zero live instances of either class.** Full per-check table with
+      verdicts: [`plans/validate-alerts-audit-2026-09-15.md`](plans/validate-alerts-audit-2026-09-15.md).
+      Every comparand traces either to a fixed external constant (GCP's own documented enums and
+      ranges — `COMBINERS`, `AUTOCLOSE_MIN/MAX`, `CONDITION_KEYS`, `DOC_MIN_CHARS`) or to two
+      independently-authored policy fields compared for a real anti-pattern (`documentation.content`
+      restating `displayName` — the closest thing to class 1, but neither side is computed from
+      the other, so it is not self-derived). The `gcp_project` scope layer-2 runs against is a
+      **required `workflow_call` input**, not an assumption, and skipping layer 2 when it is unset
+      is a **declared** skip printed in the step summary, not a silent no-op. The two 2026-09-01
+      findings were a different shape (execution-layer coverage — "a result that never arrived read
+      as a pass") and are both fixed and mutation-tested.
+
+      ⚠️ Leaving this item OPEN for one reason only, and it is not a vacuity finding: four checks
+      have **no dedicated test** — `combiner`, the `notificationChannels` placeholder, the
+      `autoClose` range, and the log-condition rate-limit requirement. Reading the code says they
+      are structurally sound; nothing *executes* them. That is the gap to close, not a rewrite.
+
 ## RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)
 
 `auth` hand-rolled `infra/alerts/apply-alerts.sh` instead of calling this repo's
