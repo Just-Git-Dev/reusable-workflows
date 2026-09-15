@@ -1,0 +1,100 @@
+name: Release
+
+# Cuts a `vX.Y.Z` tag and publishes the GitHub Release for it. This is NOT a
+# `workflow_call` reusable — it is this repo's own release ritual — so it is
+# excluded from scripts/check_docs_coverage.py and has no docs/release.md page.
+#
+# WHY THIS EXISTS (see plans/provenance-and-release-gate.md §2 for the full
+# analysis): v2.6.1 shipped with all 26 workflows still stamped v2.6.0 and 49
+# doc pins pointing at the wrong version. The check that would have caught it
+# (`stamp_version.py --check --expect <tag>`) only ever ran on the tag-push CI
+# run, i.e. AFTER the tag already existed — so by the time it went red, the
+# broken tag was already live and cache-cloned by callers. A GitHub ruleset
+# cannot fix this: releases aren't a ruleset target, and a tag-push ruleset
+# would still evaluate before the tag-triggered CI run exists (see the plan
+# doc). The fix is to run the exact same check BEFORE the tag is created, in a
+# workflow a human dispatches deliberately instead of a bare `git push --tags`.
+#
+# THE TOKEN TRAP (do not "fix" this without reading first): this job creates
+# the tag using the default `GITHUB_TOKEN`. A tag pushed by `GITHUB_TOKEN`
+# does NOT trigger `on: push: tags` workflows, so `ci.yml`'s tag-push run
+# (including its own, redundant `--expect` check) will NOT fire for tags
+# created here. That is intentional, not an oversight: the gate below runs
+# the full `--check --expect` itself, before the tag is created, so it does
+# not depend on that downstream run to catch anything — it IS the gate, not
+# belt-and-braces on top of one. docs/... and README.md's "Cutting a release"
+# section say the same thing; keep them in sync if this changes.
+#
+# The release ritual is therefore: merge the stamp_version.py PR to `main`,
+# then run this workflow via `workflow_dispatch` (Actions tab or `gh workflow
+# run release.yml -f version=vX.Y.Z`) instead of `git tag && git push --tags`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v1.2.3 — must already be stamped on main via scripts/stamp_version.py in a merged PR"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: sweep-gate, then tag + publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like vX.Y.Z, got: $VERSION"
+            exit 1
+          fi
+
+      - name: Refuse to re-cut an existing tag
+        run: |
+          if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::tag ${{ inputs.version }} already exists — releases are immutable, cut a new version instead"
+            exit 1
+          fi
+
+      # THE GATE. This is what item 4d exists to add: the exact check that
+      # caught v2.6.1 (scripts/stamp_version.py:211-221, --expect compares the
+      # tree against the tag), run BEFORE the tag exists rather than after.
+      # Any failure here creates no tag and publishes nothing — never skip,
+      # never warn-and-continue.
+      - name: Gate — tree must already agree with the version being cut
+        run: python3 scripts/stamp_version.py --check --expect "${{ inputs.version }}"
+
+      - name: Run stamp-sweep tests
+        run: python3 tests/run_stamp_tests.py
+
+      - name: Create and push the tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ inputs.version }}" -m "Release ${{ inputs.version }}"
+          git push origin "${{ inputs.version }}"
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.version }}" \
+            --title "${{ inputs.version }}" \
+            --generate-notes
