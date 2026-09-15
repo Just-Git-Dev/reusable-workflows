@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-15` — [`uses: ./actions/x` resolves against the CALLER's workspace, so the cleanup sweeps stay two workflows](#2026-09-15--uses-actionsx-resolves-against-the-callers-workspace-so-the-cleanup-sweeps-stay-two-workflows)
 - `2026-09-13` — [RCA: 17 `DECISIONS.md` index links pointed at nothing, because the anchor ate a space the em dash left behind](#2026-09-13--rca-17-decisionsmd-index-links-pointed-at-nothing-because-the-anchor-ate-a-space-the-em-dash-left-behind)
 - `2026-09-13` — [`TODO.md` gets a status index and an archive split; ten checkboxes were lying](#2026-09-13--todomd-gets-a-status-index-and-an-archive-split-ten-checkboxes-were-lying)
 - `2026-09-07` — [`v2.7.0` is a minor, not a patch: the gate can newly fail a caller that never changed](#2026-09-07--v270-is-a-minor-not-a-patch-the-gate-can-newly-fail-a-caller-that-never-changed)
@@ -89,6 +90,70 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-15 — `uses: ./actions/x` resolves against the CALLER's workspace, so the cleanup sweeps stay two workflows
+
+A plan to extract `cleanup-gar-images.yml` and `cleanup-cloud-run-revisions.yml` into **composite
+actions** was abandoned after a blocking probe. Recording it here because the finding is a
+property of GitHub Actions that is not in its documentation, it cost two CI runs to establish, and
+the next person to reach for this design will otherwise re-derive it — or worse, ship it.
+
+**The motivation.** A consumer running both sweeps pays **two jobs** — two runner acquisitions,
+two WIF handshakes, two `Set up gcloud`. Composite actions run as *steps in the caller's job*, so
+both sweeps could share one auth and one setup. `uses: ./actions/cleanup-gar` was the wanted form:
+it needs no release stamping, and it is excluded from the `pinned-actions` CI gate by the `[^./]`
+in that regex.
+
+**The doubt.** GitHub's docs do not state which repository `./` resolves against when a reusable
+workflow is called **cross-repo**. Neither the reuse-workflows page nor its Limitations section
+addresses local-action resolution inside a called workflow. If it resolved against the *consumer's*
+workspace, every consumer of both workflows would break at once — so this was made a blocking
+probe rather than an assumption.
+
+**Result: it resolves against the CALLER.** A throwaway `actions/probe` plus a `workflow_call`
+workflow on a branch here, called from `Realm-ID/project` (run **34952087036**):
+
+> `Uses: Just-Git-Dev/reusable-workflows/.github/workflows/probe-local-action.yml@refs/heads/probe/local-action`
+> `##[error]Can't find 'action.yml', 'action.yaml' or 'Dockerfile' under`
+> `'/home/runner/work/project/project/actions/probe'. Did you forget to run actions/checkout`
+> `before running your local action?`
+
+The path is the **consumer's** workspace (`work/project/project`), not this repository. Note the
+runner had already resolved the reusable *workflow* from this repo correctly; only the local
+*action* reference fell through to the caller.
+
+**A remote SHA-pinned action DOES work, with no checkout.** Second probe, same branch, same caller
+(run **34952240998**): `Just-Git-Dev/reusable-workflows/actions/probe@79744a4b…` printed its
+marker. `Download action repository 'Just-Git-Dev/reusable-workflows@79744a4b…'` appears in the
+log — remote action resolution does not depend on the workspace, which is why
+`infra-provisioning-template`'s composite works the way it does.
+
+**Why the refactor was dropped anyway.** The SHA-pinned route is viable but costs a permanent
+**two-commit release dance** on every future edit to either sweep (the pin must name a commit that
+already contains the action, so it cannot be the release commit), plus teaching
+`scripts/stamp_version.py` a second kind of pin, plus a tagged workflow referencing action code
+from an untagged commit. Re-costing against that price changed the answer:
+
+- The saving is ~66 billed min/month, not the ~90 first assumed — `Traide-Co/project` runs these
+  **weekly**, not daily. Only `Realm-ID` and `AutoMahn` are nightly.
+- Deleting the consumers' `resolve` jobs saves ~**120** billed min/month — nearly double — and
+  needs no new mechanism at all, just an expression in `jobs.<id>.with`.
+- ⚠️ The dollar value is **unverified**: Realm-ID is a `team` plan (3,000 included min/month),
+  Traide-Co and AutoMahn are `free` (2,000 each). The org billing endpoint is HTTP 410 and needs
+  `admin:org`, which this token lacks. If the orgs are under quota the saving is **$0**.
+
+So the sweeps stay two workflows, and the work went into the consumers instead (PRs
+`Realm-ID/project#17`, `AutoMahn/project#45`, `Traide-Co/project#149`, all merged 2026-09-15).
+
+**Trap for whoever revisits this.** If you do build composite actions here, two `if:` conditions
+invert silently on the way in. Composite-action inputs are **strings**, so
+`if: inputs.dry_run == false` (correct today, where `workflow_call` types it as a boolean) stops
+matching, and `if: inputs.cleanup_latest_tag` becomes truthy even when the value is `'false'` —
+a non-empty string. Both appear in `cleanup-gar-images.yml` (four times and once respectively).
+A sweep that quietly stops honouring `dry_run` deletes for real.
+
+Both probe branches were created through the API — so no local working tree was touched — and
+deleted afterwards, verified.
 
 ## 2026-09-13 — RCA: 17 `DECISIONS.md` index links pointed at nothing, because the anchor ate a space the em dash left behind
 
