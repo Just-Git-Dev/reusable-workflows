@@ -96,6 +96,32 @@ jobs:
       - name: Run stamp-sweep tests
         run: python3 tests/run_stamp_tests.py
 
+  v1-alias-frozen:
+    name: v1 alias has not moved off its original commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Default checkout is a single shallow commit and fetches no tags
+          # at all — this job needs `v1` itself resolvable to a commit.
+          fetch-depth: 0
+
+      # `v1` is a FROZEN legacy alias, on purpose (README.md#versioning,
+      # DECISIONS-ARCHIVE.md) — re-pointing it onto a newer release was
+      # considered and rejected because it would silently hand every legacy
+      # `@v1` caller a breaking change. Nothing else catches someone
+      # "helpfully" moving it. Fails loudly if `v1` moved, is missing, or
+      # can't even be resolved — that is a failure, not a skip.
+      - name: Check v1 alias is still frozen
+        run: python3 scripts/check_v1_frozen.py
+
+      - name: Run self-test (proves the check can actually fail)
+        run: python3 scripts/check_v1_frozen.py --self-test
+
   doc-examples:
     name: doc examples are valid workflows
     runs-on: ubuntu-latest
