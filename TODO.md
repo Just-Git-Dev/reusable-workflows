@@ -84,16 +84,20 @@ GAR readback fix that release shipped.
       starts the only check capable of catching this.
 - [ ] **Make it structural rather than remembered:** price a GitHub ruleset requiring the
       tag-push check to pass before a release can be published. Preferred over any new script.
-- [ ] 🔴 **The gate does not assert its own COVERAGE — and this outranks the original bug.**
-      `docs/PLATFORM.md` carries **three pins at `v1.23.0`**, pointing readers at the frozen
-      legacy `v1` line. `PIN_RE` requires a literal `Just-Git-Dev/reusable-workflows/...` and
-      PLATFORM.md's examples use an `<org>/` placeholder, so **the sweep cannot fix them and the
-      check cannot see them.** The file is in the sweep's file set; its pins are invisible to the
-      regex. Adding the tag comparand does not help — PLATFORM.md stays invisible either way.
-      **An uncovered file is indistinguishable from a passing one.** Fix: assert that every file
-      containing a `uses: .../reusable-workflows/...@` pin is in the swept set, and fail on any
-      that is not — otherwise the next `docs/*.md` added is silently exempt from creation.
-      (Framing owed to AutoMahn's session, 2026-09-06.)
+- [ ] **The gate does not assert its own COVERAGE.** `PIN_RE` in `scripts/stamp_version.py`
+      requires a literal `Just-Git-Dev/reusable-workflows/...`, so any file whose pins use an
+      `<org>/` placeholder (or any other shape `PIN_RE` doesn't match) is invisible to both the
+      sweep and `--check` — **an uncovered file is indistinguishable from a passing one.**
+      Checked 2026-09-15: `docs/PLATFORM.md` is *not* currently a live instance of this — it has
+      no version pin at all, only the literal placeholder `@vX.Y.Z` (lines 118, 162, 177, 187),
+      and the repo is swept consistently (`stamp_version.py --check --expect v2.7.0` → "version
+      sweep is consistent at v2.7.0 (26 workflows, 49 doc pins)", exit 0). Downgraded from 🔴
+      accordingly — there is no live breakage today, just an unguarded structural gap. Still
+      worth closing before it bites: fix is to assert that every file containing a
+      `uses: .../reusable-workflows/...@` pin (by any regex, not just `PIN_RE`'s) is in the
+      swept set, and fail on any that is not — otherwise the next `docs/*.md` added with a
+      real (non-placeholder) pin is silently exempt from the sweep. (Framing owed to AutoMahn's
+      session, 2026-09-06; false live-instance claim corrected 2026-09-15.)
 - [ ] **Audit the other gates for the same two shapes** — comparands that are all derived, and
       scopes that are assumed rather than computed. Start with `validate-alerts`, which already
       had a vacuous-check finding on 2026-09-01 for an unrelated reason; two independent vacuity
@@ -101,11 +105,21 @@ GAR readback fix that release shipped.
 
 ### Consumer pin inventory (for the separate, unstarted sweep — NOT the v2.6.2 bump)
 
-AutoMahn's session reported 2026-09-06, verified in its own tree: **`automahn/` pins 14
-reusable-workflows callers across THREE versions** — `bootstrap-cf-dns.yml` and
-`bootstrap-cf-service.yml` at **v2.5.0**, `cleanup-secret-versions.yml` at **v2.4.1**, the rest
-at v2.4.0 (`cleanup-gar-images.yml:56` still v2.4.0, bump held for v2.6.2). Fleet-wide the
-spread is v2.4.0 / v2.4.1 / v2.5.0 / v2.6.0 across auth, automahn, tally-helper.
+Regenerate this from this repo's own tool rather than trusting the numbers below to still be
+current: `python3 scripts/fleet_drift.py --orgs Realm-ID,Traide-Co,AutoMahn`.
+
+**Verified 2026-09-15** (after six cleanup-caller pins moved to `v2.7.0` that day across
+Realm-ID/project, Traide-Co/project, AutoMahn/project — PRs #17/#149/#45, all merged): **57
+caller lines fleet-wide — 37 STALE, 20 OK, 0 MUTABLE**, spread `v2.3.1` → `v2.5.0`. Zero mutable
+pins — nothing is on `@main` or the `v1` alias, so the supply-chain risk that motivated this
+section is not currently live anywhere. Deepest stragglers are on the deploy path:
+`Realm-ID/api` and `Realm-ID/issuer` `deploy.yml` pin `deploy-cloud-run` and `promote-image` at
+`v2.3.1`, four minors behind. `cleanup-secret-versions.yml` is deliberately still at `v2.4.1` in
+all three consumer repos — that bump is not a no-op, it swaps a project-level `gcloud secrets
+list` for a per-secret `gcloud secrets describe` and changes the IAM the caller needs, so it is
+not being tracked as drift.
+
+**The repin itself is consumer-repo work, not this repo's.**
 
 Keep this OUT of any stamp/pin one-liner: different workflows, different input contracts, and
 semver here tracks the **input contract**, so each pin needs its own diff read before moving.
