@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-15` — [RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`](#2026-09-15--rca-a-routine-revision-in-use-killed-the-whole-revisions-sweep-because-set--uo-pipefail-does-not-clear--e)
 - `2026-09-15` — [`uses: ./actions/x` resolves against the CALLER's workspace, so the cleanup sweeps stay two workflows](#2026-09-15--uses-actionsx-resolves-against-the-callers-workspace-so-the-cleanup-sweeps-stay-two-workflows)
 - `2026-09-13` — [RCA: 17 `DECISIONS.md` index links pointed at nothing, because the anchor ate a space the em dash left behind](#2026-09-13--rca-17-decisionsmd-index-links-pointed-at-nothing-because-the-anchor-ate-a-space-the-em-dash-left-behind)
 - `2026-09-13` — [`TODO.md` gets a status index and an archive split; ten checkboxes were lying](#2026-09-13--todomd-gets-a-status-index-and-an-archive-split-ten-checkboxes-were-lying)
@@ -90,6 +91,64 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-15 — RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`
+
+Found by the first executable tests `cleanup-cloud-run-revisions.yml` has ever had, written the
+same day. The defect had shipped through seven releases.
+
+**Symptom.** In the `Execute deletions` step, the first `gcloud run revisions delete` that failed
+for *any* reason aborted the entire step with `rc=1` and no stdout. The `elif` branches that
+classify `in use` and `not found` as tolerable never ran; `$GITHUB_OUTPUT` never received
+`deleted=`/`skipped=`, so the workflow's published outputs were empty; and every remaining
+revision in the plan went undeleted. The job went red having done part of its work.
+
+**Root cause.** `del_one()` did:
+
+```bash
+err=$(gcloud run revisions delete "$rev" … 2>&1); rc=$?
+```
+
+GitHub runs `shell: bash` as `bash --noprofile --norc -eo pipefail {0}`. The body's own
+`set -uo pipefail` sets `-u` and `pipefail` but does **not** clear the inherited `-e` — only
+`set +e` would. Under `-e`, a bare assignment whose command substitution fails is itself a fatal
+command, so the shell exited *at the assignment*, before `rc` was even read. The tolerance logic
+below it was unreachable code.
+
+Reproduced under GitHub's exact invocation: `bash --noprofile --norc -eo pipefail` → dies, `rc=1`,
+no output. The identical script under `-o pipefail` alone → `OK skipped(in-use)`, `rc=0`.
+
+**Why it wasn't caught.** Three independent reasons, and the third is the general lesson:
+
+1. **No test ever executed the body.** This workflow had zero coverage; `cleanup-gar-images` had
+   five step tests, `retire-gar-packages` four.
+2. **`actionlint` and `shellcheck` both pass it.** The line is valid shell. The defect lives in
+   the *interaction* between a flag the runner injects and a `set` line that looks like it governs
+   the whole step but only adds to it. Nothing static can see that.
+3. **Production was green, and that was not evidence.** All 36 recent runs across the three
+   consumers succeeded — because every delete happened to succeed. The plan step already excludes
+   traffic-holding revisions, so a failing delete needs a race (a revision gaining traffic between
+   plan and exec, a tagged target, a concurrent sweep). The bug was latent, not absent. **A sweep
+   that has never had to skip anything has never tested its skip path.**
+
+**Fix.** `rc=0; err=$(…) || rc=$?`. Putting the assignment on the left of `||` makes it a tested
+command, which `-e` does not fire on. Committed with a comment saying why it is load-bearing, so
+it is not "simplified" back. The eight new checks fail against the unfixed body and pass against
+the fixed one, which is what demonstrates they would have caught it.
+
+**Prevention.** The sibling sweep was audited rather than assumed: `cleanup-gar-images.yml` has
+the *same* bare assignment at `:807` and `:832` but is safe, because its `del_one` is exported
+(`:841`) and invoked **only** through `xargs … bash -c` (`:858`, `:863`) — a fresh shell that
+never inherits `-e`. There is no inline call path. `retire-gar-packages.yml` and
+`cleanup-secret-versions.yml` do not use the pattern at all. So the class is closed, not just this
+instance.
+
+The durable rule: **an `err=$(cmd); rc=$?` idiom is only safe under `-e` when it runs in a shell
+that does not have `-e`.** Inline in a step body, it needs `|| rc=$?`. The `xargs bash -c` form
+hides the distinction, which is exactly why one of these two files was wrong and the other was not.
+
+⚠️ Consumers pin `@v2.7.0`, which still contains the defect. This fix reaches them only on the
+next release plus a repin.
 
 ## 2026-09-15 — `uses: ./actions/x` resolves against the CALLER's workspace, so the cleanup sweeps stay two workflows
 
