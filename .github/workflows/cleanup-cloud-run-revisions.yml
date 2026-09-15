@@ -185,8 +185,16 @@ jobs:
 
           del_one() {
             local svc="$1" rev="$2" err rc
+            # `|| rc=$?` is load-bearing, not style: GitHub's `shell: bash` runs this
+            # step under `-eo pipefail`, and `set -uo pipefail` above does not clear
+            # `-e`. A bare `err=$(failing_cmd); rc=$?` lets `-e` fire on the assignment
+            # itself, aborting the whole step before the if/elif below ever runs — so
+            # a routine "revision is in use" delete would kill the run instead of
+            # being skipped. Putting the assignment on the left of `||` keeps `-e`
+            # from tripping on it, same as `rc=0` seeding below.
+            rc=0
             err=$(gcloud run revisions delete "$rev" \
-                    --region="$GCP_REGION" --project="$GCP_PROJECT" --quiet 2>&1); rc=$?
+                    --region="$GCP_REGION" --project="$GCP_PROJECT" --quiet 2>&1) || rc=$?
             if [ "$rc" -eq 0 ]; then
               echo "OK deleted $svc/$rev"
             elif printf '%s' "$err" | grep -qiE "in use|active revision|serving|cannot delete"; then
