@@ -22,8 +22,10 @@ WORKFLOWS = REPO / ".github" / "workflows"
 DOCS = REPO / "docs"
 README = REPO / "README.md"
 
-# Not a `workflow_call` reusable — this repo's own CI.
-EXCLUDE = {"ci"}
+# Not a `workflow_call` reusable — this repo's own CI, and this repo's own
+# release ritual (`workflow_dispatch`, tags + publishes a Release; see its
+# header and README.md#cutting-a-release, not a docs/<name>.md page).
+EXCLUDE = {"ci", "release"}
 
 
 def main():

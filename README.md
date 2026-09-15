@@ -156,10 +156,33 @@ python3 scripts/stamp_version.py v1.2.3    # the tag you are about to cut
 python3 scripts/stamp_version.py --check   # what CI asserts on every PR
 ```
 
-Merge that, then tag it. CI re-runs on the tag with `--expect`, and fails
-the release if the tree is stamped with anything else — so a skipped sweep is
-caught at the one moment it matters, while ordinary PRs are never failed just
-because a release happened elsewhere.
+Merge that, then **cut the release via the `Release` workflow**, not a bare
+`git tag && git push --tags`:
+
+```bash
+gh workflow run release.yml -f version=v1.2.3
+```
+
+`release.yml` (`workflow_dispatch`) runs `stamp_version.py --check --expect
+v1.2.3` — the exact same tag-vs-tree comparison CI used to only run *after*
+the tag existed — and creates no tag and publishes no release if it fails.
+Only once that's green does it create the tag and publish the GitHub Release.
+This is the fix for the `v2.6.1` incident: that check caught the tree still
+stamped `v2.6.0`, but only on the tag-push CI run, by which point the broken
+tag was already live. Moving the same check before tag creation is what
+closes the gap — a GitHub ruleset can't, because a release publish isn't a
+ruleset target and a tag-push ruleset would still evaluate before the
+tag-triggered CI run exists. See `plans/provenance-and-release-gate.md` §2
+for the full analysis.
+
+**Consequence — the tag-push CI run no longer fires for releases.** `release.yml`
+pushes the tag using the default `GITHUB_TOKEN`, and a tag pushed by
+`GITHUB_TOKEN` does not trigger `on: push` workflows — so `ci.yml`'s
+`tags: ['v*.*.*']` trigger will not run for tags cut this way. That's fine:
+`release.yml`'s own gate runs the identical `--check --expect`, before the
+tag exists, so nothing depends on that downstream run to catch a drift. If a
+tag ever gets cut some other way (hand-pushed with a real user token), the
+tag-push CI run still fires as belt-and-braces.
 
 ## Conventions & security
 

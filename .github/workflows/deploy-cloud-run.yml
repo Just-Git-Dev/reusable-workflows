@@ -109,6 +109,21 @@ on:
         type: string
         required: false
         default: ''
+      provenance:
+        description: >-
+          docker/build-push-action `provenance:` value. Default `mode=min` reproduces
+          buildx's own default (an attestation manifest alongside the image) — set
+          explicitly so it survives an action bump instead of drifting silently.
+        type: string
+        required: false
+        default: 'mode=min'
+      sbom:
+        description: >-
+          docker/build-push-action `sbom:` value. Default `false` reproduces buildx's
+          own default (buildx does not emit an SBOM unless asked).
+        type: string
+        required: false
+        default: 'false'
       deploy_mode:
         description: 'update-image (strict flip) | deploy (full gcloud run deploy).'
         type: string
@@ -319,6 +334,8 @@ jobs:
           push: ${{ !inputs.dry_run }}
           build-args: ${{ inputs.build_args }}
           tags: ${{ steps.ref.outputs.tags }}
+          provenance: ${{ inputs.provenance }}
+          sbom: ${{ inputs.sbom }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -21,18 +21,45 @@ section opens or closes. Closed sections live in
 Both were carried as live state in `~/.claude/inflight/` for several sessions. Neither is
 live state — they are backlog, so they belong here. Recorded verbatim; neither is started.
 
-- [ ] **CI guard: assert the `v1` alias points at the newest `v1.x` tag.** `v1` is a frozen
-      legacy alias (see the pinning rule in `CLAUDE.md`), but nothing
-      verifies it still resolves to the newest `v1.x` release — it can silently drift behind
-      and a legacy caller then gets an older input contract than `v1` implies. Wanted as a
-      release-time check alongside the `WORKFLOW_VERSION` stamp sweep, which has the same
-      shape of failure (see "Release hygiene" below — that one shipped wrong in `v2.6.1`).
+- [ ] **CI guard: assert the `v1` alias has NOT moved.** ⚠️ **Rewritten 2026-09-15 — this item
+      previously asked for the exact opposite and was wrong.** It read "assert the `v1` alias
+      points at the newest `v1.x` tag", which contradicts its own next sentence ("`v1` is a
+      frozen legacy alias") and contradicts the ruling in `DECISIONS-ARCHIVE.md`: *"`v1` is
+      frozen, not moved. Releases are immutable."* Moving `v1` onto a newer release was
+      considered there and **rejected** — `deploy-cloudflare-pages.yml` did not exist at `v1`,
+      so re-pointing it would hand every legacy caller a breaking change as a surprise.
+      Measured 2026-09-15: `v1` → `b96d0e3`, the original 5-workflow commit (no `v1.x.y` tag
+      sits on it), exactly as `DECISIONS.md` and `README.md:137` say it should.
+
+      A guard built to the old wording went red against this repo on its first run and would
+      have made CI permanently red; its natural "fix" (`git tag -f v1 v1.24.0`) is precisely
+      the breaking change that decision exists to prevent. **The real invariant is that `v1`
+      must never move**, and the failure worth catching is someone "helpfully fixing the
+      drift". Build it that way: pin the expected SHA, fail loudly if it changes, and make the
+      failure message say `v1` is frozen on purpose rather than suggesting a re-point.
 
 - [ ] **Owed to AutoMahn: audit `validate-alerts` for derived-comparand and assumed-scope
       gates.** The linter's checks were reviewed for MQL execution (closed 2026-09-01, below)
       but not for two classes it may pass vacuously: a threshold compared against a value the
       policy itself derives, and a check that assumes a scope the policy never declares. Until
       audited, a green `validate-alerts` is weaker evidence than it reads as.
+
+      ✅ **AUDITED 2026-09-15 — zero live instances of either class.** Full per-check table with
+      verdicts: [`plans/validate-alerts-audit-2026-09-15.md`](plans/validate-alerts-audit-2026-09-15.md).
+      Every comparand traces either to a fixed external constant (GCP's own documented enums and
+      ranges — `COMBINERS`, `AUTOCLOSE_MIN/MAX`, `CONDITION_KEYS`, `DOC_MIN_CHARS`) or to two
+      independently-authored policy fields compared for a real anti-pattern (`documentation.content`
+      restating `displayName` — the closest thing to class 1, but neither side is computed from
+      the other, so it is not self-derived). The `gcp_project` scope layer-2 runs against is a
+      **required `workflow_call` input**, not an assumption, and skipping layer 2 when it is unset
+      is a **declared** skip printed in the step summary, not a silent no-op. The two 2026-09-01
+      findings were a different shape (execution-layer coverage — "a result that never arrived read
+      as a pass") and are both fixed and mutation-tested.
+
+      ⚠️ Leaving this item OPEN for one reason only, and it is not a vacuity finding: four checks
+      have **no dedicated test** — `combiner`, the `notificationChannels` placeholder, the
+      `autoClose` range, and the log-condition rate-limit requirement. Reading the code says they
+      are structurally sound; nothing *executes* them. That is the gap to close, not a rewrite.
 
 ## RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)
 
@@ -84,16 +111,20 @@ GAR readback fix that release shipped.
       starts the only check capable of catching this.
 - [ ] **Make it structural rather than remembered:** price a GitHub ruleset requiring the
       tag-push check to pass before a release can be published. Preferred over any new script.
-- [ ] 🔴 **The gate does not assert its own COVERAGE — and this outranks the original bug.**
-      `docs/PLATFORM.md` carries **three pins at `v1.23.0`**, pointing readers at the frozen
-      legacy `v1` line. `PIN_RE` requires a literal `Just-Git-Dev/reusable-workflows/...` and
-      PLATFORM.md's examples use an `<org>/` placeholder, so **the sweep cannot fix them and the
-      check cannot see them.** The file is in the sweep's file set; its pins are invisible to the
-      regex. Adding the tag comparand does not help — PLATFORM.md stays invisible either way.
-      **An uncovered file is indistinguishable from a passing one.** Fix: assert that every file
-      containing a `uses: .../reusable-workflows/...@` pin is in the swept set, and fail on any
-      that is not — otherwise the next `docs/*.md` added is silently exempt from creation.
-      (Framing owed to AutoMahn's session, 2026-09-06.)
+- [ ] **The gate does not assert its own COVERAGE.** `PIN_RE` in `scripts/stamp_version.py`
+      requires a literal `Just-Git-Dev/reusable-workflows/...`, so any file whose pins use an
+      `<org>/` placeholder (or any other shape `PIN_RE` doesn't match) is invisible to both the
+      sweep and `--check` — **an uncovered file is indistinguishable from a passing one.**
+      Checked 2026-09-15: `docs/PLATFORM.md` is *not* currently a live instance of this — it has
+      no version pin at all, only the literal placeholder `@vX.Y.Z` (lines 118, 162, 177, 187),
+      and the repo is swept consistently (`stamp_version.py --check --expect v2.7.0` → "version
+      sweep is consistent at v2.7.0 (26 workflows, 49 doc pins)", exit 0). Downgraded from 🔴
+      accordingly — there is no live breakage today, just an unguarded structural gap. Still
+      worth closing before it bites: fix is to assert that every file containing a
+      `uses: .../reusable-workflows/...@` pin (by any regex, not just `PIN_RE`'s) is in the
+      swept set, and fail on any that is not — otherwise the next `docs/*.md` added with a
+      real (non-placeholder) pin is silently exempt from the sweep. (Framing owed to AutoMahn's
+      session, 2026-09-06; false live-instance claim corrected 2026-09-15.)
 - [ ] **Audit the other gates for the same two shapes** — comparands that are all derived, and
       scopes that are assumed rather than computed. Start with `validate-alerts`, which already
       had a vacuous-check finding on 2026-09-01 for an unrelated reason; two independent vacuity
@@ -101,11 +132,21 @@ GAR readback fix that release shipped.
 
 ### Consumer pin inventory (for the separate, unstarted sweep — NOT the v2.6.2 bump)
 
-AutoMahn's session reported 2026-09-06, verified in its own tree: **`automahn/` pins 14
-reusable-workflows callers across THREE versions** — `bootstrap-cf-dns.yml` and
-`bootstrap-cf-service.yml` at **v2.5.0**, `cleanup-secret-versions.yml` at **v2.4.1**, the rest
-at v2.4.0 (`cleanup-gar-images.yml:56` still v2.4.0, bump held for v2.6.2). Fleet-wide the
-spread is v2.4.0 / v2.4.1 / v2.5.0 / v2.6.0 across auth, automahn, tally-helper.
+Regenerate this from this repo's own tool rather than trusting the numbers below to still be
+current: `python3 scripts/fleet_drift.py --orgs Realm-ID,Traide-Co,AutoMahn`.
+
+**Verified 2026-09-15** (after six cleanup-caller pins moved to `v2.7.0` that day across
+Realm-ID/project, Traide-Co/project, AutoMahn/project — PRs #17/#149/#45, all merged): **57
+caller lines fleet-wide — 37 STALE, 20 OK, 0 MUTABLE**, spread `v2.3.1` → `v2.5.0`. Zero mutable
+pins — nothing is on `@main` or the `v1` alias, so the supply-chain risk that motivated this
+section is not currently live anywhere. Deepest stragglers are on the deploy path:
+`Realm-ID/api` and `Realm-ID/issuer` `deploy.yml` pin `deploy-cloud-run` and `promote-image` at
+`v2.3.1`, four minors behind. `cleanup-secret-versions.yml` is deliberately still at `v2.4.1` in
+all three consumer repos — that bump is not a no-op, it swaps a project-level `gcloud secrets
+list` for a per-secret `gcloud secrets describe` and changes the IAM the caller needs, so it is
+not being tracked as drift.
+
+**The repin itself is consumer-repo work, not this repo's.**
 
 Keep this OUT of any stamp/pin one-liner: different workflows, different input contracts, and
 semver here tracks the **input contract**, so each pin needs its own diff read before moving.
@@ -113,8 +154,13 @@ semver here tracks the **input contract**, so each pin needs its own diff read b
 ## Build attestations
 
 - [ ] **Decide a `provenance` policy for the build reusables — right now it is inherited, not
-      chosen.** Neither `deploy-cloud-run.yml` nor `promote-image.yml` sets `provenance:` or
-      `sbom:` anywhere (verified by grep), so buildx's default applies and every push adds an
+      chosen.** ⚠️ **Corrected 2026-09-15: `promote-image.yml` is NOT a provenance surface** —
+      it retags server-side and contains no build step at all (`grep -n 'build-push-action'`
+      over it returns nothing). And there are **three** build surfaces, not one:
+      `deploy-cloud-run.yml:311`, `deploy-gke-service.yml:300` and `deploy-cluster-keyed.yml:313`,
+      all on the same pinned `docker/build-push-action@53b7df9 # v7.3.0`. Applying a policy to
+      one of them is drift by construction. None sets `provenance:` or `sbom:`,
+      so buildx's default applies and every push adds an
       attestation manifest beside the image. Those are the `unknown/unknown` children
       `cleanup-gar-images` already has to reason about — its own header comment names them, and
       the Traide RCA found all 52 untagged manifests were index children of exactly this shape.

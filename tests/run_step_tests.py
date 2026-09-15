@@ -38,6 +38,7 @@ SYNC = ROOT / ".github" / "workflows" / "sync-bundle-key.yml"
 KEYPAIR = ROOT / ".github" / "workflows" / "rotate-signing-keypair.yml"
 WORKER = ROOT / ".github" / "workflows" / "rotate-worker-signing-secret.yml"
 SWEEP = ROOT / ".github" / "workflows" / "cleanup-secret-versions.yml"
+REVISIONS = ROOT / ".github" / "workflows" / "cleanup-cloud-run-revisions.yml"
 CFWORKER = ROOT / ".github" / "workflows" / "deploy-cloudflare-worker.yml"
 CFSERVICE = ROOT / ".github" / "workflows" / "bootstrap-cf-service.yml"
 CFDNS = ROOT / ".github" / "workflows" / "bootstrap-cf-dns.yml"
@@ -290,6 +291,134 @@ def run_exec_step(body: str, *, degraded="false", delete_err=None, describe_err=
         # the step reads /tmp/delete-plan.json; point it at the fixture
         body = body.replace("/tmp/delete-plan.json", str(tmp / "delete-plan.json"))
         body = body.replace("/tmp/exec.log", str(tmp / "exec.log"))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "deleted": deleted.read_text().split(),
+                "output": out.read_text(), "summary": summary.read_text()}
+
+
+def run_prune_plan_step(body: str, *, services, keep_last="10", services_in=""):
+    """Execute cleanup-cloud-run-revisions' "Compute prune plan" body against a
+    stubbed gcloud.
+
+    services: {name: {"revisions": [(name, creationTimestamp), ...],
+                       "latest_ready": name | None,
+                       "spec_traffic": [revisionName, ...],
+                       "status_traffic": [revisionName, ...]}}
+               Revisions need not be pre-sorted; the body sorts by timestamp.
+
+    The body hard-codes /tmp/prune-plan.json (GitHub-runner-correct); this
+    redirects that path into the tempdir rather than editing the workflow.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        fixtures = tmp / "fixtures"
+        fixtures.mkdir()
+
+        (fixtures / "services.json").write_text(json.dumps(
+            [{"metadata": {"name": n}} for n in services]))
+        for name, cfg in services.items():
+            desc = {
+                "status": {
+                    "latestReadyRevisionName": cfg.get("latest_ready"),
+                    "traffic": [{"revisionName": r} for r in cfg.get("status_traffic", [])],
+                },
+                "spec": {
+                    "traffic": [{"revisionName": r} for r in cfg.get("spec_traffic", [])],
+                },
+            }
+            (fixtures / f"describe_{name}.json").write_text(json.dumps(desc))
+            revs = [{"metadata": {"name": rn, "creationTimestamp": ts}}
+                    for rn, ts in cfg["revisions"]]
+            (fixtures / f"revisions_{name}.json").write_text(json.dumps(revs))
+
+        gcloud = stub / "gcloud"
+        gcloud.write_text(f"""#!/usr/bin/env bash
+F={shlex.quote(str(fixtures))}
+if [ "$1" = run ] && [ "$2" = services ] && [ "$3" = list ]; then
+  cat "$F/services.json"; exit 0
+fi
+if [ "$1" = run ] && [ "$2" = services ] && [ "$3" = describe ]; then
+  cat "$F/describe_$4.json"; exit 0
+fi
+if [ "$1" = run ] && [ "$2" = revisions ] && [ "$3" = list ]; then
+  svc=""; prev=""
+  for a in "$@"; do [ "$prev" = --service ] && svc="$a"; prev="$a"; done
+  cat "$F/revisions_$svc.json"; exit 0
+fi
+echo "unexpected gcloud call: $*" >&2; exit 1
+""")
+        gcloud.chmod(0o755)
+
+        out = tmp / "gh_output"
+        out.write_text("")
+        plan_path = tmp / "prune-plan.json"
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="p", GCP_REGION="r", KEEP_LAST=str(keep_last),
+                   SERVICES_IN=services_in, GITHUB_OUTPUT=str(out))
+        body = body.replace("/tmp/prune-plan.json", str(plan_path))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        plan = json.loads(plan_path.read_text()) if plan_path.exists() else None
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "output": out.read_text(), "plan": plan}
+
+
+def run_prune_exec_step(body: str, *, plan, delete_errors=None):
+    """Execute cleanup-cloud-run-revisions' "Execute deletions" body against a
+    stubbed gcloud.
+
+    plan:          the {"services": [{"service", "to_delete": [...]}]} dict the
+                    plan step would have written — fed in directly to prove the
+                    plan -> exec hand-off through /tmp/prune-plan.json.
+    delete_errors: {revisionName: stderr}; a revision with no entry deletes
+                    cleanly. Used to exercise the in-use / not-found / real-failure
+                    classification in del_one().
+    """
+    delete_errors = delete_errors or {}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        deleted = tmp / "deleted_calls"
+        deleted.write_text("")
+
+        arms = "\n".join(
+            f"  {shlex.quote(rev)}) echo {shlex.quote(err)} >&2; exit 1 ;;"
+            for rev, err in delete_errors.items()
+        )
+        gcloud = stub / "gcloud"
+        gcloud.write_text(f"""#!/usr/bin/env bash
+rev="$4"
+echo "$rev" >> {shlex.quote(str(deleted))}
+case "$rev" in
+{arms}
+  *) exit 0 ;;
+esac
+""")
+        gcloud.chmod(0o755)
+
+        plan_path = tmp / "prune-plan.json"
+        plan_path.write_text(json.dumps(plan))
+        exec_log = tmp / "exec.log"
+        out = tmp / "gh_output"
+        out.write_text("")
+        summary = tmp / "gh_summary"
+        summary.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_REGION="r", GCP_PROJECT="p", GITHUB_OUTPUT=str(out),
+                   GITHUB_STEP_SUMMARY=str(summary))
+        body = body.replace("/tmp/prune-plan.json", str(plan_path))
+        body = body.replace("/tmp/exec.log", str(exec_log))
         proc = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
             capture_output=True, text=True, env=env, cwd=tmp,
@@ -1802,6 +1931,125 @@ def main():
                                  existing=("app-secrets", "api-env"))
     check("empty list sweeps every secret", r["targets"] == ["api-env", "app-secrets"], r["targets"])
     check("empty list warns", "::warning::" in r["out"], r["out"])
+
+    # ---- cleanup-cloud-run-revisions: prune plan + execute deletions --------
+    #
+    # Deletes Cloud Run revisions; all three projects repinned to it 2026-09-15.
+    # It was the only deletion workflow in the repo with zero executable
+    # coverage of its `run:` bodies.
+    print("\ncleanup-cloud-run-revisions · Compute prune plan")
+    planstep = extract_step(REVISIONS, "prune", "Compute prune plan")
+
+    # 1. keep_last boundary: a service with MORE revisions than keep_last
+    # deletes exactly the surplus; one with FEWER deletes nothing.
+    many_revs = [(f"many-r{i:02d}", f"2024-01-{32 - i:02d}T00:00:00Z") for i in range(1, 14)]
+    few_revs = [(f"few-r{i}", f"2024-01-{9 - i:02d}T00:00:00Z") for i in range(1, 6)]
+    r = run_prune_plan_step(planstep, services={
+        "many": {"revisions": many_revs},
+        "few": {"revisions": few_revs},
+    }, keep_last="10")
+    check("plan exits 0", r["rc"] == 0, r["out"])
+    by_svc = {s["service"]: s for s in r["plan"]["services"]}
+    check("more revisions than keep_last deletes exactly the surplus",
+          len(by_svc["many"]["to_delete"]) == 3, by_svc["many"])
+    check("the surplus is the OLDEST revisions, not arbitrary ones",
+          set(by_svc["many"]["to_delete"]) == {"many-r11", "many-r12", "many-r13"},
+          by_svc["many"]["to_delete"])
+    check("fewer revisions than keep_last deletes nothing",
+          by_svc["few"]["to_delete"] == [], by_svc["few"])
+    check("candidates output sums both services", "candidates=3" in r["output"], r["output"])
+
+    # 2. A revision holding traffic is never a candidate, even when it is old
+    # enough to fall outside the keep window — tested for all three sources of
+    # "holds traffic": latestReadyRevisionName, spec.traffic, status.traffic.
+    protect_revs = [(f"p-r{i:02d}", f"2024-02-{32 - i:02d}T00:00:00Z") for i in range(1, 13)]
+    oldest = "p-r12"
+
+    r = run_prune_plan_step(planstep, services={
+        "svc": {"revisions": protect_revs, "latest_ready": oldest},
+    }, keep_last="10")
+    check("latestReadyRevisionName protects an out-of-window revision",
+          oldest not in r["plan"]["services"][0]["to_delete"], r["plan"])
+    check("only the other out-of-window revision is still a candidate",
+          r["plan"]["services"][0]["to_delete"] == ["p-r11"], r["plan"])
+
+    r = run_prune_plan_step(planstep, services={
+        "svc": {"revisions": protect_revs, "spec_traffic": [oldest]},
+    }, keep_last="10")
+    check("a spec.traffic entry protects an out-of-window revision",
+          oldest not in r["plan"]["services"][0]["to_delete"], r["plan"])
+
+    r = run_prune_plan_step(planstep, services={
+        "svc": {"revisions": protect_revs, "status_traffic": [oldest]},
+    }, keep_last="10")
+    check("a status.traffic entry protects an out-of-window revision",
+          oldest not in r["plan"]["services"][0]["to_delete"], r["plan"])
+
+    # 3. dry_run: the body itself has no dry_run branch — the skip is a
+    # workflow-level `if:` on the "Execute deletions" step, so assert THAT
+    # rather than pretending the body behaves differently under dry_run.
+    exec_step_doc = next(
+        s for s in yaml.safe_load(REVISIONS.read_text())["jobs"]["prune"]["steps"]
+        if s.get("name") == "Execute deletions"
+    )
+    check("Execute deletions only runs when dry_run is false",
+          exec_step_doc.get("if") == "inputs.dry_run == false", exec_step_doc.get("if"))
+
+    # 4 + 5. exec: the plan -> exec hand-off through /tmp/prune-plan.json, and
+    # gcloud stderr classification (in-use / not-found = skipped, else FAIL).
+    print("\ncleanup-cloud-run-revisions · Execute deletions")
+    execstep = extract_step(REVISIONS, "prune", "Execute deletions")
+
+    handoff_plan = {"services": [
+        {"service": "svcA", "to_delete": ["revA-1", "revA-2"]},
+        {"service": "svcB", "to_delete": ["revB-1"]},
+    ]}
+    r = run_prune_exec_step(execstep, plan=handoff_plan)
+    check("exec deletes exactly the (service, revision) pairs the plan named",
+          sorted(r["deleted"]) == ["revA-1", "revA-2", "revB-1"], r["deleted"])
+    check("a clean run exits 0", r["rc"] == 0, r["out"])
+    check("a clean run reports deleted=3 skipped=0",
+          "deleted=3 skipped=0" in r["output"] or
+          ("deleted=3" in r["output"] and "skipped=0" in r["output"]), r["output"])
+
+    # REGRESSION GUARD: `err=$(gcloud ... 2>&1) || rc=$?` in del_one() must stay on
+    # the `||` form. GitHub's `shell: bash` runs this step under `-eo pipefail`, and
+    # the body's own `set -uo pipefail` does not clear `-e` — a bare
+    # `err=$(failing_cmd); rc=$?` lets `-e` fire on the assignment itself, aborting
+    # the whole step before this if/elif classification ever runs, so a routine
+    # "revision is in use" delete would kill the run instead of being skipped and
+    # counted. (It did: found by this coverage, fixed in the same change — see
+    # DECISIONS.md.) The three checks below exercise exactly that classification.
+    class_plan = {"services": [{"service": "svc", "to_delete": ["in-use-rev"]}]}
+    r = run_prune_exec_step(execstep, plan=class_plan, delete_errors={
+        "in-use-rev": "FAILED_PRECONDITION: revision is in use and cannot be deleted",
+    })
+    check("an in-use failure is skipped, not fatal", r["rc"] == 0, r["out"])
+    check("an in-use failure is reported as skipped(in-use)",
+          "OK skipped(in-use) svc/in-use-rev" in r["out"], r["out"])
+    check("an in-use failure is counted in $GITHUB_OUTPUT's skipped=",
+          "skipped=1" in r["output"], r["output"])
+
+    gone_plan = {"services": [{"service": "svc", "to_delete": ["gone-rev"]}]}
+    r = run_prune_exec_step(execstep, plan=gone_plan, delete_errors={
+        "gone-rev": "NOT_FOUND: Requested entity was not found.",
+    })
+    check("a not-found failure is skipped, not fatal", r["rc"] == 0, r["out"])
+    check("a not-found failure is reported as skipped(gone)",
+          "OK skipped(gone) svc/gone-rev" in r["out"], r["out"])
+    check("a not-found failure is counted in $GITHUB_OUTPUT's skipped=",
+          "skipped=1" in r["output"], r["output"])
+
+    fail_plan = {"services": [{"service": "svc", "to_delete": ["bad-rev"]}]}
+    r = run_prune_exec_step(execstep, plan=fail_plan, delete_errors={
+        "bad-rev": "INTERNAL: something unexpected broke",
+    })
+    check("a genuinely unrecognised gcloud error FAILS, not skipped",
+          "FAIL svc/bad-rev" in r["out"], r["out"])
+    check("an unrecognised failure exits the job non-zero", r["rc"] == 1, r["out"])
+    check("an unrecognised failure still writes deleted=/skipped= to $GITHUB_OUTPUT "
+          "— the failure path must not skip the output entirely",
+          "deleted=0" in r["output"] and "skipped=0" in r["output"], r["output"])
 
     # ── deploy-cloudflare-worker ────────────────────────────────────────────
     print("\ndeploy-cloudflare-worker · Resolve ref and worker name")

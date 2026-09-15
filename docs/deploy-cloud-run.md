@@ -88,6 +88,8 @@ Two things this depends on, both worth confirming per repo before converting:
 | `docker_target` | input | `''` | multi-stage build stage (`docker build --target`); empty ⇒ last stage. For a Dockerfile with several leaves — e.g. a hermetic self-compiling stage for local work plus a slimmer CI stage |
 | `platforms` | input | `linux/amd64` | build platform(s) |
 | `build_args` | input | `''` | newline-separated docker build args |
+| `provenance` | input | `mode=min` | `docker/build-push-action` `provenance:` value — reproduces buildx's own default (unsigned attestation manifest alongside the image), stated here so it survives an action bump instead of drifting silently |
+| `sbom` | input | `false` | `docker/build-push-action` `sbom:` value — reproduces buildx's own default (no SBOM emitted) |
 | `deploy_mode` | input | `update-image` | see table above |
 | `deploy_flags` | input | `''` | flags for `deploy_mode=deploy`, **one per line** — spaces within a line are preserved (safe for values containing spaces or commas). Prefer this |
 | `extra_deploy_flags` | input | `''` | legacy: flags as one space-separated string — word-split, so a space inside any value breaks argv. Prefer `deploy_flags` |
