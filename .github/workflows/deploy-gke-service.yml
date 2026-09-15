@@ -99,6 +99,21 @@ on:
         type: string
         required: false
         default: ''
+      provenance:
+        description: >-
+          docker/build-push-action `provenance:` value. Default `mode=min` reproduces
+          buildx's own default (an attestation manifest alongside the image) — set
+          explicitly so it survives an action bump instead of drifting silently.
+        type: string
+        required: false
+        default: 'mode=min'
+      sbom:
+        description: >-
+          docker/build-push-action `sbom:` value. Default `false` reproduces buildx's
+          own default (buildx does not emit an SBOM unless asked).
+        type: string
+        required: false
+        default: 'false'
       cache_scope:
         description: 'BuildKit gha cache scope. Empty ⇒ image_name. Give each service
           its own scope so parallel matrix legs do not evict one another''s cache
@@ -306,6 +321,8 @@ jobs:
           build-args: ${{ inputs.build_args }}
           secrets: ${{ secrets.build_secrets }}
           tags: ${{ steps.ref.outputs.image }}
+          provenance: ${{ inputs.provenance }}
+          sbom: ${{ inputs.sbom }}
           cache-from: type=gha,scope=${{ steps.cache.outputs.scope }}
           cache-to: type=gha,mode=max,scope=${{ steps.cache.outputs.scope }}
 

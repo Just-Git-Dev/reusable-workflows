@@ -1309,6 +1309,12 @@
           "required": false,
           "type": "string"
         },
+        "provenance": {
+          "default": "mode=min",
+          "description": "docker/build-push-action `provenance:` value. Default `mode=min` reproduces buildx's own default (an attestation manifest alongside the image) \u2014 set explicitly so it survives an action bump instead of drifting silently.",
+          "required": false,
+          "type": "string"
+        },
         "record_github_deployment": {
           "default": true,
           "description": "Record a GitHub Deployment (needs `environment` set + `deployments: write`).",
@@ -1320,6 +1326,12 @@
           "description": "Reject a tag that is not vX.Y.Z.",
           "required": false,
           "type": "boolean"
+        },
+        "sbom": {
+          "default": "false",
+          "description": "docker/build-push-action `sbom:` value. Default `false` reproduces buildx's own default (buildx does not emit an SBOM unless asked).",
+          "required": false,
+          "type": "string"
         },
         "service": {
           "default": "",
@@ -1776,6 +1788,12 @@
           "required": false,
           "type": "string"
         },
+        "provenance": {
+          "default": "mode=min",
+          "description": "docker/build-push-action `provenance:` value. Default `mode=min` reproduces buildx's own default (an attestation manifest alongside the image) \u2014 set explicitly so it survives an action bump instead of drifting silently.",
+          "required": false,
+          "type": "string"
+        },
         "registry_project": {
           "default": "",
           "description": "Project/account/namespace segment (REGISTRY/PROJECT/REPO/IMAGE).",
@@ -1798,6 +1816,12 @@
           "default": null,
           "description": "gar | gcr | ecr | acr | ghcr | dockerhub | custom.",
           "required": true,
+          "type": "string"
+        },
+        "sbom": {
+          "default": "false",
+          "description": "docker/build-push-action `sbom:` value. Default `false` reproduces buildx's own default (buildx does not emit an SBOM unless asked).",
+          "required": false,
           "type": "string"
         },
         "svc_name": {
@@ -1986,11 +2010,23 @@
           "required": false,
           "type": "string"
         },
+        "provenance": {
+          "default": "mode=min",
+          "description": "docker/build-push-action `provenance:` value. Default `mode=min` reproduces buildx's own default (an attestation manifest alongside the image) \u2014 set explicitly so it survives an action bump instead of drifting silently.",
+          "required": false,
+          "type": "string"
+        },
         "record_github_deployment": {
           "default": true,
           "description": "Record a GitHub Deployment (needs `environment` set + `deployments: write`).",
           "required": false,
           "type": "boolean"
+        },
+        "sbom": {
+          "default": "false",
+          "description": "docker/build-push-action `sbom:` value. Default `false` reproduces buildx's own default (buildx does not emit an SBOM unless asked).",
+          "required": false,
+          "type": "string"
         },
         "service_account": {
           "default": null,

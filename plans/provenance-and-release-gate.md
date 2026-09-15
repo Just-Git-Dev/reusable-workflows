@@ -170,7 +170,33 @@ Why C over the alternatives:
 decision *is* the default, and the default is "keep today's behaviour, now written down". The
 inputs exist so option D is a one-line change per repo when the plan constraint lifts.
 
-### 1.6 The check that settles the unverified default
+### 1.6 The check that settles the unverified default — ✅ RUN 2026-09-15, DEFAULT CONFIRMED
+
+**Settled empirically against a live artifact**, not from buildx's documentation. Subject:
+`asia-southeast1-docker.pkg.dev/realm-id/backend/api:v0.124.0`.
+
+1. The release tag names an **OCI index** (`application/vnd.oci.image.index.v1+json`) with two
+   children: `linux/amd64`, and one `unknown/unknown` carrying
+   `vnd.docker.reference.type: attestation-manifest`. → **attestations are ON today.**
+2. That child manifest (its own digest `sha256:eda06d7c…`) has **exactly one layer**:
+   `application/vnd.in-toto+json`, annotated
+   `in-toto.io/predicate-type: https://slsa.dev/provenance/v1`. There is **no** SPDX layer.
+   → **provenance ON, SBOM OFF.** `sbom: 'false'` is therefore a true no-op.
+3. The provenance blob's `predicate.buildDefinition` contains only `buildType`,
+   `externalParameters`, `internalParameters`, `resolvedDependencies` — **no `llbDefinition`, no
+   `buildConfig`, no source map**, which are what `mode=max` embeds. → **`mode=min`.**
+
+So Option C's defaults (`provenance: 'mode=min'`, `sbom: 'false'`) reproduce today's behaviour
+exactly, and the change is genuinely inert at the registry. That was the condition the whole
+option rests on.
+
+⚠️ **Trap when re-running this.** The index entry's `vnd.docker.reference.digest` annotation is
+the digest of the **subject image**, not of the attestation child. Fetching that annotation
+returns the ordinary `linux/amd64` manifest — multi-megabyte filesystem layers and no in-toto
+predicate — which reads like "attestations are off" when they are on. Use the child entry's own
+`digest` field.
+
+#### The check as originally specified
 
 One command against a live artifact, no build required:
 

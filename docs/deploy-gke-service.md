@@ -34,6 +34,7 @@ Two fixes over the external system:
 | `workload_type` | `deployment` | `deployment` \| `cron` |
 | `deploy_method` | `kubectl` | `kubectl` \| `helm` |
 | `context` / `dockerfile` / `platforms` / `build_args` | `.` / `Dockerfile` / `linux/amd64` / `''` | build |
+| `provenance` / `sbom` | `mode=min` / `false` | `docker/build-push-action` values — reproduce buildx's own default, stated here so they survive an action bump |
 | `helm_chart` / `helm_release` / `helm_values_path` / `helm_extra_args` | — / `svc_name` / — / — | helm only |
 | `app_version` | `''` | kubectl/deployment: `set env APP_VERSION=…` after the roll |
 | `dry_run` | `false` | build only, no push, `--dry-run` on kubectl/helm |
