@@ -21,12 +21,22 @@ section opens or closes. Closed sections live in
 Both were carried as live state in `~/.claude/inflight/` for several sessions. Neither is
 live state — they are backlog, so they belong here. Recorded verbatim; neither is started.
 
-- [ ] **CI guard: assert the `v1` alias points at the newest `v1.x` tag.** `v1` is a frozen
-      legacy alias (see the pinning rule in `CLAUDE.md`), but nothing
-      verifies it still resolves to the newest `v1.x` release — it can silently drift behind
-      and a legacy caller then gets an older input contract than `v1` implies. Wanted as a
-      release-time check alongside the `WORKFLOW_VERSION` stamp sweep, which has the same
-      shape of failure (see "Release hygiene" below — that one shipped wrong in `v2.6.1`).
+- [ ] **CI guard: assert the `v1` alias has NOT moved.** ⚠️ **Rewritten 2026-09-15 — this item
+      previously asked for the exact opposite and was wrong.** It read "assert the `v1` alias
+      points at the newest `v1.x` tag", which contradicts its own next sentence ("`v1` is a
+      frozen legacy alias") and contradicts the ruling in `DECISIONS-ARCHIVE.md`: *"`v1` is
+      frozen, not moved. Releases are immutable."* Moving `v1` onto a newer release was
+      considered there and **rejected** — `deploy-cloudflare-pages.yml` did not exist at `v1`,
+      so re-pointing it would hand every legacy caller a breaking change as a surprise.
+      Measured 2026-09-15: `v1` → `b96d0e3`, the original 5-workflow commit (no `v1.x.y` tag
+      sits on it), exactly as `DECISIONS.md` and `README.md:137` say it should.
+
+      A guard built to the old wording went red against this repo on its first run and would
+      have made CI permanently red; its natural "fix" (`git tag -f v1 v1.24.0`) is precisely
+      the breaking change that decision exists to prevent. **The real invariant is that `v1`
+      must never move**, and the failure worth catching is someone "helpfully fixing the
+      drift". Build it that way: pin the expected SHA, fail loudly if it changes, and make the
+      failure message say `v1` is frozen on purpose rather than suggesting a re-point.
 
 - [ ] **Owed to AutoMahn: audit `validate-alerts` for derived-comparand and assumed-scope
       gates.** The linter's checks were reviewed for MQL execution (closed 2026-09-01, below)
@@ -127,8 +137,13 @@ semver here tracks the **input contract**, so each pin needs its own diff read b
 ## Build attestations
 
 - [ ] **Decide a `provenance` policy for the build reusables — right now it is inherited, not
-      chosen.** Neither `deploy-cloud-run.yml` nor `promote-image.yml` sets `provenance:` or
-      `sbom:` anywhere (verified by grep), so buildx's default applies and every push adds an
+      chosen.** ⚠️ **Corrected 2026-09-15: `promote-image.yml` is NOT a provenance surface** —
+      it retags server-side and contains no build step at all (`grep -n 'build-push-action'`
+      over it returns nothing). And there are **three** build surfaces, not one:
+      `deploy-cloud-run.yml:311`, `deploy-gke-service.yml:300` and `deploy-cluster-keyed.yml:313`,
+      all on the same pinned `docker/build-push-action@53b7df9 # v7.3.0`. Applying a policy to
+      one of them is drift by construction. None sets `provenance:` or `sbom:`,
+      so buildx's default applies and every push adds an
       attestation manifest beside the image. Those are the `unknown/unknown` children
       `cleanup-gar-images` already has to reason about — its own header comment names them, and
       the Traide RCA found all 52 untagged manifests were index children of exactly this shape.
