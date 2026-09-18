@@ -3368,6 +3368,73 @@
       "path": ".github/workflows/validate-alerts.yml",
       "secrets": {},
       "workflow": "validate-alerts.yml"
+    },
+    "verify-metrics-arrival": {
+      "inputs": {
+        "cloud_run_service": {
+          "default": "",
+          "description": "Cloud Run service whose SERVING revision is grepped for exporter errors. Empty (the default) skips the log check.",
+          "required": false,
+          "type": "string"
+        },
+        "gcp_project": {
+          "default": null,
+          "description": "GCP project whose Cloud Monitoring is queried for arrived metrics.",
+          "required": true,
+          "type": "string"
+        },
+        "log_error_pattern": {
+          "default": "failed to upload metrics",
+          "description": "Substring that marks an exporter failure in the service log. Any hit on the serving revision fails the job.",
+          "required": false,
+          "type": "string"
+        },
+        "log_lookback_minutes": {
+          "default": 15,
+          "description": "How far back to read the serving revision log.",
+          "required": false,
+          "type": "number"
+        },
+        "metric_prefixes": {
+          "default": "prometheus.googleapis.com/,workload.googleapis.com/,custom.googleapis.com/,external.googleapis.com/",
+          "description": "Comma-separated metric-type prefixes to look for. PASS is the UNION \u2014 at least one prefix must hold a descriptor. The default is the four prefixes application metrics can land under; a wrong single prefix returns a truthful-looking zero, which is why this is a list.",
+          "required": false,
+          "type": "string"
+        },
+        "region": {
+          "default": "",
+          "description": "Cloud Run region. Required when cloud_run_service is set.",
+          "required": false,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "Service account to impersonate. Needs monitoring.metricDescriptors.list (roles/monitoring.viewer) and, when the log check is enabled, logging.logEntries.list + run.services.get (roles/logging.viewer + roles/run.viewer).",
+          "required": true,
+          "type": "string"
+        },
+        "wif_provider": {
+          "default": null,
+          "description": "Workload Identity Federation provider.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "verify": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Verify metrics arrival (reusable)",
+      "outputs": {
+        "log_errors": "Exporter-error log lines found on the serving revision. Empty string (not 0) when the log check was skipped \u2014 that is how a caller tells \"checked, clean\" from \"never ran\".",
+        "matched_prefixes": "Space-separated list of the prefixes that held a descriptor.",
+        "prefixes_matched": "How many of the requested prefixes hold at least one descriptor."
+      },
+      "path": ".github/workflows/verify-metrics-arrival.yml",
+      "secrets": {},
+      "workflow": "verify-metrics-arrival.yml"
     }
   }
 }

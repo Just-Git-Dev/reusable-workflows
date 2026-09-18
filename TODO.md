@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-29 open across 8 live sections. 8 closed items archived.
+30 open across 9 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)](#post-deploy-probe--prove-the-observability-pipeline-actually-delivers-opened-2026-09-18) — 1 open, 1 closed
 - **ACTIVE** — [Two items rehomed from the inflight tracker (opened 2026-09-08)](#two-items-rehomed-from-the-inflight-tracker-opened-2026-09-08) — 2 open
 - **ACTIVE** — [RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)](#realmid-realm-id-has-no-alerts-caller--adopt-bootstrap-alerts-opened-2026-09-07) — 3 open
 - **ACTIVE** — [Release hygiene — the `WORKFLOW_VERSION` stamp (regression found 2026-09-06)](#release-hygiene--the-workflow_version-stamp-regression-found-2026-09-06) — 4 open
@@ -15,6 +16,65 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)
+
+Handed over from the Traide umbrella session. The owner ruled this a **platform** concern, not a
+Traide one: the incident was Traide's, the failure class is generic. **Filed for triage, not
+started** — nothing here is designed or agreed yet.
+
+- [x] **A post-deploy probe that fails the release when metrics are not arriving.** ✅ **BUILT
+      2026-09-18 as `verify-metrics-arrival.yml`** — see `docs/verify-metrics-arrival.md` and
+      `DECISIONS.md` 2026-09-18. Three outcomes (PASS / no-metrics / **cannot-verify**), an
+      unfiltered positive control, a *list* of prefixes with PASS on the union, and the log grep
+      pinned to the **serving** revision. Six paired step-body tests. Original entry: The failure
+      class: *a broken observability path deletes the very signal that would announce it.*
+      Traide's api ran for weeks with its GCP OTel exporter delivering **zero** metrics because
+      `OTEL_RESOURCE_ATTRIBUTES` lacked `gcp.project_id`. Every gate stayed green the whole time
+      — deploy, Cloud Run startup probe, `/.well-known/alive`, `migrate-smoke`, `storage-probe` —
+      because the only evidence was a log line *inside the container*, and the thing that would
+      have raised the alarm was the pipeline that was down. Above the container log, "exporter
+      broken" and "quiet system" are indistinguishable.
+
+      The concrete check, as handed over (two parts, post-deploy, fails the release):
+      1. List `metricDescriptors` for a given prefix on a given GCP project and **fail on zero**
+         (Traide's case: prefix `prometheus.googleapis.com/`, project `traide-in`).
+      2. Grep the **serving** revision's logs for the exporter's upload error and fail on any hit
+         (Traide's case: `failed to upload metrics` on service `traide-api`).
+
+      **The positive-control requirement is the load-bearing part.** A probe that returns zero
+      because it queried the wrong project, the wrong prefix, or ran under an account without
+      permission must **fail loudly** — never read as "no metrics yet". Zero-results and
+      can't-tell have to be distinguishable outcomes. Without that, this probe is just another
+      green tick that measures nothing, which is the exact class of bug it exists to catch.
+
+      Two traps measured independently in this workspace on 2026-09-18, both of which would sink
+      a naive implementation:
+      - **`gcloud monitoring metrics-descriptors` does not exist** as a subcommand. It errors
+        `Invalid choice`, and `| wc -l` over the empty stdout returns 0 — i.e. it reports "no
+        metrics ever arrived". Use the Monitoring REST API and assert the HTTP status.
+      - **The prefix is not obvious and a wrong one returns a truthful-looking 0.** For
+        `realm-id`, `custom.googleapis.com/` and `workload.googleapis.com/` both return 0 while
+        `prometheus.googleapis.com/` returns 7 — GMP publishes under the `prometheus.` prefix.
+        This is precisely why the control is mandatory rather than nice-to-have.
+
+      **No fire:** the Traide instance is fixed (api v0.56.3). Verified by that session on
+      2026-09-18 — `traide-in` now holds 7 `prometheus.googleapis.com/` descriptors (was zero)
+      and no `failed to upload metrics` lines on `traide-api` in the preceding 3 hours. This item
+      is the generic prevention.
+
+      Pointers, all in `Traide-Co/api`: `docs/rca-metrics-never-reached-google-2026-09-18.md`
+      (full RCA), `DECISIONS.md` 2026-09-18 (b), `TODO.md` L11-21 (the original entry, still
+      worded as api-owned; that session is re-pointing it separately).
+
+- [ ] **Wire the first callers.** The workflow ships; nothing calls it yet, and nothing *can*
+      until `infra-provisioning` grants an SA that holds both `monitoring.viewer` and
+      `logging.viewer` (the `observability-read` capability, WIF-only). Order: `traide-co` — the
+      incident project — then `realm-id`. Each caller is a PR in that app repo, so it is a
+      cross-project change, not work for this repo.
+      **AutoMahn is deliberately excluded**: it imports no GCP metrics exporter, so it exports
+      nothing at all and this probe would red every release until that is fixed. Adopting it
+      there is a separate decision about AutoMahn's exporter, not about this probe.
 
 ## Two items rehomed from the inflight tracker (opened 2026-09-08)
 

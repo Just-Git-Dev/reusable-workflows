@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-18` — [`verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy](#2026-09-18--verify-metrics-arrival-three-outcomes-because-a-probe-that-cannot-see-must-not-read-as-happy)
 - `2026-09-15` — [RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`](#2026-09-15--rca-a-routine-revision-in-use-killed-the-whole-revisions-sweep-because-set--uo-pipefail-does-not-clear--e)
 - `2026-09-15` — [`uses: ./actions/x` resolves against the CALLER's workspace, so the cleanup sweeps stay two workflows](#2026-09-15--uses-actionsx-resolves-against-the-callers-workspace-so-the-cleanup-sweeps-stay-two-workflows)
 - `2026-09-13` — [RCA: 17 `DECISIONS.md` index links pointed at nothing, because the anchor ate a space the em dash left behind](#2026-09-13--rca-17-decisionsmd-index-links-pointed-at-nothing-because-the-anchor-ate-a-space-the-em-dash-left-behind)
@@ -91,6 +92,85 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-18 — `verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy
+
+New reusable workflow. Handed over from the Traide umbrella session; the owner ruled it a
+**platform** concern rather than a Traide one — the incident was Traide's, the failure class is
+generic. Filed first as `TODO.md` § "Post-deploy probe — prove the observability pipeline
+actually DELIVERS (opened 2026-09-18)", which this closes.
+
+**The incident.** Traide's api ran for *weeks* exporting zero metrics: `OTEL_RESOURCE_ATTRIBUTES`
+lacked `gcp.project_id`, so every 30s export was assembled, authenticated, sent, and rejected
+with `InvalidArgument`. Every gate stayed green throughout — deploy, the Cloud Run startup probe,
+`/.well-known/alive`, `migrate-smoke`, `storage-probe` — because the only evidence was a log line
+*inside* the container, and the thing that would have raised the alarm was the pipeline that was
+down.
+
+> A broken write path announces itself; a broken observability path removes the very signal that
+> would announce it.
+
+Above the container log, "exporter broken" and "quiet system" are indistinguishable. It survived a
+direct review of this exact area: the gofr v1.61.0 bump was argued and shipped on the reasoning
+that unbounded `path` labels would degrade Cloud Monitoring — while no metric had ever arrived
+there. **Configuration that expresses an intent is not evidence the intent is met.** So the probe
+asks the question at the far end of the pipeline, from outside the container.
+
+**The decision: three outcomes, not two.** PASS, FAIL-no-metrics, and FAIL-**cannot-verify**. The
+third is the whole point. A probe that returns zero because it queried the wrong project, under an
+account without the permission, or against a project whose Monitoring API is off must fail loudly
+— never read as "no metrics yet", and never pass. Without that distinction this is one more green
+tick that measures nothing, which is the exact class of bug it exists to catch. It extends the
+house rule already written into `validate-alerts.yml` (`401`/`403` hard-fails, *"Never treat
+'could not check' as 'checked and fine'"*), rather than inventing a second convention.
+
+Mechanically, that distinction is bought by an **unfiltered positive control**: a
+`metricDescriptors.list` with no filter, `pageSize=1`. Every live project carries Google's own
+built-in descriptors, so a non-empty answer proves the project id resolves, the credentials work,
+the SA holds `monitoring.metricDescriptors.list`, and the API is enabled — all four at once. An
+empty control is therefore not a quiet project but a project we are not looking at, and is
+reported as cannot-verify.
+
+**Why a list of prefixes, and the union.** The handover named one prefix,
+`prometheus.googleapis.com/`. Verifying `realm-id` live on 2026-09-18 hit the trap the probe is
+meant to survive: `custom.googleapis.com/` → 0, `workload.googleapis.com/` → 0,
+`prometheus.googleapis.com/` → **7** (Managed Prometheus publishes under `prometheus.`). A wrong
+single prefix returns a truthful-looking zero. So `metric_prefixes` defaults to the four prefixes
+application metrics can land under and PASS is the **union** — one non-empty prefix is enough.
+
+**Why two checks.** Descriptor existence catches *never worked* (Traide's bug) but cannot catch a
+*new* breakage, because descriptors persist ~24h after ingestion stops. The exporter log grep
+catches that within minutes. It reads the **serving** revision specifically: grepping a superseded
+revision reports on code that is no longer running, so it would go green over a broken deploy and
+red over a fixed one.
+
+**"Is there at least one?", never "how many".** `metricDescriptors.list` paginates and `traide-in`
+holds 8,925 descriptors. Every call uses `pageSize=1` and tests the array for non-emptiness, which
+removes pagination as a correctness concern rather than handling it.
+
+**Two traps that would have sunk a naive version**, both measured in this workspace on 2026-09-18
+and both recorded here because each produces a *confidently wrong answer rather than an error*:
+
+- `gcloud monitoring metrics-descriptors` **does not exist**. It errors `Invalid choice`, and
+  `| wc -l` over the empty stdout returns `0` — i.e. it reports "no metrics ever arrived". Hence
+  the REST API with the HTTP status asserted.
+- A wrong prefix or scope returns a **0 identical to a true 0**. See the `realm-id` numbers above.
+
+**Tests.** Six paired cases in `tests/run_step_tests.py`, executing the shipped `run:` bodies. The
+pairing is the design: control-403 and empty-control (cannot-verify) against all-prefixes-empty
+(no-metrics) proves the two are distinguishable; one-non-empty-prefix against all-empty proves the
+*union* decides and not the first prefix; error-on-superseded-revision against
+error-on-serving-revision proves the log check reads the serving one. Without each pair's second
+subject the assertion would hold for the wrong reason. That paid off immediately — the
+superseded-revision case exposed a bug in the *test stub* (its service fixture lived at the path
+`gcloud run services describe` redirects to, so the fixture was truncated before the stub read
+it), which had made the serving-revision case pass for the wrong reason.
+
+**Adoption.** No caller is wired here — that is a change in each app repo. It needs a service
+account that can both list metric descriptors and read logs, which no SA in the fleet currently
+can; `infra-provisioning` grants that as the `observability-read` capability, WIF-only, starting
+with `traide-co`. **AutoMahn is deliberately excluded**: it imports no GCP metrics exporter, so it
+exports nothing at all and the probe would red every release until that is fixed.
 
 ## 2026-09-15 — RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`
 

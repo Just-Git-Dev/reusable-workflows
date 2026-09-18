@@ -45,6 +45,7 @@ CFDNS = ROOT / ".github" / "workflows" / "bootstrap-cf-dns.yml"
 CRUPDATE = ROOT / ".github" / "workflows" / "cloud-run-update.yml"
 ALERTS = ROOT / ".github" / "workflows" / "validate-alerts.yml"
 BOOTSTRAP = ROOT / ".github" / "workflows" / "bootstrap-alerts.yml"
+METRICS = ROOT / ".github" / "workflows" / "verify-metrics-arrival.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
@@ -1279,6 +1280,178 @@ def run_bootstrap_apply_step(body, policies, *, policy_glob="policy-*.yaml",
                           {"POLICY_GLOB": policy_glob, "FORCE_UPDATE": force_update,
                            "CHANNEL_NAME": "projects/p/notificationChannels/9"},
                           existing=existing)
+
+
+# --- verify-metrics-arrival: the three outcomes must stay distinguishable ----
+#
+# The whole design of this probe is that PASS, "no metrics have ever arrived"
+# and "cannot verify" are three outcomes, not two. A probe that could not see
+# must never read as a probe that is happy. These execute the shipped bodies
+# against a stubbed Monitoring API and a stubbed gcloud.
+DESCRIPTORS_STEP = "Verify metrics have arrived in Cloud Monitoring"
+LOGS_STEP = "Check the serving revision for exporter errors"
+
+_METRICS_CURL = r"""#!/usr/bin/env bash
+out=""; prev=""; filter=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  case "$a" in filter=*) filter="${a#filter=}" ;; esac
+  prev="$a"
+done
+echo "$filter" >> %(tmp)s/filters.txt
+if [ -z "$filter" ]; then
+  cp %(tmp)s/control.json "$out"
+  cat %(tmp)s/control.status
+  exit 0
+fi
+# filter is: metric.type = starts_with("<prefix>")
+p="${filter#*starts_with(\"}"; p="${p%%\"*}"
+key=$(printf '%%s' "$p" | tr -c 'A-Za-z0-9' '_')
+if [ -f "%(tmp)s/prefixes/$key.json" ]; then
+  cp "%(tmp)s/prefixes/$key.json" "$out"
+else
+  echo '{"metricDescriptors":[]}' > "$out"
+fi
+if [ -f "%(tmp)s/prefixes/$key.status" ]; then
+  cat "%(tmp)s/prefixes/$key.status"
+else
+  printf '200'
+fi
+"""
+
+
+def _descriptors_json(n: int) -> str:
+    return json.dumps({"metricDescriptors": [{"type": f"m{i}"} for i in range(n)]})
+
+
+def run_descriptors_step(body: str, *, control=1, control_status="200",
+                         prefix_counts=None, prefix_statuses=None,
+                         prefixes=None, token="t", project="proj"):
+    """Execute the descriptor probe against a stubbed metricDescriptors.list.
+
+    control:        number of descriptors the UNFILTERED control call returns
+    control_status: HTTP code for that call
+    prefix_counts:  {prefix: n} for the filtered calls; absent prefix => 0
+    prefix_statuses:{prefix: http} overrides for the filtered calls
+    """
+    prefix_counts = prefix_counts or {}
+    prefix_statuses = prefix_statuses or {}
+    if prefixes is None:
+        prefixes = ["prometheus.googleapis.com/", "workload.googleapis.com/",
+                    "custom.googleapis.com/", "external.googleapis.com/"]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "prefixes").mkdir()
+        if control_status == "200":
+            (tmp / "control.json").write_text(_descriptors_json(control))
+        else:
+            (tmp / "control.json").write_text(
+                json.dumps({"error": {"message": "denied by policy"}}))
+        (tmp / "control.status").write_text(control_status)
+
+        def key(p):
+            return "".join(c if c.isalnum() else "_" for c in p)
+
+        for p, n in prefix_counts.items():
+            (tmp / "prefixes" / f"{key(p)}.json").write_text(_descriptors_json(n))
+        for p, st in prefix_statuses.items():
+            (tmp / "prefixes" / f"{key(p)}.status").write_text(st)
+            if st != "200":
+                (tmp / "prefixes" / f"{key(p)}.json").write_text(
+                    json.dumps({"error": {"message": "bad filter"}}))
+
+        stub = tmp / "bin"
+        stub.mkdir()
+        (stub / "curl").write_text(_METRICS_CURL % {"tmp": tmp})
+        (stub / "curl").chmod(0o755)
+
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(ACCESS_TOKEN=token, GCP_PROJECT=project,
+                   METRIC_PREFIXES=",".join(prefixes),
+                   RUNNER_TEMP=str(tmp), GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        filters = tmp / "filters.txt"
+        return {
+            "rc": proc.returncode,
+            "out": proc.stdout + proc.stderr,
+            "outputs": dict(l.split("=", 1) for l in out.read_text().splitlines()
+                            if "=" in l),
+            "filters": [l for l in (filters.read_text().splitlines()
+                                    if filters.exists() else []) if l],
+        }
+
+
+_METRICS_GCLOUD = r"""#!/usr/bin/env bash
+if [ "$1" = "run" ]; then
+  cat %(tmp)s/service_fixture.json
+  exit %(describe_rc)s
+fi
+if [ "$1" = "logging" ]; then
+  filter="$3"
+  echo "$filter" > %(tmp)s/log_filter.txt
+  while IFS= read -r rev; do
+    [ -n "$rev" ] || continue
+    case "$filter" in
+      *"\"$rev\""*) echo "2026-09-18T12:00:00Z" ;;
+    esac
+  done < %(tmp)s/error_revisions.txt
+  exit %(read_rc)s
+fi
+exit 1
+"""
+
+
+def run_logs_step(body: str, *, serving="rev-002", traffic=None,
+                  error_revisions=(), describe_rc=0, read_rc=0,
+                  service="api", region="asia-south1", pattern="failed to upload metrics",
+                  lookback=15):
+    """Execute the serving-revision log check against a stubbed gcloud.
+
+    traffic:         explicit .status.traffic list; defaults to 100% on `serving`
+    error_revisions: revisions whose logs contain the error pattern. The stub
+                     answers on the revision named IN THE FILTER, so a hit on a
+                     superseded revision is only seen if the step grepped it.
+    """
+    if traffic is None:
+        traffic = [{"revisionName": serving, "percent": 100}]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        # NOT "service.json": the step redirects describe's stdout to that path, so a
+        # fixture living there would be truncated before the stub could read it.
+        (tmp / "service_fixture.json").write_text(
+            json.dumps({"status": {"traffic": traffic}}))
+        (tmp / "error_revisions.txt").write_text("\n".join(error_revisions) + "\n")
+        stub = tmp / "bin"
+        stub.mkdir()
+        (stub / "gcloud").write_text(_METRICS_GCLOUD % {
+            "tmp": tmp, "describe_rc": describe_rc, "read_rc": read_rc})
+        (stub / "gcloud").chmod(0o755)
+
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="proj", CLOUD_RUN_SERVICE=service, REGION=region,
+                   LOG_ERROR_PATTERN=pattern, LOG_LOOKBACK_MINUTES=str(lookback),
+                   RUNNER_TEMP=str(tmp), GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        lf = tmp / "log_filter.txt"
+        return {
+            "rc": proc.returncode,
+            "out": proc.stdout + proc.stderr,
+            "outputs": dict(l.split("=", 1) for l in out.read_text().splitlines()
+                            if "=" in l),
+            "filter": lf.read_text() if lf.exists() else "",
+        }
 
 
 def check(name, cond, detail=""):
@@ -2717,6 +2890,106 @@ def main():
             PROMQL_COND, documentation="y" * repo_doc)})
         check(f"a real consumer's {repo_doc}-char documentation passes",
               r["rc"] == 0, r["out"])
+
+    # ---- verify-metrics-arrival: three outcomes, never two ----------------
+    # The probe exists because a broken observability path deletes the signal
+    # that would announce it. Its value is entirely in the distinction between
+    # "there are no metrics" and "I could not tell" — a probe that cannot tell
+    # must not look like a probe that is happy. Each pair below exists so the
+    # assertion cannot hold for the wrong reason.
+    print("\nverify-metrics-arrival · metrics actually arrived")
+    desc = extract_step(METRICS, "verify", DESCRIPTORS_STEP)
+    PROM = "prometheus.googleapis.com/"
+    CUSTOM = "custom.googleapis.com/"
+
+    # 1. The control is refused: cannot-verify. Saying "no metrics" here would
+    #    report a permissions gap as an application bug.
+    r = run_descriptors_step(desc, control_status="403")
+    check("a 403 on the control fails the job", r["rc"] != 0, r["out"])
+    check("a 403 on the control says CANNOT VERIFY", "CANNOT VERIFY" in r["out"], r["out"])
+    check("a 403 on the control does NOT claim metrics are missing",
+          "NO METRICS HAVE EVER ARRIVED" not in r["out"], r["out"])
+    check("a 403 on the control never queries a prefix", r["filters"] == [], r["filters"])
+
+    # 2. HTTP 200 with an empty UNFILTERED list — the wrong-project case. Every
+    #    live project has Google built-ins, so this is "not looking where we
+    #    think we are", not "a quiet project".
+    r = run_descriptors_step(desc, control=0)
+    check("an empty control list fails the job", r["rc"] != 0, r["out"])
+    check("an empty control list says CANNOT VERIFY", "CANNOT VERIFY" in r["out"], r["out"])
+    check("an empty control list does NOT claim metrics are missing",
+          "NO METRICS HAVE EVER ARRIVED" not in r["out"], r["out"])
+
+    # 3 & 4 are the pair that proves the union decides. Without 4, "all prefixes
+    #    empty fails" would also hold for an implementation that only ever reads
+    #    the first prefix — which is the 2026-09-18 trap exactly.
+    r = run_descriptors_step(desc, control=1, prefix_counts={})
+    check("control OK + every prefix empty fails the job", r["rc"] != 0, r["out"])
+    check("and reports it as metrics never having arrived",
+          "NO METRICS HAVE EVER ARRIVED" in r["out"], r["out"])
+    check("and not as an inability to check", "CANNOT VERIFY" not in r["out"], r["out"])
+    check("and it checked every prefix before concluding", len(r["filters"]) == 4, r["filters"])
+
+    # The non-empty prefix is deliberately NOT the first one: on realm-id,
+    # custom. and workload. are both legitimately 0 while prometheus. holds 7.
+    r = run_descriptors_step(desc, control=1, prefix_counts={CUSTOM: 3})
+    check("one non-empty prefix among four passes", r["rc"] == 0, r["out"])
+    check("and reports which prefix matched",
+          r["outputs"].get("matched_prefixes") == CUSTOM, r["outputs"])
+    check("and counts one match", r["outputs"].get("prefixes_matched") == "1", r["outputs"])
+
+    r = run_descriptors_step(desc, control=1, prefix_counts={PROM: 7, CUSTOM: 1})
+    check("two non-empty prefixes count two",
+          r["outputs"].get("prefixes_matched") == "2", r["outputs"])
+
+    # A filtered call that fails AFTER a good control is still cannot-verify:
+    # the control proved we can see, so a failure here is an unanswered
+    # question, not a zero.
+    r = run_descriptors_step(desc, control=1, prefix_statuses={PROM: "400"})
+    check("a failed prefix query after a good control is cannot-verify",
+          r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
+
+    # An empty token is cannot-verify too, and must not reach the API at all.
+    r = run_descriptors_step(desc, token="")
+    check("an empty access token is cannot-verify",
+          r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
+
+    print("verify-metrics-arrival · the exporter is not failing right now")
+    logs = extract_step(METRICS, "verify", LOGS_STEP)
+
+    # 5 & 6 are the pair that proves it reads the SERVING revision. Case 6
+    #    plants the error on a superseded revision: an implementation that
+    #    grepped the service without pinning the revision would go red on code
+    #    that is no longer running.
+    r = run_logs_step(logs, serving="rev-002", error_revisions=("rev-002",))
+    check("an exporter error on the serving revision fails the job",
+          r["rc"] != 0, r["out"])
+    check("and counts the hits", r["outputs"].get("log_errors") == "1", r["outputs"])
+
+    r = run_logs_step(logs, serving="rev-002", error_revisions=("rev-001",))
+    check("the same error on a SUPERSEDED revision passes", r["rc"] == 0, r["out"])
+    check("because the filter pins the serving revision",
+          '"rev-002"' in r["filter"] and "rev-001" not in r["filter"], r["filter"])
+    check("and reports zero errors", r["outputs"].get("log_errors") == "0", r["outputs"])
+
+    # The serving revision is the one carrying traffic, not the first listed.
+    r = run_logs_step(logs, traffic=[{"revisionName": "rev-001", "percent": 0},
+                                     {"revisionName": "rev-002", "percent": 100}],
+                      error_revisions=("rev-001",))
+    check("a 0%-traffic revision is not treated as serving", r["rc"] == 0, r["out"])
+    check("and the 100%-traffic revision is the one read",
+          '"rev-002"' in r["filter"], r["filter"])
+
+    # A read that could not run is not a clean read.
+    r = run_logs_step(logs, serving="rev-002", read_rc=1)
+    check("a failed logging read is cannot-verify",
+          r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
+    r = run_logs_step(logs, describe_rc=1)
+    check("a failed service describe is cannot-verify",
+          r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
+    r = run_logs_step(logs, traffic=[])
+    check("no revision carrying traffic is cannot-verify",
+          r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

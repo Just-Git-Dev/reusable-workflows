@@ -1,0 +1,354 @@
+name: Verify metrics arrival (reusable)
+
+# Post-deploy probe: prove the observability pipeline actually DELIVERS.
+#
+# WHY THIS EXISTS. Traide's api ran for weeks exporting ZERO metrics — its
+# `OTEL_RESOURCE_ATTRIBUTES` lacked `gcp.project_id`, so every 30s export was
+# assembled, authenticated, sent, and rejected with `InvalidArgument`. Every
+# gate stayed green throughout: deploy, the Cloud Run startup probe,
+# `/.well-known/alive`, `migrate-smoke`, `storage-probe`. The only evidence was
+# a log line INSIDE the container, and the thing that would have raised the
+# alarm was the pipeline that was down.
+#
+#   A broken write path announces itself; a broken observability path removes
+#   the very signal that would announce it. Above the container log, "exporter
+#   broken" and "quiet system" are indistinguishable.
+#
+# So this probe asks the question from OUTSIDE the container, at the far end of
+# the pipeline: did anything actually land in Cloud Monitoring?
+#
+# THREE OUTCOMES, NOT TWO. That is the whole design:
+#
+#   PASS               — descriptors exist under at least one app prefix.
+#   FAIL-no-metrics    — the control proved we CAN see, and there is nothing.
+#   FAIL-cannot-verify — we could not see at all (bad credentials, missing
+#                        permission, disabled API, wrong project id). This must
+#                        NEVER be reported as "no metrics", and must never pass.
+#
+# A probe that cannot tell must not look like a probe that is happy. This
+# extends the house rule already spelled out in validate-alerts.yml: "Never
+# treat 'could not check' as 'checked and fine'."
+#
+# TWO CHECKS, because they catch different things:
+#
+#   1. DESCRIPTOR EXISTENCE catches "never worked" — Traide's bug. Descriptors
+#      are created on first ingestion, so their absence is proof nothing ever
+#      arrived. But they PERSIST for ~24h after ingestion stops, so this check
+#      cannot see a breakage that started an hour ago.
+#   2. THE EXPORTER LOG GREP catches a NEW breakage within minutes, which
+#      descriptors cannot. It reads the SERVING revision — grepping a
+#      superseded revision reports on code that is no longer running.
+#
+# TWO TRAPS measured in this workspace on 2026-09-18, either of which sinks a
+# naive implementation:
+#
+#   - `gcloud monitoring metrics-descriptors` DOES NOT EXIST. It errors
+#     `Invalid choice`, and `| wc -l` over the empty stdout returns 0 — i.e. it
+#     reports "no metrics ever arrived". Hence the REST API, with the HTTP
+#     status asserted.
+#   - THE PREFIX IS NOT OBVIOUS AND A WRONG ONE RETURNS A TRUTHFUL-LOOKING 0.
+#     On `realm-id`: `custom.googleapis.com/` = 0 and `workload.googleapis.com/`
+#     = 0, while `prometheus.googleapis.com/` = 7 — Managed Prometheus publishes
+#     under the `prometheus.` prefix. Hence a LIST of prefixes, PASS on the
+#     union, plus an unfiltered positive control.
+#
+# PAGINATION IS NOT A CORRECTNESS CONCERN HERE because the question is "is there
+# at least one?", never "how many". `metricDescriptors.list` paginates
+# (`traide-in` holds 8,925 descriptors); every call below uses `pageSize=1` and
+# tests the returned array for non-emptiness.
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project whose Cloud Monitoring is queried for arrived metrics.'
+        type: string
+        required: true
+      wif_provider:
+        description: 'Workload Identity Federation provider.'
+        type: string
+        required: true
+      service_account:
+        description: >-
+          Service account to impersonate. Needs monitoring.metricDescriptors.list
+          (roles/monitoring.viewer) and, when the log check is enabled,
+          logging.logEntries.list + run.services.get (roles/logging.viewer +
+          roles/run.viewer).
+        type: string
+        required: true
+      metric_prefixes:
+        description: >-
+          Comma-separated metric-type prefixes to look for. PASS is the UNION —
+          at least one prefix must hold a descriptor. The default is the four
+          prefixes application metrics can land under; a wrong single prefix
+          returns a truthful-looking zero, which is why this is a list.
+        type: string
+        required: false
+        default: 'prometheus.googleapis.com/,workload.googleapis.com/,custom.googleapis.com/,external.googleapis.com/'
+      cloud_run_service:
+        description: >-
+          Cloud Run service whose SERVING revision is grepped for exporter
+          errors. Empty (the default) skips the log check.
+        type: string
+        required: false
+        default: ''
+      region:
+        description: 'Cloud Run region. Required when cloud_run_service is set.'
+        type: string
+        required: false
+        default: ''
+      log_error_pattern:
+        description: >-
+          Substring that marks an exporter failure in the service log. Any hit
+          on the serving revision fails the job.
+        type: string
+        required: false
+        default: 'failed to upload metrics'
+      log_lookback_minutes:
+        description: 'How far back to read the serving revision log.'
+        type: number
+        required: false
+        default: 15
+    outputs:
+      prefixes_matched:
+        description: 'How many of the requested prefixes hold at least one descriptor.'
+        value: ${{ jobs.verify.outputs.prefixes_matched }}
+      matched_prefixes:
+        description: 'Space-separated list of the prefixes that held a descriptor.'
+        value: ${{ jobs.verify.outputs.matched_prefixes }}
+      log_errors:
+        description: >-
+          Exporter-error log lines found on the serving revision. Empty string
+          (not 0) when the log check was skipped — that is how a caller tells
+          "checked, clean" from "never ran".
+        value: ${{ jobs.verify.outputs.log_errors }}
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v2.8.0
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        # Explicit bash => `-eo pipefail`; the implicit default is only `-e`,
+        # which lets a failing head-of-pipe pass silently.
+        shell: bash
+    env:
+      GCP_PROJECT:          ${{ inputs.gcp_project }}
+      METRIC_PREFIXES:      ${{ inputs.metric_prefixes }}
+      CLOUD_RUN_SERVICE:    ${{ inputs.cloud_run_service }}
+      REGION:               ${{ inputs.region }}
+      LOG_ERROR_PATTERN:    ${{ inputs.log_error_pattern }}
+      LOG_LOOKBACK_MINUTES: ${{ inputs.log_lookback_minutes }}
+    outputs:
+      prefixes_matched: ${{ steps.descriptors.outputs.prefixes_matched }}
+      matched_prefixes: ${{ steps.descriptors.outputs.matched_prefixes }}
+      log_errors:       ${{ steps.logs.outputs.log_errors }}
+
+    steps:
+      - name: Guard input combination
+        # Failing here beats silently skipping the log check because a caller
+        # named a service but forgot its region — a probe that quietly does
+        # less than advertised is the failure mode this workflow exists to
+        # remove.
+        run: |
+          if [ -n "$CLOUD_RUN_SERVICE" ] && [ -z "$REGION" ]; then
+            echo "::error::cloud_run_service is set but region is not — the log check cannot run."
+            exit 1
+          fi
+
+      - name: Authenticate to GCP via WIF
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+          token_format:               access_token
+
+      - name: Verify metrics have arrived in Cloud Monitoring
+        id: descriptors
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          # RUNNER_TEMP on a runner; the fallback keeps the step runnable under
+          # tests/run_step_tests.py, which executes this body verbatim.
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          API="https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/metricDescriptors"
+
+          # token_format:access_token on the auth step hands us a bearer token
+          # directly, so no setup-gcloud install and no ADC exchange is needed.
+          TOKEN="${ACCESS_TOKEN}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::CANNOT VERIFY — no access token available. This is not a statement about whether metrics are arriving."
+            exit 1
+          fi
+
+          # ---- POSITIVE CONTROL -------------------------------------------
+          # An UNFILTERED list, pageSize=1. Every live project has Google's own
+          # built-in descriptors, so a non-empty answer proves all four of:
+          # the project id resolves, the credentials work, the SA holds
+          # monitoring.metricDescriptors.list, and the Monitoring API is
+          # enabled. Only once that is proven does a zero under an app prefix
+          # mean "nothing ever arrived" rather than "we cannot see".
+          HTTP=$(curl -sS -o "$TMPD/control.json" -w '%{http_code}' -G "$API" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            --data-urlencode 'pageSize=1' || echo "000")
+
+          if [ "$HTTP" != "200" ]; then
+            MSG=$(jq -r '.error.message // "unknown"' "$TMPD/control.json" 2>/dev/null || echo "unknown")
+            echo "::error::CANNOT VERIFY — the positive control call failed (HTTP ${HTTP}: ${MSG})."
+            echo "::error::This is NOT 'no metrics have arrived'. Check the project id, the WIF binding, that ${GCP_PROJECT} grants monitoring.metricDescriptors.list, and that the Monitoring API is enabled."
+            exit 1
+          fi
+
+          CONTROL=$(jq '.metricDescriptors | length' "$TMPD/control.json")
+          if [ "${CONTROL:-0}" -eq 0 ]; then
+            # HTTP 200 with an empty unfiltered list is not a healthy project
+            # with no metrics — every live project has Google built-ins. It is
+            # a project id that resolved to something we are not looking at.
+            echo "::error::CANNOT VERIFY — the unfiltered control query returned NO descriptors at all on '${GCP_PROJECT}'."
+            echo "::error::Every live project has Google's built-in metric descriptors, so this means the probe is not looking where it thinks it is — a wrong or non-existent project id. This is NOT 'no metrics have arrived'."
+            exit 1
+          fi
+          echo "  ✅ control: the probe can see '${GCP_PROJECT}' (unfiltered list is non-empty)."
+
+          # ---- THE ACTUAL QUESTION ----------------------------------------
+          # PASS is the UNION over the prefixes: one non-empty prefix is enough.
+          # Checking only the first would reproduce the 2026-09-18 trap, where
+          # two of three prefixes were legitimately zero.
+          MATCHED=0
+          MATCHED_LIST=""
+          CHECKED=0
+          IFS=',' read -r -a PREFIXES <<< "$METRIC_PREFIXES"
+          for RAW in "${PREFIXES[@]}"; do
+            PREFIX="$(printf '%s' "$RAW" | tr -d '[:space:]')"
+            if [ -z "$PREFIX" ]; then continue; fi
+            CHECKED=$((CHECKED + 1))
+
+            HTTP=$(curl -sS -o "$TMPD/prefix.json" -w '%{http_code}' -G "$API" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              --data-urlencode "filter=metric.type = starts_with(\"${PREFIX}\")" \
+              --data-urlencode 'pageSize=1' || echo "000")
+
+            if [ "$HTTP" != "200" ]; then
+              # The control passed, so this is not a credentials problem — it is
+              # a malformed filter or a transient API fault. Either way we did
+              # not get an answer, so it is cannot-verify, not zero.
+              MSG=$(jq -r '.error.message // "unknown"' "$TMPD/prefix.json" 2>/dev/null || echo "unknown")
+              echo "::error::CANNOT VERIFY — the query for prefix '${PREFIX}' failed (HTTP ${HTTP}: ${MSG}), although the control succeeded."
+              exit 1
+            fi
+
+            N=$(jq '.metricDescriptors | length' "$TMPD/prefix.json")
+            if [ "${N:-0}" -gt 0 ]; then
+              echo "  ✅ ${PREFIX} — descriptors present"
+              MATCHED=$((MATCHED + 1))
+              MATCHED_LIST="${MATCHED_LIST:+$MATCHED_LIST }${PREFIX}"
+            else
+              echo "  ·  ${PREFIX} — none"
+            fi
+          done
+
+          if [ "$CHECKED" -eq 0 ]; then
+            echo "::error::CANNOT VERIFY — metric_prefixes resolved to an empty list, so nothing was queried."
+            exit 1
+          fi
+
+          {
+            echo "prefixes_matched=$MATCHED"
+            echo "matched_prefixes=$MATCHED_LIST"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$MATCHED" -eq 0 ]; then
+            echo "::error::NO METRICS HAVE EVER ARRIVED — the control proved the probe can read '${GCP_PROJECT}', and none of the ${CHECKED} prefix(es) checked hold a single metric descriptor."
+            echo "::error::Descriptors are created on first ingestion, so this is not a lag: nothing has ever been accepted. Check the exporter's resource attributes (a missing gcp.project_id rejects every export with InvalidArgument), its endpoint, and its credentials."
+            exit 1
+          fi
+          echo "Metrics are arriving: ${MATCHED} of ${CHECKED} prefix(es) hold descriptors (${MATCHED_LIST})."
+
+      - name: Check the serving revision for exporter errors
+        id: logs
+        if: inputs.cloud_run_service != ''
+        run: |
+          TMPD="${RUNNER_TEMP:-/tmp}"
+
+          # THE SERVING REVISION, not "a" revision. Grepping a superseded
+          # revision reports on code that is no longer running — it would go
+          # green over a broken deploy and red over a fixed one.
+          if ! gcloud run services describe "$CLOUD_RUN_SERVICE" \
+                 --project "$GCP_PROJECT" --region "$REGION" \
+                 --format=json > "$TMPD/service.json" 2> "$TMPD/describe.err"; then
+            echo "::error::CANNOT VERIFY — could not describe Cloud Run service '${CLOUD_RUN_SERVICE}' in ${REGION}: $(tr '\n' ' ' < "$TMPD/describe.err")"
+            exit 1
+          fi
+
+          SERVING=$(jq -r '[.status.traffic[]? | select((.percent // 0) > 0) | .revisionName // empty] | first // empty' "$TMPD/service.json")
+          if [ -z "$SERVING" ]; then
+            echo "::error::CANNOT VERIFY — '${CLOUD_RUN_SERVICE}' reports no revision carrying traffic, so there is nothing to read logs for."
+            exit 1
+          fi
+          echo "  serving revision: ${SERVING}"
+
+          FILTER="resource.type=\"cloud_run_revision\""
+          FILTER="${FILTER} AND resource.labels.service_name=\"${CLOUD_RUN_SERVICE}\""
+          FILTER="${FILTER} AND resource.labels.revision_name=\"${SERVING}\""
+          FILTER="${FILTER} AND (textPayload:\"${LOG_ERROR_PATTERN}\" OR jsonPayload.message:\"${LOG_ERROR_PATTERN}\")"
+
+          if ! gcloud logging read "$FILTER" \
+                 --project "$GCP_PROJECT" \
+                 --freshness="${LOG_LOOKBACK_MINUTES}m" \
+                 --limit=50 --format='value(timestamp)' \
+                 > "$TMPD/hits.txt" 2> "$TMPD/logging.err"; then
+            # A failed read is not a clean read. `gcloud logging read` prints
+            # nothing to stdout when it errors, so without this an auth failure
+            # would count zero hits and report the exporter healthy.
+            echo "::error::CANNOT VERIFY — could not read logs for '${SERVING}': $(tr '\n' ' ' < "$TMPD/logging.err")"
+            exit 1
+          fi
+
+          HITS=$(grep -c . "$TMPD/hits.txt" || true)
+          echo "log_errors=${HITS}" >> "$GITHUB_OUTPUT"
+
+          if [ "$HITS" -gt 0 ]; then
+            echo "::error::The exporter is failing NOW — ${HITS} log line(s) matching '${LOG_ERROR_PATTERN}' on the serving revision ${SERVING} in the last ${LOG_LOOKBACK_MINUTES} minute(s). Existing metric descriptors persist for ~24h after ingestion stops, so the descriptor check above cannot see this."
+            exit 1
+          fi
+          echo "No '${LOG_ERROR_PATTERN}' lines on ${SERVING} in the last ${LOG_LOOKBACK_MINUTES} minute(s)."
+
+      - name: Summary
+        if: always()
+        env:
+          MATCHED:    ${{ steps.descriptors.outputs.prefixes_matched }}
+          MATCHED_LS: ${{ steps.descriptors.outputs.matched_prefixes }}
+          LOG_ERRORS: ${{ steps.logs.outputs.log_errors }}
+        run: |
+          # A report, not the failure mechanism — the steps above already
+          # decided the outcome with `::error::` + `exit 1`.
+          {
+            echo "## Metrics arrival probe — \`${GCP_PROJECT}\`"
+            echo ""
+            if [ -n "$MATCHED" ]; then
+              echo "- Prefixes holding descriptors: **${MATCHED}** (\`${MATCHED_LS:-none}\`)"
+            else
+              echo "- Descriptor check: **did not complete** — see the step log. This is *cannot verify*, not *no metrics*."
+            fi
+            if [ -z "$CLOUD_RUN_SERVICE" ]; then
+              echo "- Exporter log check: _skipped_ (no \`cloud_run_service\` input)"
+            elif [ -n "$LOG_ERRORS" ]; then
+              echo "- Exporter errors on the serving revision of \`${CLOUD_RUN_SERVICE}\` in the last ${LOG_LOOKBACK_MINUTES}m: **${LOG_ERRORS}**"
+            else
+              echo "- Exporter log check on \`${CLOUD_RUN_SERVICE}\`: **did not complete** — see the step log."
+            fi
+            echo ""
+            echo "_Three outcomes, not two: PASS, no-metrics, and cannot-verify. A probe that"
+            echo "could not see must never read as a probe that is happy — the descriptor check"
+            echo "runs an unfiltered positive control first for exactly that reason._"
+          } >> "$GITHUB_STEP_SUMMARY"
