@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-23` — [`logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`](#2026-09-23--logscrash_loop-keys-on-gofrs-jsonpayloadlevel-because-gofr-never-sets-severity)
 - `2026-09-23` — [`service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies](#2026-09-23--service-alerts-alerts-as-data-rendered-from-a-semantic-spec-applied-by-the-existing-bodies)
 - `2026-09-23` — [`v2.9.0` is a minor: one new workflow, and callers opt in with their own job](#2026-09-23--v290-is-a-minor-one-new-workflow-and-callers-opt-in-with-their-own-job)
 - `2026-09-18` — [`verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy](#2026-09-18--verify-metrics-arrival-three-outcomes-because-a-probe-that-cannot-see-must-not-read-as-happy)
@@ -94,6 +95,31 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-23 — `logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`
+
+**What.** `logs.crash_loop`'s filter was
+`severity>=CRITICAL OR textPayload:"panic:" OR jsonPayload.message:"panic:"`. It is now
+`severity>=CRITICAL OR jsonPayload.level="FATAL" OR textPayload:"panic:"`. The docs'
+`logs.error_match` example no longer filters on `severity`.
+
+**Why.** RealmID's session found this, and I checked it independently:
+- **Source (GoFr v1.61.0).** `logging/logger.go:60` writes the level as `json:"level"`. Cloud
+  Logging takes severity only from a `severity` key, so every GoFr entry is stored at DEFAULT.
+- **Recovered panics.** A recovered handler panic (`middleware/logger.go:317-335`) is logged
+  at level ERROR with a stack trace, never as the text `panic:`.
+- **Live, realm-id, since 2026-09-21T14:00Z, read-only:**
+  - `severity>=CRITICAL`: 0
+  - `textPayload:"panic:"`: 0
+  - `jsonPayload.level="FATAL"`: 6
+  - `jsonPayload.level="ERROR"`: at least 300 (the query was capped)
+
+So the shipped rule would have missed six real fatal exits. The old docs example
+(`… AND severity>=ERROR`) could never fire on a GoFr app, and it was written to be copied.
+
+`severity>=CRITICAL` stays for apps that do set severity. The unreleased catalog stays at
+1.0.0: nothing has been tagged, so no caller has pinned the old filter by version. RealmID
+pinned the merge SHA before this change.
 
 ## 2026-09-23 — `service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies
 

@@ -349,6 +349,12 @@ def test_render():
           by_rule["gofr-http-server-error_ratio"]["severity"] == "WARNING")
     q = by_rule["cloudrun-latency_p95"]["conditions"][0]["conditionPrometheusQueryLanguage"]["query"]
     check("cloudrun p95 threshold in ms (5s -> 5000)", "> 5000 and" in q, q)
+    # GoFr logs `{"level": "FATAL"}` and never sets `severity`, so in Cloud Logging every GoFr
+    # entry has DEFAULT severity. Measured on realm-id 2026-09-21..23: severity>=CRITICAL 0
+    # entries, jsonPayload.level="FATAL" 6. A severity-only crash filter is inert on GoFr.
+    crash = by_rule["logs-crash_loop"]["conditions"][0]["conditionMatchedLog"]["filter"]
+    check("crash_loop matches GoFr's own FATAL level, not only severity",
+          'jsonPayload.level="FATAL"' in crash, crash)
     c = by_rule["bff-upstream-errors"]["conditions"][0]["conditionPrometheusQueryLanguage"]
     check("may_be_absent -> disableMetricValidation", c.get("disableMetricValidation") is True, c)
     check("custom `in` filter renders as an anchored regex", 'code=~"502|503"' in c["query"], c["query"])

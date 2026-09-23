@@ -6,10 +6,16 @@ platforms: [gmp]
 rules:
   - id: logs.crash_loop
     kind: log_match
-    filter: severity>=CRITICAL OR textPayload:"panic:" OR jsonPayload.message:"panic:"
+    # GoFr writes `{"level": "FATAL", ...}` and never a `severity` key, so Cloud Logging stores
+    # every GoFr entry at DEFAULT severity and `severity>=CRITICAL` never sees one. Measured on
+    # realm-id across the 2026-09-21 outage: severity>=CRITICAL 0, jsonPayload.level="FATAL" 6.
+    # `severity>=CRITICAL` stays for apps that do set it; `textPayload:"panic:"` is an
+    # UNRECOVERED Go panic (stderr, plain text). A recovered handler panic is not a crash:
+    # GoFr logs it at level ERROR, returns 500, and the 5xx rules see it.
+    filter: severity>=CRITICAL OR jsonPayload.level="FATAL" OR textPayload:"panic:"
     rate_limit: 300s
     severity: page
-    signal: CRITICAL-or-worse log entries or Go panics on a Cloud Run revision
+    signal: FATAL / CRITICAL log entries or unrecovered Go panics on a Cloud Run revision
     summary: Service is logging CRITICAL errors or panics
     triage: >-
       The service logged a CRITICAL entry or a Go panic, which usually means instances are
