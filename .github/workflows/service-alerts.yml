@@ -92,7 +92,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches the tag.
   # Display only — the code this job runs is pinned by job_workflow_sha, not by this string.
-  WORKFLOW_VERSION: v2.9.0
+  WORKFLOW_VERSION: v2.10.0
 
 jobs:
   alerts:
