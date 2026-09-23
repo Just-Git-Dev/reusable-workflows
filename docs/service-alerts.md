@@ -16,7 +16,12 @@ database outage.
 ## What one run does
 
 1. **Resolves its own commit** from the job's OIDC token (`job_workflow_sha`), then checks this
-   repository out at exactly that commit. The code that renders is the code you pinned.
+   repository out at exactly that commit. The code that renders is the code you pinned. With a
+   tag pin, the log shows the annotated tag *object's* SHA, not the commit's (for `@v2.10.0`
+   that is `1687ae3`, which peels to commit `b5678ad`). That is expected.
+
+   If a run fails at the live-data check with `CANNOT VERIFY … HTTP 403 … monitoring.timeSeries.list`,
+   the service account is missing its role ([IAM](#iam)). The spec is fine.
 2. **Renders** the spec: one `policy-<rule>.yaml` per policy, plus `probes.json` and
    `manifest.json`. They are uploaded as the artifact `alertgen-<project>-<spec hash>`.
 3. **Lints** the policies with validate-alerts' offline lint, run as shipped.

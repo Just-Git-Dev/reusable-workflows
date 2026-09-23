@@ -128,8 +128,11 @@ jobs:
 
       - name: Resolve this workflow's own commit
         id: self
-        # job_workflow_sha is the commit of the CALLED workflow file (this one), whatever the
-        # caller pinned — a tag, a branch, a SHA. It is the only runtime source for it: the
+        # job_workflow_sha is the object the caller's ref for THIS file resolved to — a commit
+        # for a branch or SHA pin, but the annotated TAG OBJECT for a tag pin (verified live
+        # 2026-09-23: @v2.10.0 gave 1687ae3, the tag object for commit b5678ad). checkout peels
+        # it, so either pins the exact code; never compare it to a commit SHA. It is the only
+        # runtime source for it: the
         # `github` context describes the caller. No fallback: a branch or tag can move between
         # the call and the checkout, and then the render would not be the reviewed code.
         run: |
