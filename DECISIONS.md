@@ -210,7 +210,10 @@ for the expected reasons.
 
 **Not verified live yet (owner-gated; see `TODO.md`).**
 - `job_workflow_sha` in a called workflow's token (spike 0d). GitHub documents it; the step
-  fails closed if it is missing.
+  fails closed if it is missing. **Update 2026-09-23: verified live** (Realm-ID/project run
+  35840428112). It is present, and for a tag pin it holds the annotated tag object's SHA
+  (1687ae3 for `v2.10.0`), not the peeled commit's. checkout peels it, so the pin is still
+  exact.
 - The gcloud `--filter` on `userLabels.*`.
 - Whether log-match policies need `logging.notificationRules.create`.
 

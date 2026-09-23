@@ -16,7 +16,12 @@ database outage.
 ## What one run does
 
 1. **Resolves its own commit** from the job's OIDC token (`job_workflow_sha`), then checks this
-   repository out at exactly that commit. The code that renders is the code you pinned.
+   repository out at exactly that commit. The code that renders is the code you pinned. With a
+   tag pin, the log shows the annotated tag *object's* SHA, not the commit's (for `@v2.10.0`
+   that is `1687ae3`, which peels to commit `b5678ad`). That is expected.
+
+   If a run fails at the live-data check with `CANNOT VERIFY … HTTP 403 … monitoring.timeSeries.list`,
+   the service account is missing its role ([IAM](#iam)). The spec is fine.
 2. **Renders** the spec: one `policy-<rule>.yaml` per policy, plus `probes.json` and
    `manifest.json`. They are uploaded as the artifact `alertgen-<project>-<spec hash>`.
 3. **Lints** the policies with validate-alerts' offline lint, run as shipped.
@@ -135,8 +140,16 @@ Do step 4 promptly. Until it's done, a failure pages twice, and people learn to 
 
 A green run proves the policies exist and their queries are valid. It doesn't prove anyone gets
 an email. After the first apply, do one fire test: add a throwaway override such as
-`cloudrun.latency_p95: {threshold: 1ms, for: 0s}`, apply, wait for the email, then revert and
-apply again.
+`cloudrun.latency_p95: {threshold: 1ms, for: 0s, min_requests: 1}`, apply, send the service
+a request or two, wait for the email, then revert and apply again.
+
+**Keep `min_requests: 1`.** Without it, the traffic guard's default of 20 requests per 10
+minutes still applies. On a quiet service the alert then can't fire however low the
+threshold is, and a silent test reads as a broken channel when the guard is working as
+designed. Found on realm-id (about 2 requests an hour), 2026-09-23.
+
+For a log-match rule, point its `filter` at a harmless line that appears routinely, then
+revert. There is no traffic guard, and the 300s rate limit caps the emails.
 
 ## Deferred (v2.11+)
 

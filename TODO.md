@@ -22,10 +22,15 @@ section opens or closes. Closed sections live in
 
 Plan: `plans/service-alerts.md`. Why: DECISIONS 2026-09-23.
 
-- [ ] **First live `dry_run` on realm-id.** Proves three things no test here can:
-  `job_workflow_sha` is present in a called workflow's token (spike 0d); gcloud's
-  `--filter="userLabels.rule_id=…"` matches; and the data check sees GMP series. Owner-gated:
-  it needs the realm-id `github-rotator` SA granted `monitoring.editor` (infra-provisioning).
+- [x] **First live `dry_run` on realm-id** — DONE 2026-09-23, Realm-ID/project run
+  35840428112 @v2.10.0.
+  - `job_workflow_sha` is present, but for a tag pin it is the annotated TAG OBJECT's SHA
+    (1687ae3), not the commit's. Docs now say so.
+  - The data check found data for 9 of 9 rules; the plan was 11 × `would create`, with no
+    collisions.
+  - The `userLabels` filter ran without error, but against an empty project, so it has not
+    yet shown a MATCH. The first re-run after the apply proves that: it must read
+    `unchanged` × 11.
 - [ ] **First apply on realm-id + fire test.** Settles whether log-match policies need
   `logging.notificationRules.create` (spike 0e). Then override `cloudrun.latency_p95` to `1ms`,
   wait for the email, and revert (`docs/service-alerts.md#proving-it-works`).
