@@ -31,9 +31,20 @@ Plan: `plans/service-alerts.md`. Why: DECISIONS 2026-09-23.
   - The `userLabels` filter ran without error, but against an empty project, so it has not
     yet shown a MATCH. The first re-run after the apply proves that: it must read
     `unchanged` × 11.
-- [ ] **First apply on realm-id + fire test.** Settles whether log-match policies need
-  `logging.notificationRules.create` (spike 0e). Then override `cloudrun.latency_p95` to `1ms`,
-  wait for the email, and revert (`docs/service-alerts.md#proving-it-works`).
+- [x] **First apply on realm-id + fire tests** — DONE 2026-09-23. All 11 policies are live
+  (read back).
+  - Log-match policies DO need `logging.notificationRules.create`: the first apply 403'd, and
+    infra-provisioning #81 added `logging.configWriter`.
+  - The `userLabels` MATCH is proven: after the apply, the re-run read `unchanged` × 9 with
+    drifted 0.
+  - Incidents confirmed in `ViolationOpenEventv1`, with the 2026-09-06 control:
+    - latency rule: 09:40:14Z;
+    - `logs.error_match` on a test filter: 10:28:46Z, and again at 10:45:03Z, because the
+      test filter stayed armed until the 11:08Z revert.
+
+  The first latency attempt opened nothing: it was reverted before evaluation.
+- [ ] **Email delivery for the fire-test incidents** — the owner confirms in the RealmID on-call
+  inbox (09:40, 10:28, 10:45 UTC, two each). It is the one link no tool here can read.
 - [ ] **Promote the GoFr rules from ticket to page after RealmID's soak re-check (~2026-09-26).**
   gofr#4266 degrades with revision uptime, and the fix isn't proven on a days-warm revision.
 - [ ] **Traide and AutoMahn migrate** in their own sessions: packs, parity check, then delete

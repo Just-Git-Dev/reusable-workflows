@@ -95,6 +95,15 @@ Match the **failure text** instead, as in the example above. Check the filter in
 Explorer against a window where the failure happened (it should match) and a healthy one (it
 shouldn't).
 
+**GoFr's per-request log line is structured: filter its fields by path.** Logs Explorer
+*displays* it as `ip=…;method=GET;response=404;response_time=384;…`, but `jsonPayload.message`
+is a JSON object with the fields `ip`, `method`, `response`, `response_time`, `uri`,
+`user_agent`, `span_id`, `trace_id` and `start_time`. A substring match such as
+`jsonPayload.message:"GET"` looks correct and silently returns nothing. Address the field
+instead: `jsonPayload.message.response>=500`, `jsonPayload.message.uri:"/login"`. Checked on
+realm-id, 2026-09-23: both forms return entries. For status-code or latency alerts, the metric
+packs are usually the better tool anyway.
+
 **Service names** follow Cloud Run's rule: lowercase letters, digits and `-`, starting with a
 letter. Two rules whose ids reduce to the same `rule_id` label (for example a custom
 `gofr-http-server-error_ratio` next to the catalog's `gofr.http.server.error_ratio`) are an
