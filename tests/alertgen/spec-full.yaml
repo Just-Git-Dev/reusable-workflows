@@ -10,7 +10,7 @@ overrides:
   gofr.http.server.latency_p95:
     services:
       issuer: {threshold: 4s}
-  logs.error_match:             {filter: 'jsonPayload.message:"neon" AND severity>=ERROR'}
+  logs.error_match:             {filter: 'jsonPayload.message:"exceeded the quota" OR jsonPayload.message:"could not connect"'}
 custom:
   - id: bff-upstream-errors
     metric: {name: bff_upstream_error, type: counter}

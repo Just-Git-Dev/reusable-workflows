@@ -6,8 +6,8 @@ combiner: OR
 conditions:
 - conditionMatchedLog:
     filter: resource.type="cloud_run_revision" AND (resource.labels.service_name="api"
-      OR resource.labels.service_name="issuer") AND (jsonPayload.message:"neon" AND
-      severity>=ERROR)
+      OR resource.labels.service_name="issuer") AND (jsonPayload.message:"exceeded
+      the quota" OR jsonPayload.message:"could not connect")
   displayName: Service logged an entry matching the alert filter (api, issuer)
 displayName: Service logged an entry matching the alert filter (api, issuer) [logs.error_match]
 documentation:
@@ -25,7 +25,8 @@ documentation:
 
     - Condition: any log entry matching the filter; at most one notification per 5m
 
-    - Query: `jsonPayload.message:"neon" AND severity>=ERROR`
+    - Query: `jsonPayload.message:"exceeded the quota" OR jsonPayload.message:"could
+    not connect"`
 
 
     Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `logs-error_match`).
@@ -41,4 +42,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: logs-error_match
-  spec_hash: 96b67f4eb855455c
+  spec_hash: 283a2f8eb697dc73

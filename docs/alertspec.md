@@ -21,14 +21,14 @@ apiVersion: alertspec/v1
 services: [issuer, api]            # GoFr `job` label == Cloud Run service_name
 packs: [cloudrun, gofr-http, gofr-sql, gofr-meta, gcp-logs]
 overrides:
-  cloudrun.5xx_count:           {threshold: 5, window: 5m}   # a default-off rule: configuring it turns it on
+  cloudrun.5xx_count:           {threshold: 5, window: 10m}  # a default-off rule: configuring it turns it on
   cloudrun.latency_p95:         {threshold: 5s, for: 10m}    # → 5000 (ms) for Cloud Run
   gofr.http.server.error_ratio: {severity: ticket}
   gofr.sql.pool_saturation:     {enabled: false}
   gofr.http.server.latency_p95:
     services:
       issuer: {threshold: 4s}      # issuer gets its own policy; api keeps the default
-  logs.error_match:             {filter: 'jsonPayload.message:"neon" AND severity>=ERROR'}
+  logs.error_match:             {filter: 'jsonPayload.message:"exceeded the quota" OR jsonPayload.message:"could not connect"'}
 custom:
   - id: bff-upstream-errors
     metric: {name: bff_upstream_error, type: counter}
@@ -80,6 +80,20 @@ So the number of policies stays close to the number of rules, not rules × servi
   service is an error, because the spec contradicts itself.
 - A default-off rule that needs a parameter (`logs.error_match` needs `filter`) is an error if
   you enable it without one.
+
+**Log filters on a GoFr app: never filter on `severity`.** GoFr writes its level as
+`jsonPayload.level` (`"ERROR"`, `"FATAL"`, …) and never sets Cloud Logging's `severity`, so
+every GoFr entry is stored at DEFAULT severity. `severity>=ERROR` silently matches nothing
+the app itself logged. On realm-id, across a 27-hour outage, it matched 0 of 500+ datastore
+errors; it only caught Cloud Run's own readiness-check messages.
+
+**Don't narrow by `jsonPayload.level` either.** `level="ERROR"` excludes `FATAL`, which is the
+worst entry there is. It also drops a `WARN` where the app downgraded a failure to
+"transient". Of the 500 outage entries RealmID's text filter matched, the breakdown was ERROR
+493, FATAL 6, WARN 1, so an `AND jsonPayload.level="ERROR"` clause loses the six fatal exits.
+Match the **failure text** instead, as in the example above. Check the filter in Logs
+Explorer against a window where the failure happened (it should match) and a healthy one (it
+shouldn't).
 
 **Service names** follow Cloud Run's rule: lowercase letters, digits and `-`, starting with a
 letter. Two rules whose ids reduce to the same `rule_id` label (for example a custom
@@ -179,7 +193,7 @@ notification channels in the Cloud Monitoring console if you want pages and tick
 | `cloudrun` | `cloudrun.5xx_count` | Cloud Run 5xx count per window (low-traffic services) | > 5 over 10m, for 0s | page | no |
 | `cloudrun` | `cloudrun.latency_p95` | Cloud Run p95 request latency | > 2s over 10m, for 10m, min 20 req | ticket | yes |
 | `cloudrun` | `cloudrun.memory_p99` | Cloud Run p99 container memory utilisation | > 85% over 10m, for 10m | ticket | yes |
-| `gcp-logs` | `logs.crash_loop` | CRITICAL-or-worse log entries or Go panics on a Cloud Run revision | any match, rate limit 300s | page | yes |
+| `gcp-logs` | `logs.crash_loop` | FATAL / CRITICAL log entries or unrecovered Go panics on a Cloud Run revision | any match, rate limit 300s | page | yes |
 | `gcp-logs` | `logs.error_match` | Log entries matching a filter you supply | any match, rate limit 300s | page | no |
 | `gofr-http` | `gofr.http.server.error_ratio` | GoFr HTTP 5xx / all responses, per service | > 5% over 10m, for 10m, min 20 req | page | yes |
 | `gofr-http` | `gofr.http.server.latency_p95` | GoFr HTTP p95 response time | > 2s over 10m, for 10m, min 20 req | ticket | yes |
