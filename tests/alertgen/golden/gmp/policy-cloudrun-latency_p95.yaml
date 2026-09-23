@@ -1,0 +1,46 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    duration: 600s
+    evaluationInterval: 60s
+    query: histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+      > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+      >= 20
+  displayName: Cloud Run p95 latency is high (api, issuer)
+displayName: Cloud Run p95 latency is high (api, issuer) [cloudrun.latency_p95]
+documentation:
+  content: '**Cloud Run p95 latency is high** — services: api, issuer.
+
+
+    The 95th-percentile request latency measured by Cloud Run is above the threshold.
+    Check whether it follows a deploy, then cold starts (instance count rising from
+    zero), then slow database queries or upstream calls in the service''s traces and
+    logs.
+
+
+    - Rule: `cloudrun.latency_p95` (pack `cloudrun`, catalog 1.0.0)
+
+    - Condition: > 5s (compared as 5000), over 10m, for 10m, only with at least 20
+    requests in the window
+
+    - Query: `histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+    > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    >= 20`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `cloudrun-latency_p95`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: WARNING
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: cloudrun-latency_p95
+  spec_hash: cb0628d8fb93e956

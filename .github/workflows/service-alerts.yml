@@ -1,0 +1,363 @@
+name: Service alerts from an AlertSpec (reusable)
+
+# Renders the caller's AlertSpec (infra/alerts/alerts.yaml — built-in packs, per-app
+# overrides, custom rules; docs/alertspec.md) into Cloud Monitoring alert policies, proves
+# every rule's metric has live data, lints and executes the policies with validate-alerts'
+# bodies, and applies them with bootstrap-alerts' bodies. dry_run (the default) stops before
+# any write and prints the plan.
+#
+# WHY IT RUNS THE OTHER TWO WORKFLOWS' BODIES INSTEAD OF CALLING THEM: a `./` reference
+# inside a called workflow resolves in the CALLER's repository (DECISIONS 2026-09-15), and an
+# `owner/repo/...@tag` reference would pin some other commit than the one this run was called
+# at. So the job checks this repository out at the OIDC `job_workflow_sha` claim — the exact
+# commit of this file — and runs the named `run:` bodies from that same commit via
+# alerting/extract_step.py. One linter and one applier, no copy to drift.
+#
+# Required IAM on service_account: roles/monitoring.editor (alert policies, notification
+# channels, and monitoring.timeSeries.list for the data check and PromQL execution). Log-match
+# rules (pack gcp-logs) may also need logging.notificationRules.create — see
+# docs/service-alerts.md#iam.
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: 'GCP project id the alert policies belong to.'
+        type: string
+        required: true
+      wif_provider:
+        description: >-
+          Workload Identity Federation provider resource name, e.g.
+          projects/123456789/locations/global/workloadIdentityPools/POOL/providers/PROVIDER
+        type: string
+        required: true
+      service_account:
+        description: 'Service account email to impersonate via WIF. Needs roles/monitoring.editor.'
+        type: string
+        required: true
+      spec_file:
+        description: 'AlertSpec file in the caller repo.'
+        type: string
+        required: false
+        default: 'infra/alerts/alerts.yaml'
+      channel_file:
+        description: 'Notification-channel definition file in the caller repo (same format bootstrap-alerts uses).'
+        type: string
+        required: false
+        default: 'infra/alerts/email-channel.yaml'
+      dry_run:
+        description: >-
+          Plan only: render, check live data, lint, execute the queries, and print what would be
+          created or updated — without writing anything. Defaults to true; pass false to apply.
+        type: boolean
+        required: false
+        default: true
+      force_update:
+        description: >-
+          Rewrite every managed policy even when its spec is unchanged — resets hand edits the
+          run reported as drift. Hand-written policies are never touched.
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      policies_rendered:
+        description: 'Number of alert policies rendered from the spec.'
+        value: ${{ jobs.alerts.outputs.rendered }}
+      policies_created:
+        description: 'Number of policies created (or that would be, under dry_run).'
+        value: ${{ jobs.alerts.outputs.created }}
+      policies_updated:
+        description: 'Number of managed policies updated because their spec changed (or that would be).'
+        value: ${{ jobs.alerts.outputs.updated }}
+      policies_unchanged:
+        description: 'Number of policies already matching the spec.'
+        value: ${{ jobs.alerts.outputs.skipped }}
+      policies_drifted:
+        description: 'Number of managed policies hand-edited since the last apply (warned, not overwritten).'
+        value: ${{ jobs.alerts.outputs.drifted }}
+      spec_hash:
+        description: 'Hash over every rendered policy; names the uploaded artifact.'
+        value: ${{ jobs.alerts.outputs.spec_hash }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Plans and applies get separate groups: GitHub keeps one PENDING run per group and cancels
+  # the older one, so a shared group would let a PR's dry run cancel a queued real apply.
+  group: service-alerts-${{ inputs.gcp_project }}-${{ inputs.dry_run && 'plan' || 'apply' }}
+  cancel-in-progress: false
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches the tag.
+  # Display only — the code this job runs is pinned by job_workflow_sha, not by this string.
+  WORKFLOW_VERSION: v2.9.0
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        # Explicit bash => `-eo pipefail`; the implicit default is only `-e`.
+        shell: bash
+    env:
+      GCP_PROJECT:  ${{ inputs.gcp_project }}
+      SPEC_FILE:    ${{ inputs.spec_file }}
+      CHANNEL_SRC:  ${{ inputs.channel_file }}
+      DRY_RUN:      ${{ inputs.dry_run }}
+      APPLIER_SA:   ${{ inputs.service_account }}
+      OWNER:        ${{ github.repository }}
+      # Where the render lands; the shared bodies read it as ALERTS_DIR.
+      RENDER_DIR:   .alertgen-policies
+      ALERTS_DIR:   .alertgen-policies
+      POLICY_GLOB:  'policy-*.yaml'
+      FORCE_UPDATE: ${{ inputs.force_update }}
+      SRC:          .alertgen-src
+    outputs:
+      rendered: ${{ steps.render.outputs.rendered }}
+      spec_hash: ${{ steps.render.outputs.spec_hash }}
+      created: ${{ steps.apply.outputs.created }}
+      updated: ${{ steps.apply.outputs.updated }}
+      skipped: ${{ steps.apply.outputs.skipped }}
+      drifted: ${{ steps.apply.outputs.drifted }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve this workflow's own commit
+        id: self
+        # job_workflow_sha is the commit of the CALLED workflow file (this one), whatever the
+        # caller pinned — a tag, a branch, a SHA. It is the only runtime source for it: the
+        # `github` context describes the caller. No fallback: a branch or tag can move between
+        # the call and the checkout, and then the render would not be the reviewed code.
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::No OIDC token available. The calling job must grant 'permissions: id-token: write'."
+            exit 1
+          fi
+          RESP=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=alertgen-self-resolve")
+          JWT=$(printf '%s' "$RESP" | jq -r '.value // empty' 2>/dev/null || true)
+          if [ -z "$JWT" ]; then
+            echo "::error::The OIDC token endpoint returned no token."
+            exit 1
+          fi
+          echo "::add-mask::${JWT}"
+          JWT="$JWT" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import base64, json, os, re, sys
+          try:
+              payload = os.environ["JWT"].split(".")[1]
+              claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+          except Exception as e:
+              print(f"::error::Cannot decode the OIDC token ({e.__class__.__name__}).", file=sys.stderr)
+              sys.exit(1)
+          ref, sha = claims.get("job_workflow_ref", ""), claims.get("job_workflow_sha", "")
+          m = re.match(r"^([^/@\s]+/[^/@\s]+)/\.github/workflows/[^@\s]+@", ref)
+          if not m:
+              print(f"::error::Unexpected job_workflow_ref {ref!r}.", file=sys.stderr)
+              sys.exit(1)
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              print(f"::error::The token has no usable job_workflow_sha claim ({sha!r}); refusing "
+                    "to render from a movable ref.", file=sys.stderr)
+              sys.exit(1)
+          print(f"repo={m.group(1)}")
+          print(f"sha={sha}")
+          print(f"resolved {m.group(1)}@{sha}", file=sys.stderr)
+          PY
+
+      - name: Check out alertgen at that commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.self.outputs.repo }}
+          ref: ${{ steps.self.outputs.sha }}
+          path: .alertgen-src
+          persist-credentials: false
+
+      - name: Render policies from the spec
+        id: render
+        run: |
+          if [ ! -f "$SPEC_FILE" ]; then
+            echo "::error::AlertSpec not found: $SPEC_FILE"
+            exit 1
+          fi
+          if [ ! -f "$CHANNEL_SRC" ]; then
+            echo "::error::Channel file not found: $CHANNEL_SRC"
+            exit 1
+          fi
+          # PyYAML is preinstalled on the runner image; validate-alerts relies on the same.
+          PYTHONPATH="${SRC}/alerting" python3 -m alertgen render \
+            --spec "$SPEC_FILE" --target gmp --owner "$OWNER" --out "$RENDER_DIR"
+          cp "$CHANNEL_SRC" "$RENDER_DIR/"
+          {
+            echo "channel_file=$(basename "$CHANNEL_SRC")"
+            echo "rendered=$(jq '.policies | length' "$RENDER_DIR/manifest.json")"
+            echo "spec_hash=$(jq -r '.spec_hash' "$RENDER_DIR/manifest.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload rendered policies
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: alertgen-${{ inputs.gcp_project }}-${{ steps.render.outputs.spec_hash }}
+          path: .alertgen-policies/
+          retention-days: 30
+          # A re-run, or a second call in the same run, renders the same name.
+          overwrite: true
+
+      - name: Lint policy files (validate-alerts body)
+        id: lint
+        env:
+          CHANNEL_FILE: ${{ steps.render.outputs.channel_file }}
+        run: |
+          python3 "${SRC}/alerting/extract_step.py" "${SRC}/.github/workflows/validate-alerts.yml" validate "Lint policy files (offline)" > "$RUNNER_TEMP/lint.sh"
+          bash -eo pipefail "$RUNNER_TEMP/lint.sh"
+
+      - name: Authenticate to GCP via WIF
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account:            ${{ inputs.service_account }}
+          token_format:               access_token
+
+      - name: Set up gcloud (with alpha)
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          install_components: 'alpha'
+
+      - name: Check every rule has live data
+        id: data
+        # An alert over a metric that does not exist is valid PromQL, passes every lint, and
+        # can never fire. Each probe is the rule's un-thresholded series over the last day.
+        # Zero series is CANNOT VERIFY — fatal unless the rule says may_be_absent — and zero
+        # on EVERY probe means we looked in the wrong place (project, identity), never "fine".
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          PROBES="${RENDER_DIR}/probes.json"
+          if [ ! -f "$PROBES" ]; then
+            echo "::error::${PROBES} not found — the render did not produce probes."
+            exit 1
+          fi
+          if [ -z "${ACCESS_TOKEN:-}" ]; then
+            echo "::error::CANNOT VERIFY: no access token for the data check."
+            exit 1
+          fi
+          TOTAL=$(jq 'length' "$PROBES")
+          EXAMINED=0; WITH_DATA=0; ABSENT_OK=0
+          MISSING=()
+          for ((i = 0; i < TOTAL; i++)); do
+            RULE=$(jq -r ".[$i].rule_id" "$PROBES")
+            EXPR=$(jq -r ".[$i].expr" "$PROBES")
+            MAY=$(jq -r ".[$i].may_be_absent" "$PROBES")
+            LABEL=$(jq -r ".[$i].service_label" "$PROBES")
+            HTTP=$(curl -sS -o "$TMPD/probe.json" -w '%{http_code}' -X POST \
+              "https://monitoring.googleapis.com/v1/projects/${GCP_PROJECT}/location/global/prometheus/api/v1/query" \
+              -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+              --data-urlencode "query=${EXPR}" < /dev/null || echo "000")
+            EXAMINED=$((EXAMINED + 1))
+            if [ "$HTTP" != "200" ]; then
+              MSG=$(jq -r 'if (.error|type)=="object" then .error.message elif (.error|type)=="string" then .error else "unknown" end' "$TMPD/probe.json" 2>/dev/null || echo unknown)
+              echo "::error::CANNOT VERIFY ${RULE}: the data query returned HTTP ${HTTP} (${MSG}). The service account needs monitoring.timeSeries.list."
+              exit 1
+            fi
+            STATUS=$(jq -r '.status // "missing"' "$TMPD/probe.json" 2>/dev/null || echo unparseable)
+            if [ "$STATUS" != "success" ]; then
+              echo "::error::CANNOT VERIFY ${RULE}: the data query answered status '${STATUS}': $(jq -c '.error // .' "$TMPD/probe.json" 2>/dev/null)"
+              exit 1
+            fi
+            N=$(jq '.data.result | length' "$TMPD/probe.json")
+            if [ "$N" -gt 0 ]; then
+              WITH_DATA=$((WITH_DATA + 1))
+              echo "  ✅ ${RULE}: data for ${N} service(s)"
+              # A service absent from the result has had no data for a day: its alert is blind.
+              for SVC in $(jq -r ".[$i].services[]" "$PROBES"); do
+                if ! jq -e --arg l "$LABEL" --arg s "$SVC" 'any(.data.result[]; .metric[$l] == $s)' "$TMPD/probe.json" > /dev/null; then
+                  echo "::warning::${RULE}: no data for service '${SVC}' in the last day — this rule cannot fire for it until it serves traffic."
+                fi
+              done
+            elif [ "$MAY" = "true" ]; then
+              ABSENT_OK=$((ABSENT_OK + 1))
+              echo "::warning::${RULE}: no data in the last day (may_be_absent: true, so not fatal)."
+            else
+              MISSING+=("$RULE")
+            fi
+          done
+          {
+            echo "probes_checked=${EXAMINED}"
+            echo "probes_with_data=${WITH_DATA}"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$EXAMINED" -ne "$TOTAL" ]; then
+            echo "::error::Examined ${EXAMINED} of ${TOTAL} probes — refusing to report a partial check."
+            exit 1
+          fi
+          if [ "$TOTAL" -gt 0 ] && [ "$WITH_DATA" -eq 0 ]; then
+            echo "::error::CANNOT VERIFY: none of ${TOTAL} probes returned any series in ${GCP_PROJECT}. That is almost always the wrong project or an identity that cannot read metrics, not an absence of data."
+            exit 1
+          fi
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            echo "::error::CANNOT VERIFY: no data in the last day for ${MISSING[*]}. An alert on a metric that does not exist can never fire. Disable the rule (or its pack) if the service does not use it, fix the export if it should, or mark a custom rule may_be_absent: true."
+            exit 1
+          fi
+          echo "Data check: ${WITH_DATA} of ${TOTAL} rule(s) have live data; ${ABSENT_OK} may_be_absent without data."
+
+      - name: Execute PromQL (validate-alerts body)
+        id: promql
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          python3 "${SRC}/alerting/extract_step.py" "${SRC}/.github/workflows/validate-alerts.yml" validate "Validate PromQL queries against the Monitoring API" > "$RUNNER_TEMP/promql.sh"
+          bash -eo pipefail "$RUNNER_TEMP/promql.sh"
+
+      - name: Ensure notification channel (bootstrap-alerts body)
+        id: channel
+        env:
+          CHANNEL_FILE: ${{ steps.render.outputs.channel_file }}
+        run: |
+          python3 "${SRC}/alerting/extract_step.py" "${SRC}/.github/workflows/bootstrap-alerts.yml" apply "Ensure notification channel" > "$RUNNER_TEMP/channel.sh"
+          bash -eo pipefail "$RUNNER_TEMP/channel.sh"
+
+      - name: Apply policies (bootstrap-alerts body)
+        id: apply
+        env:
+          CHANNEL_NAME: ${{ steps.channel.outputs.name }}
+        run: |
+          python3 "${SRC}/alerting/extract_step.py" "${SRC}/.github/workflows/bootstrap-alerts.yml" apply "Apply alert policies" > "$RUNNER_TEMP/apply.sh"
+          bash -eo pipefail "$RUNNER_TEMP/apply.sh"
+
+      - name: Summary
+        if: always()
+        env:
+          RENDERED: ${{ steps.render.outputs.rendered }}
+          SPEC_HASH: ${{ steps.render.outputs.spec_hash }}
+          SELF_SHA: ${{ steps.self.outputs.sha }}
+          PROBES_CHECKED: ${{ steps.data.outputs.probes_checked }}
+          PROBES_WITH_DATA: ${{ steps.data.outputs.probes_with_data }}
+          PROMQL_CHECKED: ${{ steps.promql.outputs.promql_checked }}
+          CREATED: ${{ steps.apply.outputs.created }}
+          UPDATED: ${{ steps.apply.outputs.updated }}
+          SKIPPED: ${{ steps.apply.outputs.skipped }}
+          FAILED: ${{ steps.apply.outputs.failed }}
+          DRIFTED: ${{ steps.apply.outputs.drifted }}
+        run: |
+          {
+            echo "## Service alerts — ${GCP_PROJECT}"
+            echo ""
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "**dry_run: nothing was written.** Counts below are the plan."
+              echo ""
+            fi
+            echo "- Spec: \`${SPEC_FILE}\` · alertgen @ \`${SELF_SHA:-unresolved}\` (${WORKFLOW_VERSION})"
+            echo "- Rendered: **${RENDERED:-0}** policies · spec hash \`${SPEC_HASH:-n/a}\`"
+            echo "- Live data: ${PROBES_WITH_DATA:-0} of ${PROBES_CHECKED:-0} PromQL rules have data"
+            echo "- PromQL executed: ${PROMQL_CHECKED:-0}"
+            echo "- Created: ${CREATED:-0} · Updated: ${UPDATED:-0} · Unchanged/skipped: ${SKIPPED:-0} · Drifted: ${DRIFTED:-0} · Failed: ${FAILED:-0}"
+            if [ -f "${RENDER_DIR}/manifest.json" ]; then
+              echo ""
+              echo "| Policy | Severity | rule_id |"
+              echo "|---|---|---|"
+              jq -r '.policies[] | "| \(.displayName) | \(.severity) | `\(.rule_id)` |"' "${RENDER_DIR}/manifest.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

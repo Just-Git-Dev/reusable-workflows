@@ -63,7 +63,8 @@ noticed. Dependabot turns that into a PR you can merge or ignore.
 | Rotate a key, secret or token | `rotate-*`, `sync-bundle-key` |
 | Back up Postgres | `neon-backup` |
 | Sweep old images / revisions | `cleanup-gar-images`, `cleanup-cloud-run-revisions` |
-| Apply alerts / dashboards | `bootstrap-alerts`, `bootstrap-dashboards` |
+| Alert on Cloud Run / GoFr / app metrics without writing policies | `service-alerts` (+ [`docs/alertspec.md`](docs/alertspec.md)) |
+| Apply hand-written alerts / dashboards | `bootstrap-alerts`, `bootstrap-dashboards` |
 
 One reusable per **target type**. Two different targets ⇒ two jobs, not one workflow with a
 `target:` switch.
@@ -88,6 +89,11 @@ startup with `startup_failure` and **no logs** — before any job-level `if:` is
 is not enough for the job to be skipped. Grant what the workflow's jobs declare
 (`jobs.*.declared_permissions` in `catalog.json`); `inherits-caller` means the job takes
 whatever you give it.
+
+**`id-token: write` is needed even by workflows that look read-only.** `service-alerts`
+reads its own commit from the job's OIDC token (`job_workflow_sha`) — even under `dry_run` —
+so a caller that grants only `contents: read` fails at startup with no logs, per the trap
+above. `catalog.json` lists it under `declared_permissions`; grant exactly that.
 
 **`environment:` is not allowed on a job that calls a reusable workflow.** Permitted keys
 are `name`, `uses`, `with`, `secrets`, `needs`, `if`, `permissions`, `strategy`,

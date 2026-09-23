@@ -1,0 +1,134 @@
+groups:
+- name: alertgen
+  rules:
+  - alert: bff_upstream_errors
+    expr: sum by (job) (rate(bff_upstream_error{job=~"api|issuer",code=~"502|503"}[10m]))
+      > 0.1
+    for: 10m
+    labels:
+      severity: page
+    annotations:
+      summary: BFF upstream 5xx rate is high ({{ $labels.job }})
+      description: The BFF is getting 502/503 from an upstream. Check which upstream
+        in the logs (jsonPayload.upstream), then that upstream's own dashboard and
+        recent deploys.
+  - alert: cloudrun_5xx_count
+    expr: sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[15m]))
+      > 5
+    for: 0s
+    labels:
+      severity: page
+    annotations:
+      summary: Cloud Run is returning 5xx responses ({{ $labels.service_name }})
+      description: This low-traffic service returned more 5xx responses in the window
+        than the threshold. A ratio alert cannot see this with so few requests. Open
+        the service's ERROR logs for the window and check the latest revision and
+        its dependencies.
+  - alert: cloudrun_5xx_ratio
+    expr: (sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[10m]))
+      / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+      > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+      >= 20
+    for: 10m
+    labels:
+      severity: page
+    annotations:
+      summary: Cloud Run 5xx ratio is high ({{ $labels.service_name }})
+      description: More than the threshold share of requests to this Cloud Run service
+        returned 5xx. Check the service's recent revisions (a bad deploy is the usual
+        cause; roll back with rollback-service), then its ERROR logs for the failing
+        path, then its database or upstream dependencies.
+  - alert: cloudrun_latency_p95
+    expr: histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+      > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+      >= 20
+    for: 10m
+    labels:
+      severity: ticket
+    annotations:
+      summary: Cloud Run p95 latency is high ({{ $labels.service_name }})
+      description: The 95th-percentile request latency measured by Cloud Run is above
+        the threshold. Check whether it follows a deploy, then cold starts (instance
+        count rising from zero), then slow database queries or upstream calls in the
+        service's traces and logs.
+  - alert: cloudrun_memory_p99
+    expr: histogram_quantile(0.99, sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+      > 0.85
+    for: 10m
+    labels:
+      severity: ticket
+    annotations:
+      summary: Cloud Run memory utilisation is near the limit ({{ $labels.service_name
+        }})
+      description: Container memory is close to the configured limit; past it Cloud
+        Run kills the instance and in-flight requests fail. Check for a leak (memory
+        climbing between deploys) or a traffic spike, and raise the memory limit only
+        after ruling out a leak.
+  - alert: gofr_http_server_error_ratio
+    expr: (sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
+      / sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m])))
+      > 0.05 and sum by (job) (increase(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m]))
+      >= 20
+    for: 10m
+    labels:
+      severity: ticket
+    annotations:
+      summary: HTTP 5xx ratio is high ({{ $labels.job }})
+      description: More than the threshold share of HTTP responses from this GoFr
+        service were 5xx. Group the app_http_response metric by path to find the failing
+        route, then read the service's ERROR logs for it and check the latest deploy
+        and the database.
+  - alert: gofr_http_server_latency_p95
+    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="api",path!~"/\\.well-known/.*"}[10m])))
+      > 2 and sum by (job) (increase(app_http_response_count{job="api",path!~"/\\.well-known/.*"}[10m]))
+      >= 20
+    for: 10m
+    labels:
+      severity: ticket
+    annotations:
+      summary: HTTP p95 latency is high ({{ $labels.job }})
+      description: The service's own 95th-percentile response time is above the threshold.
+        Group app_http_response by path to find the slow route, then check SQL and
+        Redis latency (gofr-sql / gofr-redis) and outbound calls before suspecting
+        the service itself.
+  - alert: gofr_http_server_latency_p95_issuer
+    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="issuer",path!~"/\\.well-known/.*"}[10m])))
+      > 4 and sum by (job) (increase(app_http_response_count{job="issuer",path!~"/\\.well-known/.*"}[10m]))
+      >= 20
+    for: 10m
+    labels:
+      severity: ticket
+    annotations:
+      summary: HTTP p95 latency is high ({{ $labels.job }})
+      description: The service's own 95th-percentile response time is above the threshold.
+        Group app_http_response by path to find the slow route, then check SQL and
+        Redis latency (gofr-sql / gofr-redis) and outbound calls before suspecting
+        the service itself.
+  - alert: gofr_metrics_silent_while_serving
+    expr: label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[30m])),
+      "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"api|issuer"}[30m]))
+      > 0
+    for: 30m
+    labels:
+      severity: ticket
+    annotations:
+      summary: GoFr metrics are silent while the service serves traffic ({{ $labels.service_name
+        }})
+      description: Cloud Run counted requests to this service but GoFr exported no
+        HTTP metrics for it, so every GoFr-based alert is blind. Check the service's
+        logs for OTLP export errors, the METRICS_* env vars on the current revision,
+        and whether APP_NAME still matches the Cloud Run service name (the job label
+        must equal service_name).
+  - alert: gofr_sql_latency_p95
+    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"api|issuer"}[10m])))
+      > 500 and sum by (job) (increase(app_sql_stats_count{job=~"api|issuer"}[10m]))
+      >= 20
+    for: 10m
+    labels:
+      severity: ticket
+    annotations:
+      summary: SQL p95 query time is high ({{ $labels.job }})
+      description: The 95th-percentile SQL query time is above the threshold. Group
+        app_sql_stats by type to see which statement kind is slow, then check the
+        database's own load, locks and connection limits, and whether a recent migration
+        dropped an index.

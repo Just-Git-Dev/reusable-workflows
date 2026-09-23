@@ -1,0 +1,110 @@
+[
+  {
+    "expr": "group by (job) (last_over_time(bff_upstream_error{job=~\"api|issuer\",code=~\"502|503\"}[1d]))",
+    "may_be_absent": true,
+    "policy_file": "policy-bff-upstream-errors.yaml",
+    "rule_id": "bff-upstream-errors",
+    "service_label": "job",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (service_name) (last_over_time(run_googleapis_com:request_count{monitored_resource=\"cloud_run_revision\",service_name=~\"api|issuer\",response_code_class!=\"\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-cloudrun-5xx_count.yaml",
+    "rule_id": "cloudrun-5xx_count",
+    "service_label": "service_name",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (service_name) (last_over_time(run_googleapis_com:request_count{monitored_resource=\"cloud_run_revision\",service_name=~\"api|issuer\",response_code_class!=\"\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-cloudrun-5xx_ratio.yaml",
+    "rule_id": "cloudrun-5xx_ratio",
+    "service_label": "service_name",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (service_name) (last_over_time(run_googleapis_com:request_latencies_bucket{monitored_resource=\"cloud_run_revision\",service_name=~\"api|issuer\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-cloudrun-latency_p95.yaml",
+    "rule_id": "cloudrun-latency_p95",
+    "service_label": "service_name",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (service_name) (last_over_time(run_googleapis_com:container_memory_utilizations_bucket{monitored_resource=\"cloud_run_revision\",service_name=~\"api|issuer\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-cloudrun-memory_p99.yaml",
+    "rule_id": "cloudrun-memory_p99",
+    "service_label": "service_name",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (job) (last_over_time(app_http_response_count{job=~\"api|issuer\",path!~\"/\\\\.well-known/.*\",status!=\"\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-gofr-http-server-error_ratio.yaml",
+    "rule_id": "gofr-http-server-error_ratio",
+    "service_label": "job",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (job) (last_over_time(app_http_response_bucket{job=\"api\",path!~\"/\\\\.well-known/.*\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-gofr-http-server-latency_p95.yaml",
+    "rule_id": "gofr-http-server-latency_p95",
+    "service_label": "job",
+    "services": [
+      "api"
+    ]
+  },
+  {
+    "expr": "group by (job) (last_over_time(app_http_response_bucket{job=\"issuer\",path!~\"/\\\\.well-known/.*\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-gofr-http-server-latency_p95-issuer.yaml",
+    "rule_id": "gofr-http-server-latency_p95-issuer",
+    "service_label": "job",
+    "services": [
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (service_name) (last_over_time(run_googleapis_com:request_count{monitored_resource=\"cloud_run_revision\",service_name=~\"api|issuer\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-gofr-metrics-silent_while_serving.yaml",
+    "rule_id": "gofr-metrics-silent_while_serving",
+    "service_label": "service_name",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  },
+  {
+    "expr": "group by (job) (last_over_time(app_sql_stats_bucket{job=~\"api|issuer\"}[1d]))",
+    "may_be_absent": false,
+    "policy_file": "policy-gofr-sql-latency_p95.yaml",
+    "rule_id": "gofr-sql-latency_p95",
+    "service_label": "job",
+    "services": [
+      "api",
+      "issuer"
+    ]
+  }
+]

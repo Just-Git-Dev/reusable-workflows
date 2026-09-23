@@ -231,6 +231,42 @@ jobs:
           python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 tests/run_step_tests.py
 
+  alertgen:
+    name: alertgen compiler + service-alerts (promtool oracle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Pinned by checksum, not just version: the oracle binary judges whether rendered
+      # alerts fire, so a swapped tarball is a swapped judge. From the release's sha256sums.txt.
+      PROM_VERSION: 3.13.1
+      PROM_SHA256: 962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install promtool (checksum-verified)
+        run: |
+          TARBALL="prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$TARBALL" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/${TARBALL}"
+          echo "${PROM_SHA256}  $RUNNER_TEMP/$TARBALL" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP"
+          sudo install "$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
+
+      # Spec validation, golden renders, `promtool test rules` over synthetic series (the
+      # semantic oracle — it fails, not skips, without promtool), conformance with
+      # validate-alerts' shipped lint, and service-alerts' step bodies against stubs.
+      - name: Run alertgen tests
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tests/run_alertgen_tests.py
+
+      - name: Catalog table in docs/alertspec.md is current
+        run: python3 scripts/gen_alert_catalog.py --check
+
   pinned-actions:
     name: third-party actions are SHA-pinned
     runs-on: ubuntu-latest

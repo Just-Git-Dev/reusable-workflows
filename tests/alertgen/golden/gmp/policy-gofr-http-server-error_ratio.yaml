@@ -1,0 +1,47 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    duration: 600s
+    evaluationInterval: 60s
+    query: (sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
+      / sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m])))
+      > 0.05 and sum by (job) (increase(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m]))
+      >= 20
+  displayName: HTTP 5xx ratio is high (api, issuer)
+displayName: HTTP 5xx ratio is high (api, issuer) [gofr.http.server.error_ratio]
+documentation:
+  content: '**HTTP 5xx ratio is high** — services: api, issuer.
+
+
+    More than the threshold share of HTTP responses from this GoFr service were 5xx.
+    Group the app_http_response metric by path to find the failing route, then read
+    the service''s ERROR logs for it and check the latest deploy and the database.
+
+
+    - Rule: `gofr.http.server.error_ratio` (pack `gofr-http`, catalog 1.0.0)
+
+    - Condition: > 5% (compared as 0.05), over 10m, for 10m, only with at least 20
+    requests in the window
+
+    - Query: `(sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
+    / sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m])))
+    > 0.05 and sum by (job) (increase(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m]))
+    >= 20`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `gofr-http-server-error_ratio`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: WARNING
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: gofr-http-server-error_ratio
+  spec_hash: 37e44dd9592c348e

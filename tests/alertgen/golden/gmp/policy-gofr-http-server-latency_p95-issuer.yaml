@@ -1,0 +1,45 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    duration: 600s
+    evaluationInterval: 60s
+    query: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="issuer",path!~"/\\.well-known/.*"}[10m])))
+      > 4 and sum by (job) (increase(app_http_response_count{job="issuer",path!~"/\\.well-known/.*"}[10m]))
+      >= 20
+  displayName: HTTP p95 latency is high (issuer)
+displayName: HTTP p95 latency is high (issuer) [gofr.http.server.latency_p95.issuer]
+documentation:
+  content: '**HTTP p95 latency is high** — services: issuer.
+
+
+    The service''s own 95th-percentile response time is above the threshold. Group
+    app_http_response by path to find the slow route, then check SQL and Redis latency
+    (gofr-sql / gofr-redis) and outbound calls before suspecting the service itself.
+
+
+    - Rule: `gofr.http.server.latency_p95` (pack `gofr-http`, catalog 1.0.0)
+
+    - Condition: > 4s (compared as 4), over 10m, for 10m, only with at least 20 requests
+    in the window
+
+    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="issuer",path!~"/\\.well-known/.*"}[10m])))
+    > 4 and sum by (job) (increase(app_http_response_count{job="issuer",path!~"/\\.well-known/.*"}[10m]))
+    >= 20`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `gofr-http-server-latency_p95-issuer`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: WARNING
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: gofr-http-server-latency_p95-issuer
+  spec_hash: 414749f9ba60f297

@@ -1,0 +1,43 @@
+alertStrategy:
+  autoClose: 1800s
+  notificationRateLimit:
+    period: 300s
+combiner: OR
+conditions:
+- conditionMatchedLog:
+    filter: resource.type="cloud_run_revision" AND (resource.labels.service_name="api"
+      OR resource.labels.service_name="issuer") AND (severity>=CRITICAL OR textPayload:"panic:"
+      OR jsonPayload.message:"panic:")
+  displayName: Service is logging CRITICAL errors or panics (api, issuer)
+displayName: Service is logging CRITICAL errors or panics (api, issuer) [logs.crash_loop]
+documentation:
+  content: '**Service is logging CRITICAL errors or panics** — services: api, issuer.
+
+
+    The service logged a CRITICAL entry or a Go panic, which usually means instances
+    are crashing and restarting. Open the matching log entries, read the stack trace,
+    and check whether the latest revision introduced it; roll back with rollback-service
+    if so.
+
+
+    - Rule: `logs.crash_loop` (pack `gcp-logs`, catalog 1.0.0)
+
+    - Condition: any log entry matching the filter; at most one notification per 5m
+
+    - Query: `severity>=CRITICAL OR textPayload:"panic:" OR jsonPayload.message:"panic:"`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `logs-crash_loop`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: CRITICAL
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: logs-crash_loop
+  spec_hash: 1e757a1bd10ca56c

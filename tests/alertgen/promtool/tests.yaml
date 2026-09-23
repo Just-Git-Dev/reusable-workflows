@@ -1,0 +1,157 @@
+# promtool unit tests over the rules rendered from tests/alertgen/spec-oracle.yaml with --oracle.
+# The runner writes those rules to rules.yaml next to this file. Series notation: 'a+bxn' is
+# a starting at a, +b per 1m step, n steps. Each case targets one guard or one boundary.
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+
+tests:
+  # --- GoFr 5xx ratio -------------------------------------------------------------
+  - name: gofr 10% 5xx at 100 req/10m fires
+    interval: 1m
+    input_series:
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="200"}'
+        values: '0+9x60'
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="500"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: gofr_http_server_error_ratio
+        exp_alerts:
+          - exp_labels: {job: api, severity: page}
+
+  - name: gofr 1 failure in 3 requests stays quiet (min_requests guard)
+    interval: 1m
+    input_series:
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="200"}'
+        values: '0 1 2 2+0x57'
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="500"}'
+        values: '0 0 0 1+0x57'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: gofr_http_server_error_ratio
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: gofr_http_server_error_ratio
+        exp_alerts: []
+
+  - name: gofr zero traffic (0/0 is NaN) stays quiet
+    interval: 1m
+    input_series:
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="200"}'
+        values: '0+0x60'
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="500"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: gofr_http_server_error_ratio
+        exp_alerts: []
+
+  - name: gofr 5xx only on the health path is excluded
+    interval: 1m
+    input_series:
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="200"}'
+        values: '0+10x60'
+      - series: 'app_http_response_count{job="api",path="/.well-known/health",status="503"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: gofr_http_server_error_ratio
+        exp_alerts: []
+
+  # --- Cloud Run 5xx ratio + latency ------------------------------------------------
+  - name: cloud run 10% 5xx fires
+    interval: 1m
+    input_series:
+      - series: 'run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name="api",response_code_class="2xx"}'
+        values: '0+9x60'
+      - series: 'run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name="api",response_code_class="5xx"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: cloudrun_5xx_ratio
+        exp_alerts:
+          - exp_labels: {service_name: api, severity: page}
+
+  - name: cloud run p95 of ~4.8s (ms) fires over the 2s default
+    interval: 1m
+    input_series:
+      - series: 'run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name="api",le="1000"}'
+        values: '0+0x60'
+      - series: 'run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name="api",le="5000"}'
+        values: '0+30x60'
+      - series: 'run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name="api",le="+Inf"}'
+        values: '0+30x60'
+      - series: 'run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name="api"}'
+        values: '0+30x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: cloudrun_latency_p95
+        exp_alerts:
+          - exp_labels: {service_name: api, severity: ticket}
+
+  - name: cloud run slow but ~10 req/10m stays quiet (min_requests guard)
+    interval: 1m
+    input_series:
+      - series: 'run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name="api",le="1000"}'
+        values: '0+0x60'
+      - series: 'run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name="api",le="5000"}'
+        values: '0+1x60'
+      - series: 'run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name="api",le="+Inf"}'
+        values: '0+1x60'
+      - series: 'run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name="api"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: cloudrun_latency_p95
+        exp_alerts: []
+
+  - name: one instance at ~95% memory (one sample a minute) fires — no request guard
+    # Found by review 2026-09-23: the memory rule had inherited "min 20 requests", which
+    # counted memory SAMPLES, so this exact case never alerted.
+    interval: 1m
+    input_series:
+      - series: 'run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name="api",le="0.9"}'
+        values: '0+0x60'
+      - series: 'run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name="api",le="1"}'
+        values: '0+1x60'
+      - series: 'run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name="api",le="+Inf"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: cloudrun_memory_p99
+        exp_alerts:
+          - exp_labels: {service_name: api, severity: ticket}
+
+  # --- silent while serving -----------------------------------------------------------
+  - name: cloud run serving, gofr exporting nothing, fires after 30m
+    interval: 1m
+    input_series:
+      - series: 'run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name="api",response_code_class="2xx"}'
+        values: '0+10x90'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: gofr_metrics_silent_while_serving
+        exp_alerts:
+          - exp_labels: {service_name: api, job: api, severity: ticket}
+
+  - name: cloud run serving and gofr exporting stays quiet
+    interval: 1m
+    input_series:
+      - series: 'run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name="api",response_code_class="2xx"}'
+        values: '0+10x90'
+      - series: 'app_http_response_count{job="api",path="/v1/x",status="200"}'
+        values: '0+10x90'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: gofr_metrics_silent_while_serving
+        exp_alerts: []
+
+  - name: idle service (no cloud run traffic) stays quiet
+    interval: 1m
+    input_series:
+      - series: 'run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name="api",response_code_class="2xx"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: gofr_metrics_silent_while_serving
+        exp_alerts: []

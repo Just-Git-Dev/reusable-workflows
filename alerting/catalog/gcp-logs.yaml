@@ -1,0 +1,30 @@
+# Log-match rules on Cloud Run revisions. GCP-only. Cloud Monitoring REQUIRES a
+# notification rate limit on these, and a log-match incident never sends a
+# "resolved" notification — it just closes after autoClose.
+pack: gcp-logs
+platforms: [gmp]
+rules:
+  - id: logs.crash_loop
+    kind: log_match
+    filter: severity>=CRITICAL OR textPayload:"panic:" OR jsonPayload.message:"panic:"
+    rate_limit: 300s
+    severity: page
+    signal: CRITICAL-or-worse log entries or Go panics on a Cloud Run revision
+    summary: Service is logging CRITICAL errors or panics
+    triage: >-
+      The service logged a CRITICAL entry or a Go panic, which usually means instances are
+      crashing and restarting. Open the matching log entries, read the stack trace, and check
+      whether the latest revision introduced it; roll back with rollback-service if so.
+
+  - id: logs.error_match
+    kind: log_match
+    requires: [filter]
+    rate_limit: 300s
+    severity: page
+    enabled: false
+    signal: Log entries matching a filter you supply
+    summary: Service logged an entry matching the alert filter
+    triage: >-
+      The service logged an entry matching the filter configured in alerts.yaml for this
+      rule. Open the matching entries in Logs Explorer with the same filter and follow the
+      error to its dependency; the filter itself says what the app owners consider page-worthy.

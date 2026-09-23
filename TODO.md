@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-30 open across 9 live sections. 8 closed items archived.
+36 open across 10 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Service alerts — rollout and deferred slice (opened 2026-09-23)](#service-alerts--rollout-and-deferred-slice-opened-2026-09-23) — 6 open
 - **ACTIVE** — [Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)](#post-deploy-probe--prove-the-observability-pipeline-actually-delivers-opened-2026-09-18) — 1 open, 1 closed
 - **ACTIVE** — [Two items rehomed from the inflight tracker (opened 2026-09-08)](#two-items-rehomed-from-the-inflight-tracker-opened-2026-09-08) — 2 open
 - **ACTIVE** — [RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)](#realmid-realm-id-has-no-alerts-caller--adopt-bootstrap-alerts-opened-2026-09-07) — 3 open
@@ -16,6 +17,29 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Service alerts — rollout and deferred slice (opened 2026-09-23)
+
+Plan: `plans/service-alerts.md`. Why: DECISIONS 2026-09-23.
+
+- [ ] **First live `dry_run` on realm-id.** Proves three things no test here can:
+  `job_workflow_sha` is present in a called workflow's token (spike 0d); gcloud's
+  `--filter="userLabels.rule_id=…"` matches; and the data check sees GMP series. Owner-gated:
+  it needs the realm-id `github-rotator` SA granted `monitoring.editor` (infra-provisioning).
+- [ ] **First apply on realm-id + fire test.** Settles whether log-match policies need
+  `logging.notificationRules.create` (spike 0e). Then override `cloudrun.latency_p95` to `1ms`,
+  wait for the email, and revert (`docs/service-alerts.md#proving-it-works`).
+- [ ] **Promote the GoFr rules from ticket to page after RealmID's soak re-check (~2026-09-26).**
+  gofr#4266 degrades with revision uptime, and the fix isn't proven on a days-warm revision.
+- [ ] **Traide and AutoMahn migrate** in their own sessions: packs, parity check, then delete
+  the MQL / hand-written policy files (`docs/service-alerts.md#migrating-from-hand-written-policies`).
+- [ ] **v2.11 slice:** `prune` (owner-scoped), `probe.health_body` uptime check (opt-in, since
+  it keeps instances warm), and the `gofr-http-client` / `gofr-pubsub` / `gofr-cron` packs once
+  their metrics exist somewhere to verify against. Also `absence`, raw `promql:` (GMP-only),
+  the drift WARN for hand-written policies, and `render_dynatrace`.
+- [ ] `.github/workflows/service-alerts.yml` — the data check fails a rule whose service had no
+  traffic for a whole day only when EVERY service in it is empty. A per-service gap is only a
+  warning. Revisit if quiet services turn out to hide real breakage.
 
 ## Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)
 
