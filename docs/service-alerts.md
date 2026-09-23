@@ -151,6 +151,22 @@ designed. Found on realm-id (about 2 requests an hour), 2026-09-23.
 For a log-match rule, point its `filter` at a harmless line that appears routinely, then
 revert. There is no traffic guard, and the 300s rate limit caps the emails.
 
+**Confirm the incident OPENED before you revert. A true condition is not an incident.**
+Running the rule's PromQL yourself and seeing it true proves nothing about the policy: Cloud
+Monitoring evaluates on its own schedule (about 3 minutes here), and reverting before that
+leaves nothing to show. This happened on realm-id's first fire test, which was reverted 2.5
+minutes after arming. Poll the incident-open log instead of sleeping for a fixed time:
+
+```bash
+gcloud logging read 'logName:"monitoring.googleapis.com%2FViolationOpenEventv1"' \
+  --project=<project> --freshness=30d --format='value(timestamp)'
+```
+
+Read it with a **positive control**. It should also show an older incident you know fired, if
+the project has one. A new entry means the incident opened; revert after that. If the log is
+empty with no known-good entry either, you can't tell "nothing fired" from "wrong project or
+identity". Email delivery still has to be confirmed in the inbox.
+
 ## Deferred (v2.11+)
 
 `prune`; the uptime probe that checks the health response body; packs for GoFr outbound HTTP,
