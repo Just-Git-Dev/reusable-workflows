@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-23` — [`v2.10.0` is a minor: one new workflow, additive inputs on two](#2026-09-23--v2100-is-a-minor-one-new-workflow-additive-inputs-on-two)
 - `2026-09-23` — [`logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`](#2026-09-23--logscrash_loop-keys-on-gofrs-jsonpayloadlevel-because-gofr-never-sets-severity)
 - `2026-09-23` — [`service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies](#2026-09-23--service-alerts-alerts-as-data-rendered-from-a-semantic-spec-applied-by-the-existing-bodies)
 - `2026-09-23` — [`v2.9.0` is a minor: one new workflow, and callers opt in with their own job](#2026-09-23--v290-is-a-minor-one-new-workflow-and-callers-opt-in-with-their-own-job)
@@ -95,6 +96,22 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-23 — `v2.10.0` is a minor: one new workflow, additive inputs on two
+
+**What.** `v2.10.0` ships:
+- `service-alerts.yml` and the AlertSpec compiler/catalog (#95), including the
+  `logs.crash_loop` fix (#96);
+- new optional inputs on `bootstrap-alerts` (`dry_run`, `policies_artifact`) and
+  `validate-alerts` (`policies_artifact`).
+
+Every new input defaults to the old behaviour. An existing bootstrap-alerts caller whose files
+carry no `managed_by: alertgen` label takes exactly the old path, so no caller has to change:
+a minor, not a major. The catalog ships at `1.0.0`, its first version, so there is no
+threshold change to flag.
+
+**Cut on the owner's explicit ask** (2026-09-23, "cut v2.10.0, then tell RI"), so RealmID
+pins a tag rather than a merge SHA for the first live run.
 
 ## 2026-09-23 — `logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`
 
