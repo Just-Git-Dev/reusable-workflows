@@ -70,6 +70,7 @@ lands everywhere.
 | [`retire-gar-packages.yml`](docs/retire-gar-packages.md) | Delete **entire** Artifact Registry packages for retired services, refusing any package with a live reference |
 | [`bootstrap-alerts.yml`](docs/bootstrap-alerts.md) | Apply a Cloud Monitoring channel + alert policies from the caller's `infra/alerts/` |
 | [`validate-alerts.yml`](docs/validate-alerts.md) | **PR-time preflight** for those policy files — offline structural lint, plus real MQL execution when given a project (the Monitoring API has no `validateOnly`) |
+| [`verify-metrics-arrival.yml`](docs/verify-metrics-arrival.md) | **Post-deploy probe** that metrics actually reached Cloud Monitoring — three outcomes (pass / no-metrics / cannot-verify), so a probe that could not see never reads as one that is happy |
 | [`bootstrap-dashboards.yml`](docs/bootstrap-dashboards.md) | Apply Cloud Monitoring **dashboards** from the caller's `infra/dashboards/`; updates in place so dashboard ids and bookmarks survive |
 | [`cleanup-cloud-run-revisions.yml`](docs/cleanup-cloud-run-revisions.md) | Prune inactive Cloud Run revisions, releasing the GAR digests they pin — schedule **before** `cleanup-gar-images` |
 | [`deploy-cloudflare-pages.yml`](docs/deploy-cloudflare-pages.md) | Build a static site and deploy it to Cloudflare Pages |
