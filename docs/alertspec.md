@@ -28,7 +28,7 @@ overrides:
   gofr.http.server.latency_p95:
     services:
       issuer: {threshold: 4s}      # issuer gets its own policy; api keeps the default
-  logs.error_match:             {filter: 'jsonPayload.level="ERROR" AND jsonPayload.message:"exceeded the quota"'}
+  logs.error_match:             {filter: 'jsonPayload.message:"exceeded the quota" OR jsonPayload.message:"could not connect"'}
 custom:
   - id: bff-upstream-errors
     metric: {name: bff_upstream_error, type: counter}
@@ -85,10 +85,15 @@ So the number of policies stays close to the number of rules, not rules × servi
 `jsonPayload.level` (`"ERROR"`, `"FATAL"`, …) and never sets Cloud Logging's `severity`, so
 every GoFr entry is stored at DEFAULT severity. `severity>=ERROR` silently matches nothing
 the app itself logged. On realm-id, across a 27-hour outage, it matched 0 of 500+ datastore
-errors; it only caught Cloud Run's own readiness-check messages. Filter on
-`jsonPayload.level="ERROR"` plus the failure text, as in the example above. Check the filter
-in Logs Explorer against a window where the failure happened (it should match) and a healthy
-one (it shouldn't).
+errors; it only caught Cloud Run's own readiness-check messages.
+
+**Don't narrow by `jsonPayload.level` either.** `level="ERROR"` excludes `FATAL`, which is the
+worst entry there is. It also drops a `WARN` where the app downgraded a failure to
+"transient". Of the 500 outage entries RealmID's text filter matched, the breakdown was ERROR
+493, FATAL 6, WARN 1, so an `AND jsonPayload.level="ERROR"` clause loses the six fatal exits.
+Match the **failure text** instead, as in the example above. Check the filter in Logs
+Explorer against a window where the failure happened (it should match) and a healthy one (it
+shouldn't).
 
 **Service names** follow Cloud Run's rule: lowercase letters, digits and `-`, starting with a
 letter. Two rules whose ids reduce to the same `rule_id` label (for example a custom

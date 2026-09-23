@@ -117,6 +117,13 @@ archived by age only; nothing is deleted, and both files are greppable.
 So the shipped rule would have missed six real fatal exits. The old docs example
 (`… AND severity>=ERROR`) could never fire on a GoFr app, and it was written to be copied.
 
+**The docs example is now text-only, not `jsonPayload.level="ERROR" AND …`.** My first version
+of this fix narrowed on the level, and I suggested the same narrowing to RealmID. RealmID
+declined, with evidence. Its text filter's 500 outage entries break down as ERROR 493,
+FATAL 6, WARN 1. The WARN is a DB failure the app itself downgraded to "transient". An ERROR
+clause therefore drops the worst entries: the same bug, one field along. The rule for GoFr
+log filters is to match the failure text and never a level-like field.
+
 `severity>=CRITICAL` stays for apps that do set severity. The unreleased catalog stays at
 1.0.0: nothing has been tagged, so no caller has pinned the old filter by version. RealmID
 pinned the merge SHA before this change.
