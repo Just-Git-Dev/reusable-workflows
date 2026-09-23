@@ -88,11 +88,11 @@ Outputs: `policies_rendered`, `policies_created`, `policies_updated`, `policies_
 `roles/monitoring.editor` on the project covers alert policies, notification channels and
 `monitoring.timeSeries.list`, which the data check and the PromQL execution need.
 
-**Log-match rules (pack `gcp-logs`) are UNVERIFIED.** One app's config notes that creating a
-log-match policy needs `logging.notificationRules.create`. A read of the API schema suggests it
-doesn't. The first real apply will settle it. If it is needed, the create fails with
-`PERMISSION_DENIED` naming that permission; grant `roles/logging.configWriter` through
-infra-provisioning and re-run. Nothing else in the run is affected.
+**Log-match rules (pack `gcp-logs`) also need `roles/logging.configWriter`.** Creating a
+`conditionMatchedLog` policy checks `logging.notificationRules.create` on the *logging*
+resource. Verified on realm-id, 2026-09-23: without that role, both log policies failed with
+`PERMISSION_DENIED`, and the 9 metric policies were created fine. Grant both roles through
+infra-provisioning before the first apply.
 
 ## How updates work
 
