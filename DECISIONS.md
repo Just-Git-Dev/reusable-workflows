@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-23` — [`v2.9.0` is a minor: one new workflow, and callers opt in with their own job](#2026-09-23--v290-is-a-minor-one-new-workflow-and-callers-opt-in-with-their-own-job)
 - `2026-09-18` — [`verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy](#2026-09-18--verify-metrics-arrival-three-outcomes-because-a-probe-that-cannot-see-must-not-read-as-happy)
 - `2026-09-15` — [RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`](#2026-09-15--rca-a-routine-revision-in-use-killed-the-whole-revisions-sweep-because-set--uo-pipefail-does-not-clear--e)
 - `2026-09-15` — [`uses: ./actions/x` resolves against the CALLER's workspace, so the cleanup sweeps stay two workflows](#2026-09-15--uses-actionsx-resolves-against-the-callers-workspace-so-the-cleanup-sweeps-stay-two-workflows)
@@ -92,6 +93,24 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-23 — `v2.9.0` is a minor: one new workflow, and callers opt in with their own job
+
+**What.** `v2.9.0` ships `verify-metrics-arrival.yml` (entry below). Nothing else changed since
+`v2.8.0`; no existing workflow's inputs, defaults or behaviour moved — so a minor, not a major.
+
+**Adoption is an explicit caller job, not a step inside `deploy-cloud-run.yml`.** Three shapes
+were weighed: (a) an optional trailing job inside `deploy-cloud-run.yml`, reached by a pin bump;
+(b) a central scheduled sweep run by the platform, needing no caller change at all; (c) each
+caller adds its own `uses: …/verify-metrics-arrival.yml` job after its deploy. Chosen: **(c)**,
+the owner's call. What made (a) weak on the evidence: not every caller deploys through
+`deploy-cloud-run.yml` — a caller with a hand-rolled deploy has no pin to bump, so (a) silently
+never reaches it; the probe runs as a read-only identity distinct from the deploy SA, which
+would add a second credential pair to a deploy workflow whose inputs are all deploy-scoped;
+and by the time a trailing job could run the image is already live, so "deploy failed" would
+mean "deploy succeeded, metrics check failed". (c) mirrors the rule `deploy-cloud-run.yml` already
+states for the other side of the deploy — app-specific PRE-deploy gates stay caller-owned jobs
+(its header, L17-18) — and puts the post-deploy gate where each caller can see and wire it.
 
 ## 2026-09-18 — `verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy
 
