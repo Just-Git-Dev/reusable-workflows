@@ -1,14 +1,22 @@
 # bootstrap-alerts
 
 Applies a Google Cloud Monitoring notification channel and a set of alert
-policies from the **caller repo's** alerts directory. Idempotent: existing
-channels and policies matched by `displayName` are skipped unless
-`force_update: true`.
+policies from the **caller repo's** alerts directory, or from a rendered
+`policies_artifact` (see [Rendered policies from an artifact](#rendered-policies-from-an-artifact-alertgen--service-alertsyml)
+below). Idempotent: existing **unmanaged** channels and policies matched by
+`displayName` are skipped unless `force_update: true`; **managed** policies
+(see below) are updated only when their content actually changed.
 
 The workflow checks out the *caller*, so each repo keeps its own policy files
 under version control. Policy files may contain the literal token
 `NOTIFICATION_CHANNEL_PLACEHOLDER`, which is replaced with the resolved channel
 resource name before apply.
+
+[`service-alerts.yml`](service-alerts.md) (an app-facing wrapper around a
+spec-driven policy generator, "alertgen") renders policy files and hands them
+to this workflow via `policies_artifact` instead of a checked-in `alerts_dir` —
+see [Rendered policies from an artifact](#rendered-policies-from-an-artifact-alertgen--service-alertsyml)
+below.
 
 ## Inputs
 
@@ -21,11 +29,14 @@ resource name before apply.
 | `channel_file` | no | `email-channel.yaml` | relative to `alerts_dir` |
 | `policy_glob` | no | `policy-*.yaml` | relative to `alerts_dir` |
 | `force_update` | no | `false` | overwrite existing policies (destructive) |
+| `policies_artifact` | no | `''` | name of an Actions artifact holding rendered policy files + the channel file; when set it replaces `alerts_dir` as the source (see below) |
+| `dry_run` | no | `false` | plan only — print what would create/update/leave unchanged, make no create/update calls |
 
 ## Outputs
 
 `channel_name`, `policies_created`, `policies_updated`, `policies_skipped`,
-`policies_failed`.
+`policies_failed`, `policies_drifted` (managed policies whose live content was
+hand-edited since the last apply — see below).
 
 ## Required IAM
 
@@ -100,3 +111,54 @@ must change before the first run:
   **empty** channel name into every policy — the job fails instead.
 - An unmatched `policy_glob` fails the job rather than silently applying nothing
   (the shell would otherwise pass the unexpanded glob through as a filename).
+
+## Managed policies (`userLabels.managed_by: alertgen`)
+
+A policy file whose `userLabels.managed_by` is exactly `alertgen` is **managed**,
+and is identified and updated differently from a hand-written one:
+
+- **Identity is `alertgen_owner` + `rule_id` labels, never `displayName`.** A
+  managed file must also carry a non-empty `userLabels.spec_hash` — if any of
+  the three is missing, that file fails (not a silent skip).
+- The live policy is looked up by those two labels
+  (`gcloud alpha monitoring policies list --filter='userLabels.alertgen_owner="…" AND userLabels.rule_id="…"'`).
+  More than one match is an error (ambiguous, never guessed at).
+- **Zero label matches, but a policy with that `displayName` already exists:**
+  this is a hand-written policy sitting on a name alertgen owns. It is an
+  **ERROR**, not a skip and not an overwrite — delete or rename the hand-written
+  policy (after checking it against the rendered spec) and re-run.
+- **Zero label matches, no `displayName` collision:** created normally.
+- **One label match:** the live `userLabels.spec_hash` is compared with the
+  file's. Different (or `force_update: true`) → updated. If the live
+  `mutationRecord.mutatedBy` is not the applier's own service account, a
+  `::warning::` names who last touched it before the update overwrites that
+  edit. Equal → left unchanged, **and** the live policy's content is projected
+  onto the rendered file's key paths (ignoring `userLabels` and
+  `notificationChannels`) and compared; a difference means someone hand-edited
+  the live policy without changing the spec, and is reported via
+  `policies_drifted` and a `::warning::` rather than silently overwritten —
+  set `force_update: true` to reset it to the rendered spec.
+- `prune` (deleting a managed policy whose rule was removed from the spec) is
+  **deferred**; nothing in this workflow deletes a policy today.
+
+## `dry_run`
+
+Set `dry_run: true` to plan without applying: the notification-channel and
+policy create/update calls are skipped, and each line is prefixed `would
+create:` / `would update:` instead of `created:` / `updated:` (`unchanged:` /
+`skipped (exists):` are unaffected — those already made no call). If the
+channel does not exist yet, `channel_name` comes back as the sentinel
+`DRY_RUN_UNCREATED_CHANNEL` instead of a resolved resource name. The `created` /
+`updated` / `skipped` / `drifted` counts reflect the plan either way, so a
+dry run's job summary reads the same as the corresponding real run would.
+
+## Rendered policies from an artifact (alertgen / `service-alerts.yml`)
+
+Set `policies_artifact` to the name of an Actions artifact that contains both
+the rendered policy files and the channel file (this is how `service-alerts.yml`
+calls this workflow after `alertgen render`). When set, it replaces `alerts_dir`
+entirely: the artifact is downloaded to `.alertgen-policies`, which becomes the
+effective `alerts_dir` for the rest of the job — `channel_file` and
+`policy_glob` are still read relative to it. A download failure (e.g. the
+artifact expired or was never uploaded) fails the job; there is no silent
+fallback to an empty policy set.

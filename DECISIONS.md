@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-09-23` — [`service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies](#2026-09-23--service-alerts-alerts-as-data-rendered-from-a-semantic-spec-applied-by-the-existing-bodies)
 - `2026-09-23` — [`v2.9.0` is a minor: one new workflow, and callers opt in with their own job](#2026-09-23--v290-is-a-minor-one-new-workflow-and-callers-opt-in-with-their-own-job)
 - `2026-09-18` — [`verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy](#2026-09-18--verify-metrics-arrival-three-outcomes-because-a-probe-that-cannot-see-must-not-read-as-happy)
 - `2026-09-15` — [RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`](#2026-09-15--rca-a-routine-revision-in-use-killed-the-whole-revisions-sweep-because-set--uo-pipefail-does-not-clear--e)
@@ -93,6 +94,77 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-09-23 — `service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies
+
+**What.** A new reusable, `service-alerts.yml`, plus `alerting/alertgen/` (the compiler) and
+`alerting/catalog/` (6 packs, 12 rules). Apps write an AlertSpec — packs, overrides, custom
+rules; `docs/alertspec.md` — and get Cloud Monitoring PromQL / log-match policies.
+`bootstrap-alerts` gains `dry_run`, `policies_artifact` and a managed update; `validate-alerts`
+gains `policies_artifact`. All additive. Plan: `plans/service-alerts.md`.
+
+**Why a semantic spec, not OpenSLO or raw PromQL.** The owner asked for a config not tied to
+GMP. OpenSLO puts a raw per-vendor query in every SLI (`metricSource.spec`), so it would need
+one query per backend and gives no portability. Its alerting objects are burn-rate alerts on
+SLOs, not threshold alerts. Dynatrace has no PromQL at all, so raw `promql:` is refused
+outright rather than accepted and later found unportable. Each `kind` has a DQL mapping
+(documented, not built): GoFr's explicit-bucket histograms keep their buckets in Dynatrace.
+
+**Why thresholds carry units.** GoFr records HTTP in seconds, SQL in milliseconds and Redis in
+microseconds (checked in the v1.61.0 source), and Cloud Run latency is milliseconds. A bare `5`
+on a latency is a 1000× guess, and a wrong guess silences the alert. So a bare number on a
+duration metric is an error, and a bare ratio above 1 is an error (write `5%`).
+
+**Why it runs the other workflows' bodies (design B) instead of calling them (design A).**
+The plan made spike 0c (does `./` resolve inside a called workflow?) decide between the two.
+The spike was **not run**: B is correct whichever way 0c comes out, and A was only correct if
+0c came out one way. The 2026-09-15 finding is that `./actions/x` resolves in the caller's
+workspace, which points against A anyway. B checks this repository out at the OIDC
+`job_workflow_sha` claim (the called workflow's own commit) and runs the four named `run:`
+bodies through `alerting/extract_step.py`. That script refuses a body containing `${{ }}`,
+because nothing would evaluate it outside its own workflow. `policies_artifact` still ships on
+both workflows so a caller can compose them by hand.
+
+**Why a live-data check before apply.** An alert over a metric that doesn't exist is valid
+PromQL, passes every lint, and can never fire. Every rule's un-thresholded series must return
+data from the last day. Otherwise the run fails with CANNOT VERIFY, unless a custom rule is
+marked `may_be_absent`. Zero on every probe fails as "wrong project or identity", never as
+"no data".
+
+**Why policies are found by owner + rule_id labels, not displayName.** Updates are keyed on
+`spec_hash`. A hand-written policy holding a managed displayName is an error, not a skip:
+skipping would leave the old hand-written condition in place while the run reported success.
+
+**Pre-merge adversarial review found five defects; all are fixed and each has a test.**
+- Two rules could render to one file/rule_id, so one policy was silently lost. Now an error;
+  service names must follow Cloud Run's rule, and group keys join with `_`.
+- `cloudrun.memory_p99` inherited a "20 requests" guard that counted memory samples, so it
+  never fired. It now has a promtool case.
+- A recreated notification channel never reached managed policies, because the hash is taken
+  over the placeholder. Live channels are now compared directly.
+- Custom rules silently ignored keys meant for another kind (`bad:` on `rate` → all traffic).
+- Per-service `enabled` enabled the wrong services.
+
+Also: gcloud's `--filter` may word-match, so the applier re-checks labels exactly. The drift
+check now catches a hand-added condition. The step-test fixture used to pass the drift test
+without its edit. The data-check probe proves that the `bad` label exists. `for: 0s` is
+omitted, because the API drops it.
+
+**Evidence.** `tests/run_alertgen_tests.py` (260 checks). It includes `promtool test rules`
+over synthetic series as the semantic oracle, which fires at 10% 5xx on 100 requests and stays
+quiet at 1 failure in 3 requests, at 0/0, and on health-path-only 5xx. A deliberately wrong
+threshold makes the oracle fail. It also runs the shipped validate-alerts lint over every
+render, and pushes alertgen's real output through the shipped apply body. The new
+`run_step_tests.py` checks were run against the pre-change workflows and failed there (RED)
+for the expected reasons.
+
+**Not verified live yet (owner-gated; see `TODO.md`).**
+- `job_workflow_sha` in a called workflow's token (spike 0d). GitHub documents it; the step
+  fails closed if it is missing.
+- The gcloud `--filter` on `userLabels.*`.
+- Whether log-match policies need `logging.notificationRules.create`.
+
+The first realm-id `dry_run` settles the first two, and the first apply settles the third.
 
 ## 2026-09-23 — `v2.9.0` is a minor: one new workflow, and callers opt in with their own job
 

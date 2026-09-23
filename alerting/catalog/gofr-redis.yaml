@@ -1,0 +1,20 @@
+# GoFr Redis metrics. app_redis_stats is in MICROSECONDS.
+pack: gofr-redis
+platforms: [gmp, prometheus]
+rules:
+  - id: gofr.redis.latency_p95
+    kind: latency_quantile
+    metric: gofr.redis_stats
+    quantile: 0.95
+    window: 10m
+    op: ">"
+    threshold: 50ms
+    for: 10m
+    min_requests: 20
+    severity: ticket
+    signal: GoFr Redis p95 command time
+    summary: Redis p95 command time is high
+    triage: >-
+      The 95th-percentile Redis command time is above the threshold. Check the Redis
+      instance's CPU and memory, look for large keys or KEYS/SCAN-style commands, and check
+      network latency between the service's region and the Redis instance.

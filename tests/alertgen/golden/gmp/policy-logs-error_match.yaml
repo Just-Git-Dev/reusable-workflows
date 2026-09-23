@@ -1,0 +1,44 @@
+alertStrategy:
+  autoClose: 1800s
+  notificationRateLimit:
+    period: 300s
+combiner: OR
+conditions:
+- conditionMatchedLog:
+    filter: resource.type="cloud_run_revision" AND (resource.labels.service_name="api"
+      OR resource.labels.service_name="issuer") AND (jsonPayload.message:"neon" AND
+      severity>=ERROR)
+  displayName: Service logged an entry matching the alert filter (api, issuer)
+displayName: Service logged an entry matching the alert filter (api, issuer) [logs.error_match]
+documentation:
+  content: '**Service logged an entry matching the alert filter** — services: api,
+    issuer.
+
+
+    The service logged an entry matching the filter configured in alerts.yaml for
+    this rule. Open the matching entries in Logs Explorer with the same filter and
+    follow the error to its dependency; the filter itself says what the app owners
+    consider page-worthy.
+
+
+    - Rule: `logs.error_match` (pack `gcp-logs`, catalog 1.0.0)
+
+    - Condition: any log entry matching the filter; at most one notification per 5m
+
+    - Query: `jsonPayload.message:"neon" AND severity>=ERROR`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `logs-error_match`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: CRITICAL
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: logs-error_match
+  spec_hash: 96b67f4eb855455c

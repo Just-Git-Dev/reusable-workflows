@@ -1,0 +1,41 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    evaluationInterval: 60s
+    query: sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[15m]))
+      > 5
+  displayName: Cloud Run is returning 5xx responses (api, issuer)
+displayName: Cloud Run is returning 5xx responses (api, issuer) [cloudrun.5xx_count]
+documentation:
+  content: '**Cloud Run is returning 5xx responses** — services: api, issuer.
+
+
+    This low-traffic service returned more 5xx responses in the window than the threshold.
+    A ratio alert cannot see this with so few requests. Open the service''s ERROR
+    logs for the window and check the latest revision and its dependencies.
+
+
+    - Rule: `cloudrun.5xx_count` (pack `cloudrun`, catalog 1.0.0)
+
+    - Condition: > 5 (compared as 5), over 15m, for 0s
+
+    - Query: `sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[15m]))
+    > 5`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `cloudrun-5xx_count`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: CRITICAL
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: cloudrun-5xx_count
+  spec_hash: 64f94ceb3134db35

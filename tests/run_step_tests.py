@@ -19,6 +19,7 @@ Usage:  python3 tests/run_step_tests.py
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -1217,9 +1218,31 @@ def policy_json(name="Test policy") -> str:
     }, indent=2)
 
 
-def _bootstrap_gcloud(tmp: Path, existing) -> Path:
-    """A gcloud stub that reports `existing` displayNames as already present."""
+def _bootstrap_gcloud(tmp: Path, existing, managed_live=None) -> Path:
+    """A gcloud stub that reports `existing` displayNames as already present,
+    and answers the label-filtered `--format=json` policy list from
+    `managed_live` (a list of full live-policy dicts, each carrying
+    userLabels.alertgen_owner / rule_id / spec_hash and, optionally,
+    mutationRecord.mutatedBy) -- this is how managed-policy identification is
+    exercised without a real Monitoring API."""
     (tmp / "existing.txt").write_text("\n".join(existing) + "\n")
+    (tmp / "managed_live.json").write_text(json.dumps(managed_live or []))
+    filt = tmp / "filter_managed.py"
+    filt.write_text(
+        "import json, re, sys\n"
+        "f = sys.argv[1]\n"
+        "live = json.load(open(sys.argv[2]))\n"
+        "m_owner = re.search(r'alertgen_owner=\"([^\"]*)\"', f)\n"
+        "m_rule = re.search(r'rule_id=\"([^\"]*)\"', f)\n"
+        "owner = m_owner.group(1) if m_owner else ''\n"
+        "rule = m_rule.group(1) if m_rule else ''\n"
+        "matches = [p for p in live\n"
+        "           if (p.get('userLabels') or {}).get('alertgen_owner') == owner\n"
+        # startswith, not ==: models a gcloud filter that word-matches rather than
+        # compares, so the applier's own exact re-check is what gets tested.
+        "           and (p.get('userLabels') or {}).get('rule_id', '').startswith(rule)]\n"
+        "print(json.dumps(matches))\n"
+    )
     stub = tmp / "bin"
     stub.mkdir(exist_ok=True)
     g = stub / "gcloud"
@@ -1228,8 +1251,12 @@ def _bootstrap_gcloud(tmp: Path, existing) -> Path:
         f'printf "%s\\n" "$*" >> "{tmp}/argv.txt"\n'
         # `alpha monitoring {policies,channels} list` -> $4
         'if [ "$4" = "list" ]; then\n'
-        '  f=""\n'
-        '  for a in "$@"; do case "$a" in --filter=*) f="${a#--filter=}";; esac; done\n'
+        '  f=""; fmt=""\n'
+        '  for a in "$@"; do case "$a" in --filter=*) f="${a#--filter=}";; --format=*) fmt="${a#--format=}";; esac; done\n'
+        '  if [ "$fmt" = "json" ]; then\n'
+        f'    python3 "{tmp}/filter_managed.py" "$f" "{tmp}/managed_live.json"\n'
+        '    exit 0\n'
+        '  fi\n'
         '  while IFS= read -r e; do\n'
         '    [ -n "$e" ] || continue\n'
         '    case "$f" in *"$e"*) echo "projects/p/x/1"; exit 0;; esac\n'
@@ -1242,14 +1269,14 @@ def _bootstrap_gcloud(tmp: Path, existing) -> Path:
     return stub
 
 
-def _bootstrap_run(body, files, env_extra, *, existing=()):
+def _bootstrap_run(body, files, env_extra, *, existing=(), managed_live=None):
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         adir = tmp / "infra" / "alerts"
         adir.mkdir(parents=True)
         for fname, text in files.items():
             (adir / fname).write_text(text)
-        stub = _bootstrap_gcloud(tmp, existing)
+        stub = _bootstrap_gcloud(tmp, existing, managed_live=managed_live)
         out = tmp / "gh_output"
         out.write_text("")
         env = dict(os.environ)
@@ -1269,17 +1296,76 @@ def _bootstrap_run(body, files, env_extra, *, existing=()):
 
 
 def run_bootstrap_channel_step(body, *, channel, channel_file="email-channel.yaml",
-                               existing=()):
+                               existing=(), dry_run="false"):
     return _bootstrap_run(body, {channel_file: channel},
-                          {"CHANNEL_FILE": channel_file}, existing=existing)
+                          {"CHANNEL_FILE": channel_file, "DRY_RUN": dry_run},
+                          existing=existing)
 
 
 def run_bootstrap_apply_step(body, policies, *, policy_glob="policy-*.yaml",
-                             force_update="false", existing=()):
+                             force_update="false", existing=(), managed_live=None,
+                             dry_run="false", applier_sa="applier@proj.iam.gserviceaccount.com"):
     return _bootstrap_run(body, policies,
                           {"POLICY_GLOB": policy_glob, "FORCE_UPDATE": force_update,
-                           "CHANNEL_NAME": "projects/p/notificationChannels/9"},
-                          existing=existing)
+                           "CHANNEL_NAME": "projects/p/notificationChannels/9",
+                           "DRY_RUN": dry_run, "APPLIER_SA": applier_sa},
+                          existing=existing, managed_live=managed_live)
+
+
+# A managed (alertgen-rendered) policy fixture, matching render_gmp.py's shape.
+def managed_policy_json(*, name="HTTP 5xx error ratio", owner="acme_app",
+                        rule="gofr-http-server-error_ratio", spec_hash="0123456789abcdef",
+                        combiner="OR"):
+    return json.dumps({
+        "displayName": name,
+        "combiner": combiner,
+        "notificationChannels": ["NOTIFICATION_CHANNEL_PLACEHOLDER"],
+        "documentation": {"content": "x" * 90, "mimeType": "text/markdown"},
+        "conditions": [{
+            "displayName": "error ratio",
+            "conditionPrometheusQueryLanguage": {
+                "query": "up", "duration": "600s", "evaluationInterval": "60s",
+            },
+        }],
+        "alertStrategy": {"autoClose": "1800s"},
+        "userLabels": {
+            "managed_by": "alertgen", "alertgen_owner": owner, "rule_id": rule,
+            "spec_hash": spec_hash, "catalog_version": "1-0-0",
+        },
+    }, indent=2)
+
+
+def live_managed_policy(*, name="projects/p/alertPolicies/123", owner="acme_app",
+                        rule="gofr-http-server-error_ratio", spec_hash="0123456789abcdef",
+                        mutated_by="", combiner="OR", display="HTTP 5xx error ratio",
+                        channels=("projects/p/notificationChannels/9",), extra_conditions=0):
+    # Mirrors managed_policy_json() field for field (plus server-filled fields), so an
+    # UNEDITED live policy projects identical to the render. It lacked displayName until
+    # 2026-09-23, which made identical content read as drift and let the drift test pass
+    # without its edit.
+    conds = [{
+        "displayName": "error ratio",
+        "conditionPrometheusQueryLanguage": {
+            "query": "up", "duration": "600s", "evaluationInterval": "60s",
+        },
+    }]
+    conds += [{"displayName": f"hand-added {i}",
+               "conditionPrometheusQueryLanguage": {"query": "up == 0"}}
+              for i in range(extra_conditions)]
+    return {
+        "name": name,
+        "displayName": display,
+        "combiner": combiner,
+        "notificationChannels": list(channels),
+        "documentation": {"content": "x" * 90, "mimeType": "text/markdown"},
+        "conditions": conds,
+        "alertStrategy": {"autoClose": "1800s"},
+        "userLabels": {
+            "managed_by": "alertgen", "alertgen_owner": owner, "rule_id": rule,
+            "spec_hash": spec_hash, "catalog_version": "1-0-0",
+        },
+        "mutationRecord": {"mutatedBy": mutated_by},
+    }
 
 
 # --- verify-metrics-arrival: the three outcomes must stay distinguishable ----
@@ -2832,6 +2918,157 @@ def main():
     check("a YAML channel file still resolves", r["rc"] == 0, r["out"])
     r = run_bootstrap_channel_step(chan, channel="type: email\n")
     check("a channel file with no displayName fails", r["rc"] != 0, r["out"])
+
+
+    # ---- bootstrap-alerts: dry_run and managed (alertgen) updates -----------
+    print("\nbootstrap-alerts · dry_run and managed updates")
+
+    # 1. dry_run against a brand-new (unmanaged) policy: plan only, no gcloud
+    #    create/update call, exit 0, created counted as if it happened.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.yaml": policy_yaml(PROMQL_COND)},
+                                 dry_run="true")
+    check("dry_run plans a create, does not call gcloud create/update",
+          r["rc"] == 0 and " create " not in r["argv"] and " update " not in r["argv"],
+          r["argv"])
+    check("dry_run says 'would create'", "would create" in r["out"], r["out"])
+    check("dry_run still counts the planned create",
+          r["outputs"].get("created") == "1", r["outputs"])
+
+    # 2. dry_run with no existing channel: no create call, sentinel output name.
+    r = run_bootstrap_channel_step(chan, channel=CHANNEL_OK, dry_run="true")
+    check("dry_run does not create a missing channel",
+          " create " not in r["argv"], r["argv"])
+    check("dry_run reports the sentinel channel name",
+          r["outputs"].get("name") == "DRY_RUN_UNCREATED_CHANNEL", r["outputs"])
+
+    # 3. Managed policy, live spec_hash equal: unchanged, no update call.
+    live_same = live_managed_policy(spec_hash="0123456789abcdef")
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json(spec_hash="0123456789abcdef")},
+                                 policy_glob="policy-*.json", managed_live=[live_same])
+    check("managed + equal hash is unchanged", r["rc"] == 0, r["out"])
+    check("and no update call is made", "update" not in r["argv"], r["argv"])
+    check("unchanged is counted as skipped",
+          r["outputs"].get("skipped") == "1", r["outputs"])
+    check("an unedited live policy is NOT reported as drift",
+          r["outputs"].get("drifted") == "0" and "hand-edited" not in r["out"], r["out"])
+
+    # 3b. A hand-ADDED condition is drift (element-wise projection alone missed it).
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json(spec_hash="0123456789abcdef")},
+                                 policy_glob="policy-*.json",
+                                 managed_live=[live_managed_policy(extra_conditions=1)])
+    check("a hand-added condition is reported as drift", r["outputs"].get("drifted") == "1", r["out"])
+
+    # 3c. Same hash, but the live policy routes to another channel: update it. The hash is
+    #     over the placeholder, so without this a recreated channel never propagates.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json(spec_hash="0123456789abcdef")},
+                                 policy_glob="policy-*.json",
+                                 managed_live=[live_managed_policy(channels=())])
+    check("a live policy on the wrong channel is updated even with an equal hash",
+          "update" in r["argv"] and r["outputs"].get("updated") == "1", r["out"])
+
+    # 3d. A word-matching filter that also returns a DIFFERENT rule_id must not count.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json(spec_hash="0123456789abcdef")},
+                                 policy_glob="policy-*.json",
+                                 managed_live=[live_same, live_managed_policy(
+                                     name="projects/p/alertPolicies/555",
+                                     rule="gofr-http-server-error_ratio-issuer")])
+    check("only an EXACT owner+rule_id match counts", r["outputs"].get("failed") == "0"
+          and r["outputs"].get("skipped") == "1", r["out"])
+
+    # 4. Managed policy, live spec_hash different: update called by live name.
+    live_diff = live_managed_policy(name="projects/p/alertPolicies/999",
+                                    spec_hash="deadbeefdeadbeef")
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json(spec_hash="0123456789abcdef")},
+                                 policy_glob="policy-*.json", managed_live=[live_diff])
+    check("managed + different hash triggers an update", r["rc"] == 0, r["out"])
+    check("and the update targets the live policy name",
+          "projects/p/alertPolicies/999" in r["argv"], r["argv"])
+    check("counted as updated", r["outputs"].get("updated") == "1", r["outputs"])
+
+    # 5. Same, but mutated by someone other than the applier: warn, still update.
+    live_other = live_managed_policy(name="projects/p/alertPolicies/999",
+                                     spec_hash="deadbeefdeadbeef",
+                                     mutated_by="someone@example.com")
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json(spec_hash="0123456789abcdef")},
+                                 policy_glob="policy-*.json", managed_live=[live_other],
+                                 applier_sa="applier@proj.iam.gserviceaccount.com")
+    check("a foreign mutatedBy is warned about",
+          "someone@example.com" in r["out"] and "::warning::" in r["out"], r["out"])
+    check("the update still happens despite the warning",
+          r["outputs"].get("updated") == "1", r["outputs"])
+
+    # 6. Managed, hash equal, but live content differs on a rendered path
+    #    (out-of-band hand edit): drift warning, no update, drifted=1.
+    live_drifted = live_managed_policy(spec_hash="0123456789abcdef", combiner="AND")
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json(spec_hash="0123456789abcdef")},
+                                 policy_glob="policy-*.json", managed_live=[live_drifted])
+    check("drift is warned about", "::warning::" in r["out"] and "hand-edited" in r["out"], r["out"])
+    check("no update call is made for a drifted-but-unchanged-hash policy",
+          "update" not in r["argv"], r["argv"])
+    check("drift is counted", r["outputs"].get("drifted") == "1", r["outputs"])
+
+    # 7. Managed, no label match, but a hand-written policy already holds the
+    #    managed displayName: this is an ERROR, not a skip and not a create.
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json()},
+                                 policy_glob="policy-*.json",
+                                 existing=("HTTP 5xx error ratio",))
+    check("a hand-written collision on a managed name fails the step", r["rc"] != 0, r["out"])
+    check("and explains it's hand-written/managed",
+          "hand-written" in r["out"] and "managed" in r["out"], r["out"])
+    check("counted as failed, not created",
+          r["outputs"].get("failed") == "1" and r["outputs"].get("created", "0") == "0", r["outputs"])
+    check("no create call is made", " create " not in r["argv"], r["argv"])
+
+    # 8. Managed, more than one live policy matches the labels: ambiguous, fail.
+    dupe_a = live_managed_policy(name="projects/p/alertPolicies/1")
+    dupe_b = live_managed_policy(name="projects/p/alertPolicies/2")
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": managed_policy_json()},
+                                 policy_glob="policy-*.json", managed_live=[dupe_a, dupe_b])
+    check("more than one label match fails the policy",
+          r["outputs"].get("failed") == "1", r["outputs"])
+
+    # 9. Managed file missing a required label (rule_id): error, not a silent
+    #    fall-through to the unmanaged path.
+    bad_managed = json.dumps({
+        "displayName": "No rule id",
+        "combiner": "OR",
+        "notificationChannels": ["NOTIFICATION_CHANNEL_PLACEHOLDER"],
+        "userLabels": {"managed_by": "alertgen", "alertgen_owner": "acme_app",
+                       "spec_hash": "0123456789abcdef"},
+    })
+    r = run_bootstrap_apply_step(apply_, {"policy-a.json": bad_managed},
+                                 policy_glob="policy-*.json")
+    check("a managed policy missing rule_id fails", r["rc"] != 0, r["out"])
+    check("and names the missing label", "rule_id" in r["out"], r["out"])
+
+    # 11. The four extracted step bodies are consumed VERBATIM by another
+    #     workflow with its own env -- a stray ${{ }} would silently pick up
+    #     THAT workflow's context instead of the values this one wires through
+    #     env:, per plans/service-alerts.md §6 mechanism (B).
+    guarded_steps = [
+        (BOOTSTRAP, "apply", "Ensure notification channel"),
+        (BOOTSTRAP, "apply", "Apply alert policies"),
+        (ALERTS, "validate", "Lint policy files (offline)"),
+        (ALERTS, "validate", "Validate PromQL queries against the Monitoring API"),
+    ]
+    for wf, job, step in guarded_steps:
+        b = extract_step(wf, job, step)
+        check(f"'{step}' has no ${{{{ }}}} expressions", "${{" not in b, wf.name)
+
+    # 12. policies_artifact: both workflows download the artifact to a fixed
+    #     path, guarded by `if:`, using a SHA-pinned download-artifact, and the
+    #     ALERTS_DIR job env switches on policies_artifact.
+    for wf, job in ((BOOTSTRAP, "apply"), (ALERTS, "validate")):
+        text = wf.read_text()
+        check(f"{wf.name}: download step gated on policies_artifact",
+              "if: inputs.policies_artifact != ''" in text, wf.name)
+        check(f"{wf.name}: download-artifact is pinned to a 40-hex SHA",
+              re.search(r"uses:\s*actions/download-artifact@[0-9a-f]{40}\s*#", text) is not None,
+              wf.name)
+        check(f"{wf.name}: downloads to .alertgen-policies",
+              "path: .alertgen-policies" in text, wf.name)
+        check(f"{wf.name}: ALERTS_DIR switches on policies_artifact",
+              "policies_artifact != '' && '.alertgen-policies'" in text, wf.name)
 
 
     # ---- validate-alerts: an alert nobody can act on is a defect ------------

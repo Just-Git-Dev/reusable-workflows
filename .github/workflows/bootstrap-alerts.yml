@@ -2,11 +2,20 @@ name: Bootstrap Cloud Monitoring alerts (reusable)
 
 # Applies a Cloud Monitoring notification channel + alert policies from the
 # CALLER repo's alerts directory (this workflow checks out the caller, so each
-# project keeps its own policy files). Idempotent: existing channels/policies
-# matched by displayName are skipped unless force_update=true.
+# project keeps its own policy files), OR from a `policies_artifact` (e.g.
+# alertgen-rendered policies published by service-alerts.yml). Idempotent:
+# existing UNMANAGED channels/policies matched by displayName are skipped
+# unless force_update=true.
 #
 # Policy files may contain the literal token NOTIFICATION_CHANNEL_PLACEHOLDER,
 # which is substituted with the resolved channel resource name before apply.
+#
+# MANAGED policies (userLabels.managed_by: alertgen) are identified by their
+# alertgen_owner + rule_id labels, never by displayName, and are updated only
+# when the live userLabels.spec_hash differs from the file's (or force_update
+# is set). A hand-written policy already holding a managed displayName is an
+# ERROR, not a skip. `dry_run: true` plans without making any create/update
+# call; see docs/bootstrap-alerts.md for the full semantics.
 #
 # Required IAM on service_account:
 #   roles/monitoring.alertPolicyEditor
@@ -49,6 +58,22 @@ on:
         type: boolean
         required: false
         default: false
+      policies_artifact:
+        description: >-
+          Name of an Actions artifact holding rendered policy files AND the channel
+          file (e.g. from alertgen). When set, this replaces alerts_dir as the
+          source: the artifact is downloaded to .alertgen-policies and that becomes
+          ALERTS_DIR. A download failure fails the job.
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: >-
+          Plan only -- print what would be created/updated/left unchanged and make
+          no create/update calls (channel or policy).
+        type: boolean
+        required: false
+        default: false
     outputs:
       channel_name:
         description: 'Resolved notification-channel resource name.'
@@ -65,6 +90,11 @@ on:
       policies_failed:
         description: 'Number of alert policies that failed to apply (the run also exits non-zero).'
         value: ${{ jobs.apply.outputs.failed }}
+      policies_drifted:
+        description: >-
+          Number of managed policies whose live content has been hand-edited since
+          the last apply (spec_hash unchanged, so not overwritten -- warned only).
+        value: ${{ jobs.apply.outputs.drifted }}
 
 permissions:
   contents: read
@@ -90,18 +120,31 @@ jobs:
         shell: bash
     env:
       GCP_PROJECT:  ${{ inputs.gcp_project }}
-      ALERTS_DIR:   ${{ inputs.alerts_dir }}
+      # The runner (github.workspace / RUNNER_TEMP) context is not available in
+      # job-level env -- only in steps -- so the artifact side uses a workspace-
+      # relative path instead. Both sides are read the same way downstream.
+      ALERTS_DIR:   ${{ inputs.policies_artifact != '' && '.alertgen-policies' || inputs.alerts_dir }}
       CHANNEL_FILE: ${{ inputs.channel_file }}
       POLICY_GLOB:  ${{ inputs.policy_glob }}
+      DRY_RUN:      ${{ inputs.dry_run }}
+      APPLIER_SA:   ${{ inputs.service_account }}
     outputs:
       channel_name: ${{ steps.channel.outputs.name }}
       created: ${{ steps.policies.outputs.created }}
       updated: ${{ steps.policies.outputs.updated }}
       skipped: ${{ steps.policies.outputs.skipped }}
       failed: ${{ steps.policies.outputs.failed }}
+      drifted: ${{ steps.policies.outputs.drifted }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download rendered policies
+        if: inputs.policies_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.policies_artifact }}
+          path: .alertgen-policies
 
       - name: Authenticate to GCP via WIF
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -155,6 +198,11 @@ jobs:
             --limit=1 --format='value(name)')
 
           if [ -z "$NAME" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::notice::would create notification channel"
+              echo "name=DRY_RUN_UNCREATED_CHANNEL" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             NAME=$(gcloud alpha monitoring channels create \
               --project="$GCP_PROJECT" \
               --channel-content-from-file="$CHANNEL_PATH" \
@@ -190,9 +238,14 @@ jobs:
           fi
 
           # Same format-agnostic reader as the channel step above -- see the comment
-          # there for why this is not an awk match. Hoisted out of the loop.
-          READ_DISPLAY=$(mktemp)
-          cat > "$READ_DISPLAY" <<'PY'
+          # there for why this is not an awk match. Extended to also surface the
+          # userLabels that decide whether a file is a MANAGED (alertgen-rendered)
+          # policy: managed policies are identified by owner+rule_id labels, never
+          # by displayName (a caller may rename a policy's displayName freely; the
+          # labels are the stable key). Output is tab-separated so the bash loop
+          # can `read` it without a second python invocation per field.
+          READ_INFO=$(mktemp)
+          cat > "$READ_INFO" <<'PY'
           import sys, yaml
           try:
               doc = yaml.safe_load(open(sys.argv[1])) or {}
@@ -203,21 +256,95 @@ jobs:
           name = doc.get("displayName")
           if not isinstance(name, str) or not name.strip():
               print("no top-level displayName"); sys.exit(1)
-          print(name.strip())
+          labels = doc.get("userLabels")
+          if not isinstance(labels, dict):
+              labels = {}
+          managed = labels.get("managed_by") == "alertgen"
+          owner = rule = spec_hash = ""
+          if managed:
+              owner = str(labels.get("alertgen_owner") or "")
+              rule = str(labels.get("rule_id") or "")
+              spec_hash = str(labels.get("spec_hash") or "")
+              missing = [k for k, v in (("alertgen_owner", owner), ("rule_id", rule),
+                                         ("spec_hash", spec_hash)) if not v.strip()]
+              if missing:
+                  print("managed policy missing required userLabels: " + ", ".join(missing))
+                  sys.exit(1)
+          print("\t".join([name.strip(), "managed" if managed else "unmanaged",
+                            owner, rule, spec_hash]))
           PY
 
-          CREATED=0; UPDATED=0; SKIPPED=0; FAILED=0
+          # Summarises the (at most one) live policy matched by owner+rule_id
+          # labels: count, name, live spec_hash, live mutationRecord.mutatedBy.
+          # Also writes the full live policy object to a file for the drift
+          # projection below -- passing it through argv would risk the shell's
+          # argument-length limit on a policy with many conditions.
+          MANAGED_INFO=$(mktemp)
+          cat > "$MANAGED_INFO" <<'PY'
+          import json, sys
+          owner, rule = sys.argv[3], sys.argv[4]
+          # Re-check EXACT label equality: gcloud's `--filter key="v"` is not guaranteed to
+          # be an equality match for every API (`gcloud topic filters`), and a word match
+          # would make `…latency_p95` also match `…latency_p95-issuer`.
+          matches = [p for p in (json.load(open(sys.argv[1])) or [])
+                     if (p.get("userLabels") or {}).get("alertgen_owner") == owner
+                     and (p.get("userLabels") or {}).get("rule_id") == rule]
+          print(len(matches))
+          if matches:
+              p = matches[0]
+              labels = p.get("userLabels") or {}
+              mut = p.get("mutationRecord") or {}
+              print(p.get("name", ""))
+              print(labels.get("spec_hash", ""))
+              print(mut.get("mutatedBy", ""))
+              with open(sys.argv[2], "w") as fh:
+                  json.dump(p, fh)
+          PY
+
+          # Out-of-band drift: project the live policy onto the key paths present
+          # in the rendered file (after channel substitution), ignoring the keys
+          # that are expected to differ (labels carry our own bookkeeping;
+          # notificationChannels is the placeholder we just substituted), then
+          # compare canonical JSON. Prints a non-empty line iff they differ.
+          DRIFT_CHECK=$(mktemp)
+          cat > "$DRIFT_CHECK" <<'PY'
+          import json, sys, yaml
+          live = json.load(open(sys.argv[1]))
+          rendered = yaml.safe_load(open(sys.argv[2])) or {}
+          EXCLUDE = {"userLabels", "notificationChannels"}
+
+          def strip_top(d):
+              return {k: v for k, v in d.items() if k not in EXCLUDE} if isinstance(d, dict) else d
+
+          def project(tmpl, actual):
+              if isinstance(tmpl, dict):
+                  if not isinstance(actual, dict):
+                      return None
+                  return {k: project(v, actual.get(k)) for k, v in tmpl.items()}
+              if isinstance(tmpl, list):
+                  if not isinstance(actual, list):
+                      return None
+                  if len(actual) != len(tmpl):
+                      # e.g. a hand-ADDED condition: element-wise projection alone
+                      # would compare only the first len(tmpl) and miss it.
+                      return {"__length__": len(actual)}
+                  return [project(v, actual[i]) for i, v in enumerate(tmpl)]
+              return actual
+
+          baseline = strip_top(rendered)
+          live_view = project(baseline, strip_top(live))
+          if json.dumps(baseline, sort_keys=True) != json.dumps(live_view, sort_keys=True):
+              print("content differs from the rendered spec")
+          PY
+
+          CREATED=0; UPDATED=0; SKIPPED=0; FAILED=0; DRIFTED=0
           FAILED_NAMES=()
           for f in "${FILES[@]}"; do
-            if ! DISPLAY=$(python3 "$READ_DISPLAY" "$f"); then
-              echo "::error::Cannot read displayName from $f: ${DISPLAY}"
+            if ! INFO=$(python3 "$READ_INFO" "$f"); then
+              echo "::error::Cannot read policy info from $f: ${INFO}"
               exit 1
             fi
-
-            EXISTING=$(gcloud alpha monitoring policies list \
-              --project="$GCP_PROJECT" \
-              --filter="displayName=\"$DISPLAY\"" \
-              --limit=1 --format='value(name)')
+            IFS=$'\t' read -r DISPLAY KIND OWNER RULE SPEC_HASH <<< "$INFO"
 
             TMP=$(mktemp)
             sed "s|NOTIFICATION_CHANNEL_PLACEHOLDER|${CHANNEL_NAME}|g" "$f" > "$TMP"
@@ -227,9 +354,109 @@ jobs:
             # every valid policy still applies. The step still exits non-zero at
             # the end if anything failed — the pass/fail contract is unchanged,
             # only the blast radius and the reporting improve.
+            if [ "$KIND" = "managed" ]; then
+              MATCHES_FILE=$(mktemp)
+              gcloud alpha monitoring policies list \
+                --project="$GCP_PROJECT" \
+                --filter="userLabels.alertgen_owner=\"$OWNER\" AND userLabels.rule_id=\"$RULE\"" \
+                --format=json > "$MATCHES_FILE"
+
+              LIVE_FILE=$(mktemp)
+              INFO2=$(python3 "$MANAGED_INFO" "$MATCHES_FILE" "$LIVE_FILE" "$OWNER" "$RULE")
+              MCOUNT=$(printf '%s\n' "$INFO2" | sed -n '1p')
+
+              if [ "$MCOUNT" -gt 1 ]; then
+                echo "::error::${MCOUNT} live policies match managed labels alertgen_owner=$OWNER rule_id=$RULE for '$DISPLAY' (in $f) -- ambiguous, refusing to guess"
+                FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+                rm -f "$TMP" "$MATCHES_FILE" "$LIVE_FILE"
+                continue
+              fi
+
+              if [ "$MCOUNT" -eq 0 ]; then
+                EXISTING=$(gcloud alpha monitoring policies list \
+                  --project="$GCP_PROJECT" \
+                  --filter="displayName=\"$DISPLAY\"" \
+                  --limit=1 --format='value(name)')
+                if [ -n "$EXISTING" ]; then
+                  echo "::error::a hand-written policy already holds the managed displayName '$DISPLAY' ($EXISTING, in $f) -- delete or rename the hand-written policy after a parity check; alertgen will not adopt a name it does not own"
+                  FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+                  rm -f "$TMP" "$MATCHES_FILE" "$LIVE_FILE"
+                  continue
+                fi
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "  would create: $DISPLAY"
+                  CREATED=$((CREATED + 1))
+                elif gcloud alpha monitoring policies create \
+                    --project="$GCP_PROJECT" \
+                    --policy-from-file="$TMP" --quiet; then
+                  echo "  created: $DISPLAY"
+                  CREATED=$((CREATED + 1))
+                else
+                  echo "::error::create failed: $DISPLAY (in $f)"
+                  FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+                fi
+                rm -f "$TMP" "$MATCHES_FILE" "$LIVE_FILE"
+                continue
+              fi
+
+              # Exactly one live match.
+              LIVE_NAME=$(printf '%s\n' "$INFO2" | sed -n '2p')
+              LIVE_HASH=$(printf '%s\n' "$INFO2" | sed -n '3p')
+              MUTATED_BY=$(printf '%s\n' "$INFO2" | sed -n '4p')
+
+              # spec_hash is taken over the PLACEHOLDER channel, so a recreated or
+              # renamed channel never moves it. Compare the live routing directly, or
+              # a green run leaves every policy notifying the old channel -- or nobody.
+              LIVE_CHANNELS=$(jq -c '.notificationChannels // [] | sort' "$LIVE_FILE")
+              WANT_CHANNELS=$(python3 -c 'import json,sys,yaml; print(json.dumps(sorted(yaml.safe_load(open(sys.argv[1])).get("notificationChannels") or []), separators=(",", ":")))' "$TMP")
+              CHANNEL_MOVED=false
+              if [ "$LIVE_CHANNELS" != "$WANT_CHANNELS" ]; then
+                CHANNEL_MOVED=true
+                echo "::notice::$DISPLAY notifies ${LIVE_CHANNELS}, expected ${WANT_CHANNELS} -- updating"
+              fi
+
+              if [ "$LIVE_HASH" != "$SPEC_HASH" ] || [ "$FORCE_UPDATE" = "true" ] || [ "$CHANNEL_MOVED" = "true" ]; then
+                if [ -n "$MUTATED_BY" ] && [ "$MUTATED_BY" != "$APPLIER_SA" ]; then
+                  echo "::warning::$DISPLAY was last edited by $MUTATED_BY (not the applier) -- this update will overwrite that edit"
+                fi
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "  would update: $DISPLAY"
+                  UPDATED=$((UPDATED + 1))
+                elif gcloud alpha monitoring policies update "$LIVE_NAME" \
+                    --project="$GCP_PROJECT" \
+                    --policy-from-file="$TMP" --quiet; then
+                  echo "  updated: $DISPLAY"
+                  UPDATED=$((UPDATED + 1))
+                else
+                  echo "::error::update failed: $DISPLAY (in $f)"
+                  FAILED=$((FAILED + 1)); FAILED_NAMES+=("$DISPLAY")
+                fi
+              else
+                echo "  unchanged: $DISPLAY"
+                SKIPPED=$((SKIPPED + 1))
+                DRIFT=$(python3 "$DRIFT_CHECK" "$LIVE_FILE" "$TMP")
+                if [ -n "$DRIFT" ]; then
+                  echo "::warning::$DISPLAY hand-edited since last apply; not overwritten because the spec is unchanged -- set force_update: true to reset ($DRIFT)"
+                  DRIFTED=$((DRIFTED + 1))
+                fi
+              fi
+              rm -f "$TMP" "$MATCHES_FILE" "$LIVE_FILE"
+              continue
+            fi
+
+            # Unmanaged path: identical to the pre-managed-update behaviour,
+            # matched and skipped/updated by displayName, plus dry_run.
+            EXISTING=$(gcloud alpha monitoring policies list \
+              --project="$GCP_PROJECT" \
+              --filter="displayName=\"$DISPLAY\"" \
+              --limit=1 --format='value(name)')
+
             if [ -n "$EXISTING" ]; then
               if [ "$FORCE_UPDATE" = "true" ]; then
-                if gcloud alpha monitoring policies update "$EXISTING" \
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "  would update: $DISPLAY"
+                  UPDATED=$((UPDATED + 1))
+                elif gcloud alpha monitoring policies update "$EXISTING" \
                     --project="$GCP_PROJECT" \
                     --policy-from-file="$TMP" --quiet; then
                   echo "  updated: $DISPLAY"
@@ -243,7 +470,10 @@ jobs:
                 SKIPPED=$((SKIPPED + 1))
               fi
             else
-              if gcloud alpha monitoring policies create \
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "  would create: $DISPLAY"
+                CREATED=$((CREATED + 1))
+              elif gcloud alpha monitoring policies create \
                   --project="$GCP_PROJECT" \
                   --policy-from-file="$TMP" --quiet; then
                 echo "  created: $DISPLAY"
@@ -261,6 +491,7 @@ jobs:
             echo "updated=$UPDATED"
             echo "skipped=$SKIPPED"
             echo "failed=$FAILED"
+            echo "drifted=$DRIFTED"
           } >> "$GITHUB_OUTPUT"
 
           if [ "$FAILED" -gt 0 ]; then
@@ -276,13 +507,17 @@ jobs:
           UPDATED:      ${{ steps.policies.outputs.updated }}
           SKIPPED:      ${{ steps.policies.outputs.skipped }}
           FAILED:       ${{ steps.policies.outputs.failed }}
+          DRIFTED:      ${{ steps.policies.outputs.drifted }}
         run: |
           {
             echo "## Monitoring alert policies — ${GCP_PROJECT}"
             echo ''
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "- **dry_run: no changes were made** — counts below are the plan."
+            fi
             echo "- Notification channel: ${CHANNEL_NAME:-<unresolved>}"
             echo "- Policies from: ${ALERTS_DIR}/${POLICY_GLOB}"
-            echo "- Created: ${CREATED:-0} · Updated: ${UPDATED:-0} · Skipped: ${SKIPPED:-0} · Failed: ${FAILED:-0}"
+            echo "- Created: ${CREATED:-0} · Updated: ${UPDATED:-0} · Skipped: ${SKIPPED:-0} · Failed: ${FAILED:-0} · Drifted (hand-edited, unchanged): ${DRIFTED:-0}"
             echo ""
             echo "Edit the YAML files and re-run to add new policies. Use \`force_update: true\` to overwrite existing ones."
           } >> "$GITHUB_STEP_SUMMARY"

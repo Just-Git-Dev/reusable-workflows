@@ -43,7 +43,7 @@ def main():
     for doc in sorted(DOCS.glob("*.md")):
         # Standalone guidance pages, not workflow references. They have no
         # corresponding .yml and never will.
-        if doc.stem in {"PLATFORM", "convergence-audit", "release-process",
+        if doc.stem in {"PLATFORM", "convergence-audit", "release-process", "alertspec",
                         "TESTING-STANDARD"}:
             continue
         if not (WORKFLOWS / f"{doc.stem}.yml").is_file():

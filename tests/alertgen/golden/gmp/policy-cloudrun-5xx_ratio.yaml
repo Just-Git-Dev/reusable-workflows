@@ -1,0 +1,48 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    duration: 600s
+    evaluationInterval: 60s
+    query: (sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[10m]))
+      / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+      > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+      >= 20
+  displayName: Cloud Run 5xx ratio is high (api, issuer)
+displayName: Cloud Run 5xx ratio is high (api, issuer) [cloudrun.5xx_ratio]
+documentation:
+  content: '**Cloud Run 5xx ratio is high** — services: api, issuer.
+
+
+    More than the threshold share of requests to this Cloud Run service returned 5xx.
+    Check the service''s recent revisions (a bad deploy is the usual cause; roll back
+    with rollback-service), then its ERROR logs for the failing path, then its database
+    or upstream dependencies.
+
+
+    - Rule: `cloudrun.5xx_ratio` (pack `cloudrun`, catalog 1.0.0)
+
+    - Condition: > 5% (compared as 0.05), over 10m, for 10m, only with at least 20
+    requests in the window
+
+    - Query: `(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[10m]))
+    / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+    > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    >= 20`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `cloudrun-5xx_ratio`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: CRITICAL
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: cloudrun-5xx_ratio
+  spec_hash: 0d5eb902b9138d94

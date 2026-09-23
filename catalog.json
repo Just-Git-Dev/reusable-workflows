@@ -15,6 +15,12 @@
           "required": false,
           "type": "string"
         },
+        "dry_run": {
+          "default": false,
+          "description": "Plan only -- print what would be created/updated/left unchanged and make no create/update calls (channel or policy).",
+          "required": false,
+          "type": "boolean"
+        },
         "force_update": {
           "default": false,
           "description": "Replace existing policies instead of skipping them (destructive).",
@@ -25,6 +31,12 @@
           "default": null,
           "description": "GCP project id the alert policies belong to.",
           "required": true,
+          "type": "string"
+        },
+        "policies_artifact": {
+          "default": "",
+          "description": "Name of an Actions artifact holding rendered policy files AND the channel file (e.g. from alertgen). When set, this replaces alerts_dir as the source: the artifact is downloaded to .alertgen-policies and that becomes ALERTS_DIR. A download failure fails the job.",
+          "required": false,
           "type": "string"
         },
         "policy_glob": {
@@ -56,6 +68,7 @@
       "outputs": {
         "channel_name": "Resolved notification-channel resource name.",
         "policies_created": "Number of alert policies created.",
+        "policies_drifted": "Number of managed policies whose live content has been hand-edited since the last apply (spec_hash unchanged, so not overwritten -- warned only).",
         "policies_failed": "Number of alert policies that failed to apply (the run also exits non-zero).",
         "policies_skipped": "Number of alert policies left untouched because they already existed.",
         "policies_updated": "Number of alert policies updated (force_update only)."
@@ -3224,6 +3237,70 @@
       "secrets": {},
       "workflow": "run-db-job.yml"
     },
+    "service-alerts": {
+      "inputs": {
+        "channel_file": {
+          "default": "infra/alerts/email-channel.yaml",
+          "description": "Notification-channel definition file in the caller repo (same format bootstrap-alerts uses).",
+          "required": false,
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "Plan only: render, check live data, lint, execute the queries, and print what would be created or updated \u2014 without writing anything. Defaults to true; pass false to apply.",
+          "required": false,
+          "type": "boolean"
+        },
+        "force_update": {
+          "default": false,
+          "description": "Rewrite every managed policy even when its spec is unchanged \u2014 resets hand edits the run reported as drift. Hand-written policies are never touched.",
+          "required": false,
+          "type": "boolean"
+        },
+        "gcp_project": {
+          "default": null,
+          "description": "GCP project id the alert policies belong to.",
+          "required": true,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "Service account email to impersonate via WIF. Needs roles/monitoring.editor.",
+          "required": true,
+          "type": "string"
+        },
+        "spec_file": {
+          "default": "infra/alerts/alerts.yaml",
+          "description": "AlertSpec file in the caller repo.",
+          "required": false,
+          "type": "string"
+        },
+        "wif_provider": {
+          "default": null,
+          "description": "Workload Identity Federation provider resource name, e.g. projects/123456789/locations/global/workloadIdentityPools/POOL/providers/PROVIDER",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "alerts": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Service alerts from an AlertSpec (reusable)",
+      "outputs": {
+        "policies_created": "Number of policies created (or that would be, under dry_run).",
+        "policies_drifted": "Number of managed policies hand-edited since the last apply (warned, not overwritten).",
+        "policies_rendered": "Number of alert policies rendered from the spec.",
+        "policies_unchanged": "Number of policies already matching the spec.",
+        "policies_updated": "Number of managed policies updated because their spec changed (or that would be).",
+        "spec_hash": "Hash over every rendered policy; names the uploaded artifact."
+      },
+      "path": ".github/workflows/service-alerts.yml",
+      "secrets": {},
+      "workflow": "service-alerts.yml"
+    },
     "sync-bundle-key": {
       "inputs": {
         "bundle_secret": {
@@ -3331,6 +3408,12 @@
         "gcp_project": {
           "default": "",
           "description": "GCP project to run MQL validation against. Leave empty to skip layer 2 and run the offline lint only (no credentials required).",
+          "required": false,
+          "type": "string"
+        },
+        "policies_artifact": {
+          "default": "",
+          "description": "Name of an Actions artifact holding rendered policy files AND the channel file (e.g. from alertgen). When set, this replaces alerts_dir as the source: the artifact is downloaded to .alertgen-policies and that becomes ALERTS_DIR. A download failure fails the job.",
           "required": false,
           "type": "string"
         },

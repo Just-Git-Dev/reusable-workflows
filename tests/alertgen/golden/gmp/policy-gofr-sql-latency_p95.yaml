@@ -1,0 +1,45 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    duration: 600s
+    evaluationInterval: 60s
+    query: histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"api|issuer"}[10m])))
+      > 500 and sum by (job) (increase(app_sql_stats_count{job=~"api|issuer"}[10m]))
+      >= 20
+  displayName: SQL p95 query time is high (api, issuer)
+displayName: SQL p95 query time is high (api, issuer) [gofr.sql.latency_p95]
+documentation:
+  content: '**SQL p95 query time is high** — services: api, issuer.
+
+
+    The 95th-percentile SQL query time is above the threshold. Group app_sql_stats
+    by type to see which statement kind is slow, then check the database''s own load,
+    locks and connection limits, and whether a recent migration dropped an index.
+
+
+    - Rule: `gofr.sql.latency_p95` (pack `gofr-sql`, catalog 1.0.0)
+
+    - Condition: > 500ms (compared as 500), over 10m, for 10m, only with at least
+    20 requests in the window
+
+    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"api|issuer"}[10m])))
+    > 500 and sum by (job) (increase(app_sql_stats_count{job=~"api|issuer"}[10m]))
+    >= 20`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `gofr-sql-latency_p95`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: WARNING
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: gofr-sql-latency_p95
+  spec_hash: f68a9984f274096b

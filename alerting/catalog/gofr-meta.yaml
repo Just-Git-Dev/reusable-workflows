@@ -1,0 +1,21 @@
+# Is GoFr's own telemetry alive? Cloud Run is serving traffic but GoFr exports
+# no HTTP metrics — the failure mode of gofr#4266, where every GoFr rule goes
+# silently blind. Verified on history: fires on the 2026-09-22 broken window,
+# empty after the fix. GCP-only (it joins Cloud Run's metric to GoFr's).
+pack: gofr-meta
+platforms: [gmp]
+rules:
+  - id: gofr.metrics.silent_while_serving
+    kind: silent_while_serving
+    metric: cloudrun.request_count
+    exporter: gofr.http_response
+    window: 30m
+    for: 30m
+    severity: ticket
+    signal: Cloud Run is serving traffic but GoFr exports no HTTP metrics
+    summary: GoFr metrics are silent while the service serves traffic
+    triage: >-
+      Cloud Run counted requests to this service but GoFr exported no HTTP metrics for it, so
+      every GoFr-based alert is blind. Check the service's logs for OTLP export errors, the
+      METRICS_* env vars on the current revision, and whether APP_NAME still matches the
+      Cloud Run service name (the job label must equal service_name).

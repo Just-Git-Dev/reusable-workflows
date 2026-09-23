@@ -7,6 +7,11 @@ It exists because of an RCA: five latent bugs in one policy set were found only 
 the apply loop against the live project — each an `INVALID_ARGUMENT` that a human fixed and
 re-ran, one at a time. This moves that discovery to the PR.
 
+[`service-alerts.yml`](service-alerts.md) (an app-facing wrapper around a spec-driven policy
+generator, "alertgen") renders policy files and hands them to this workflow via
+`policies_artifact` rather than a checked-in `alerts_dir` — everything below applies
+unchanged once the files land on disk, whichever way they got there.
+
 ## Why not `--validate-only`
 
 **The Monitoring API has no such mode.** `projects.alertPolicies.create` in the v3 discovery
@@ -89,6 +94,7 @@ past is a gate someone disables.
 | `gcp_project` | no | `''` | set to enable layer 2; empty = offline lint only |
 | `wif_provider` | no | `''` | required when `gcp_project` is set |
 | `service_account` | no | `''` | required when `gcp_project` is set |
+| `policies_artifact` | no | `''` | name of an Actions artifact holding rendered policy files + the channel file; when set it replaces `alerts_dir` as the source, downloaded to `.alertgen-policies` (a download failure fails the job) |
 
 ## Outputs
 

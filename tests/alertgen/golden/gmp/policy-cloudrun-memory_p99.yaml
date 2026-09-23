@@ -1,0 +1,43 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    duration: 600s
+    evaluationInterval: 60s
+    query: histogram_quantile(0.99, sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+      > 0.85
+  displayName: Cloud Run memory utilisation is near the limit (api, issuer)
+displayName: Cloud Run memory utilisation is near the limit (api, issuer) [cloudrun.memory_p99]
+documentation:
+  content: '**Cloud Run memory utilisation is near the limit** — services: api, issuer.
+
+
+    Container memory is close to the configured limit; past it Cloud Run kills the
+    instance and in-flight requests fail. Check for a leak (memory climbing between
+    deploys) or a traffic spike, and raise the memory limit only after ruling out
+    a leak.
+
+
+    - Rule: `cloudrun.memory_p99` (pack `cloudrun`, catalog 1.0.0)
+
+    - Condition: > 85% (compared as 0.85), over 10m, for 10m
+
+    - Query: `histogram_quantile(0.99, sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+    > 0.85`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `cloudrun-memory_p99`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: WARNING
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: cloudrun-memory_p99
+  spec_hash: 4c2be98ae0a1e113

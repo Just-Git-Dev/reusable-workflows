@@ -1,0 +1,47 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    duration: 1800s
+    evaluationInterval: 60s
+    query: label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[30m])),
+      "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"api|issuer"}[30m]))
+      > 0
+  displayName: GoFr metrics are silent while the service serves traffic (api, issuer)
+displayName: GoFr metrics are silent while the service serves traffic (api, issuer)
+  [gofr.metrics.silent_while_serving]
+documentation:
+  content: '**GoFr metrics are silent while the service serves traffic** — services:
+    api, issuer.
+
+
+    Cloud Run counted requests to this service but GoFr exported no HTTP metrics for
+    it, so every GoFr-based alert is blind. Check the service''s logs for OTLP export
+    errors, the METRICS_* env vars on the current revision, and whether APP_NAME still
+    matches the Cloud Run service name (the job label must equal service_name).
+
+
+    - Rule: `gofr.metrics.silent_while_serving` (pack `gofr-meta`, catalog 1.0.0)
+
+    - Condition: over 30m, for 30m
+
+    - Query: `label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[30m])),
+    "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"api|issuer"}[30m]))
+    > 0`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `gofr-metrics-silent_while_serving`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: WARNING
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: gofr-metrics-silent_while_serving
+  spec_hash: 3fe86c56bb8c85c0

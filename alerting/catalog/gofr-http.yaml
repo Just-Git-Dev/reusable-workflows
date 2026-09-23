@@ -1,0 +1,40 @@
+# GoFr HTTP server metrics (app_http_response, seconds; labels path/method/status).
+# The anchor is GoFr's own documented example rule (5xx > 5% for 10m).
+pack: gofr-http
+platforms: [gmp, prometheus]
+rules:
+  - id: gofr.http.server.error_ratio
+    kind: error_ratio
+    metric: gofr.http_response
+    filters: {path: {not_regex: "/\\.well-known/.*"}}
+    bad: {status: {regex: "5.."}}
+    window: 10m
+    op: ">"
+    threshold: 5%
+    for: 10m
+    min_requests: 20
+    severity: page
+    signal: GoFr HTTP 5xx / all responses, per service
+    summary: HTTP 5xx ratio is high
+    triage: >-
+      More than the threshold share of HTTP responses from this GoFr service were 5xx.
+      Group the app_http_response metric by path to find the failing route, then read the
+      service's ERROR logs for it and check the latest deploy and the database.
+
+  - id: gofr.http.server.latency_p95
+    kind: latency_quantile
+    metric: gofr.http_response
+    filters: {path: {not_regex: "/\\.well-known/.*"}}
+    quantile: 0.95
+    window: 10m
+    op: ">"
+    threshold: 2s
+    for: 10m
+    min_requests: 20
+    severity: ticket
+    signal: GoFr HTTP p95 response time
+    summary: HTTP p95 latency is high
+    triage: >-
+      The service's own 95th-percentile response time is above the threshold. Group
+      app_http_response by path to find the slow route, then check SQL and Redis latency
+      (gofr-sql / gofr-redis) and outbound calls before suspecting the service itself.

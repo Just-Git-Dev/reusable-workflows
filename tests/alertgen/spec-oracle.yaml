@@ -1,0 +1,4 @@
+# Rendered with --oracle and executed by promtool against tests/alertgen/promtool/tests.yaml.
+apiVersion: alertspec/v1
+services: [api]
+packs: [cloudrun, gofr-http, gofr-meta]

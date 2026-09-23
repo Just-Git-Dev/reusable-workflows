@@ -1,0 +1,28 @@
+# The plan's §4 example, used for render checks, conformance and golden files.
+apiVersion: alertspec/v1
+services: [issuer, api]
+packs: [cloudrun, gofr-http, gofr-sql, gofr-meta, gcp-logs]
+overrides:
+  cloudrun.5xx_count:           {threshold: 5, window: 15m}
+  cloudrun.latency_p95:         {threshold: 5s, for: 10m}
+  gofr.http.server.error_ratio: {severity: ticket}
+  gofr.sql.pool_saturation:     {enabled: false}
+  gofr.http.server.latency_p95:
+    services:
+      issuer: {threshold: 4s}
+  logs.error_match:             {filter: 'jsonPayload.message:"neon" AND severity>=ERROR'}
+custom:
+  - id: bff-upstream-errors
+    metric: {name: bff_upstream_error, type: counter}
+    kind: rate
+    filters: {code: {in: ["502", "503"]}}
+    window: 10m
+    op: ">"
+    threshold: 0.1/s
+    for: 10m
+    severity: page
+    summary: BFF upstream 5xx rate is high
+    triage: >-
+      The BFF is getting 502/503 from an upstream. Check which upstream in the logs
+      (jsonPayload.upstream), then that upstream's own dashboard and recent deploys.
+    may_be_absent: true

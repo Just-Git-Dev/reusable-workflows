@@ -1,0 +1,74 @@
+# Cloud Run request / resource signals, read through GMP's PromQL view of the
+# run.googleapis.com metrics. GCP-only. Cloud Run's request_count excludes
+# requests that never reach an instance (auth-layer rejects, the max-instances
+# wall), so these rules see what instances served, not everything clients sent.
+pack: cloudrun
+platforms: [gmp]
+rules:
+  - id: cloudrun.5xx_ratio
+    kind: error_ratio
+    metric: cloudrun.request_count
+    bad: {response_code_class: "5xx"}
+    window: 10m
+    op: ">"
+    threshold: 5%
+    for: 10m
+    min_requests: 20
+    severity: page
+    signal: Cloud Run 5xx / all requests, per service
+    summary: Cloud Run 5xx ratio is high
+    triage: >-
+      More than the threshold share of requests to this Cloud Run service returned 5xx.
+      Check the service's recent revisions (a bad deploy is the usual cause; roll back with
+      rollback-service), then its ERROR logs for the failing path, then its database or
+      upstream dependencies.
+
+  - id: cloudrun.5xx_count
+    kind: count
+    metric: cloudrun.request_count
+    bad: {response_code_class: "5xx"}
+    window: 10m
+    op: ">"
+    threshold: 5
+    for: 0s
+    severity: page
+    enabled: false
+    signal: Cloud Run 5xx count per window (low-traffic services)
+    summary: Cloud Run is returning 5xx responses
+    triage: >-
+      This low-traffic service returned more 5xx responses in the window than the threshold.
+      A ratio alert cannot see this with so few requests. Open the service's ERROR logs for
+      the window and check the latest revision and its dependencies.
+
+  - id: cloudrun.latency_p95
+    kind: latency_quantile
+    metric: cloudrun.request_latencies
+    quantile: 0.95
+    window: 10m
+    op: ">"
+    threshold: 2s
+    for: 10m
+    min_requests: 20
+    severity: ticket
+    signal: Cloud Run p95 request latency
+    summary: Cloud Run p95 latency is high
+    triage: >-
+      The 95th-percentile request latency measured by Cloud Run is above the threshold. Check
+      whether it follows a deploy, then cold starts (instance count rising from zero), then
+      slow database queries or upstream calls in the service's traces and logs.
+
+  - id: cloudrun.memory_p99
+    kind: latency_quantile
+    metric: cloudrun.memory_utilization
+    quantile: 0.99
+    window: 10m
+    op: ">"
+    threshold: 85%
+    for: 10m
+    severity: ticket
+    signal: Cloud Run p99 container memory utilisation
+    summary: Cloud Run memory utilisation is near the limit
+    triage: >-
+      Container memory is close to the configured limit; past it Cloud Run kills the instance
+      and in-flight requests fail. Check for a leak (memory climbing between deploys) or a
+      traffic spike, and raise the memory limit only after ruling out a leak.

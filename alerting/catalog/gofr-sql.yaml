@@ -1,0 +1,37 @@
+# GoFr SQL datasource metrics. app_sql_stats is in MILLISECONDS (GoFr records
+# duration/time.Millisecond); the pool gauges are sampled on a timer.
+pack: gofr-sql
+platforms: [gmp, prometheus]
+rules:
+  - id: gofr.sql.latency_p95
+    kind: latency_quantile
+    metric: gofr.sql_stats
+    quantile: 0.95
+    window: 10m
+    op: ">"
+    threshold: 500ms
+    for: 10m
+    min_requests: 20
+    severity: ticket
+    signal: GoFr SQL p95 query time
+    summary: SQL p95 query time is high
+    triage: >-
+      The 95th-percentile SQL query time is above the threshold. Group app_sql_stats by type
+      to see which statement kind is slow, then check the database's own load, locks and
+      connection limits, and whether a recent migration dropped an index.
+
+  - id: gofr.sql.pool_saturation
+    kind: gauge_ratio
+    metric: gofr.sql_in_use
+    denominator: gofr.sql_open
+    window: 10m
+    op: ">"
+    threshold: 90%
+    for: 10m
+    severity: ticket
+    signal: GoFr SQL connections in use / open
+    summary: SQL connection pool is nearly exhausted
+    triage: >-
+      Almost every open SQL connection is in use, so new queries queue for a connection and
+      requests slow down or time out. Look for long-running queries or transactions that are
+      never closed, then compare the pool size with the database's connection limit.
