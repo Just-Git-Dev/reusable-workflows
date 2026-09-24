@@ -39,10 +39,13 @@ rework. Digests are in `tally-helper/.scratch/minio-digests.txt`, which is scrat
 This is the second MinIO registry break: Traide already moved from Docker Hub to quay earlier
 (`tally-helper/DECISIONS.md`, "minio/mc").
 
-- [ ] **AutoMahn is exposed too — hand it to the AutoMahn session.** Still on Docker Hub
-      `minio/minio:latest` and `minio/mc:latest` (denied): `automahn/api/docker-compose.yml:56`,
-      `automahn/api/scripts/docker-compose.test.yml:114,131`, found with `/usr/bin/grep`. It also
-      uses a curl healthcheck (`:120`) that a distroless swap breaks. Any uncached runner fails.
+- [ ] **AutoMahn is exposed too, locally only — handed to the AutoMahn session 2026-09-24.**
+      Still on Docker Hub `minio/minio:latest` / `minio/mc:latest` (denied) at six refs:
+      `docker-compose.yml:48,65`, `api/docker-compose.yml:56,73`,
+      `api/scripts/docker-compose.test.yml:114,131`. No AutoMahn CI job or deploy pulls MinIO
+      (`api/.github/workflows/lint.yml` mentions it only in a comment; prod uses R2), so what
+      breaks is a fresh `make up` / `make test-all` on an uncached machine. The test compose's curl
+      healthcheck (`:120`) breaks under a distroless swap. The fix is AutoMahn's to make.
 - [ ] **Mirror pinned third-party images into our own registry (GHCR or GAR).** Consumers pull
       from the mirror, so an upstream withdrawal becomes a sync failure rather than an outage.
       Owner to decide on the registry and which images are in scope.
