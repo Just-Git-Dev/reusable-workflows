@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-36 open across 10 live sections. 8 closed items archived.
+39 open across 11 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Third-party images vanish from public registries — MinIO (opened 2026-09-24)](#third-party-images-vanish-from-public-registries--minio-opened-2026-09-24) — 3 open
 - **ACTIVE** — [Service alerts — rollout and deferred slice (opened 2026-09-23)](#service-alerts--rollout-and-deferred-slice-opened-2026-09-23) — 6 open
 - **ACTIVE** — [Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)](#post-deploy-probe--prove-the-observability-pipeline-actually-delivers-opened-2026-09-18) — 1 open, 1 closed
 - **ACTIVE** — [Two items rehomed from the inflight tracker (opened 2026-09-08)](#two-items-rehomed-from-the-inflight-tracker-opened-2026-09-08) — 2 open
@@ -17,6 +18,42 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Third-party images vanish from public registries — MinIO (opened 2026-09-24)
+
+Handed over from the Traide session with the owner's approval. **Filed for fleet triage, not
+started.** Each project fixes its own repos; this section is only about the fleet-wide class.
+
+**Failure class:** a third-party image disappears from its public registry, and every consumer
+pinned to it breaks at the same moment. Local stacks keep working from the image cache, which
+**hides** the breakage on the laptop. Only a clean CI runner or a deploy hits it.
+
+**Verified here, 2026-09-24** (`docker manifest inspect`, exit code per ref):
+`quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` → 1, `quay.io/minio/mc:latest` → 1,
+`minio/minio:latest` (Docker Hub) → 1. Positive control `quay.io/prometheus/prometheus:latest` → 0.
+**Reported by Traide, not re-checked here:** the quay repo API answers 401; Traide's api deploy for
+v0.58.0 failed at its MinIO smoke step, and its CI integration jobs fail at the pull. Traide's
+ruling was Chainguard (`cgr.dev/chainguard/minio`, `…/minio-client`) pinned by digest. Those
+images are distroless (no shell, no curl), so `sh -c` init scripts and curl healthchecks need
+rework. Digests are in `tally-helper/.scratch/minio-digests.txt`, which is scratch and not durable.
+This is the second MinIO registry break: Traide already moved from Docker Hub to quay earlier
+(`tally-helper/DECISIONS.md`, "minio/mc").
+
+- [ ] **AutoMahn is exposed too, locally only — handed to the AutoMahn session 2026-09-24.**
+      Still on Docker Hub `minio/minio:latest` / `minio/mc:latest` (denied) at six refs:
+      `docker-compose.yml:48,65`, `api/docker-compose.yml:56,73`,
+      `api/scripts/docker-compose.test.yml:114,131`. No AutoMahn CI job or deploy pulls MinIO
+      (`api/.github/workflows/lint.yml` mentions it only in a comment; prod uses R2), so what
+      breaks is a fresh `make up` / `make test-all` on an uncached machine. The test compose's curl
+      healthcheck (`:120`) breaks under a distroless swap. The fix is AutoMahn's to make.
+- [ ] **Mirror pinned third-party images into our own registry (GHCR or GAR).** Consumers pull
+      from the mirror, so an upstream withdrawal becomes a sync failure rather than an outage.
+      Owner to decide on the registry and which images are in scope.
+- [ ] **Scheduled probe: every pinned image in the fleet still resolves.** A reusable workflow
+      that greps compose/Dockerfile/workflow refs and runs `docker manifest inspect` on each,
+      with a positive-control ref, so "couldn't check" never reads as "all fine". Same
+      three-outcome shape as `verify-metrics-arrival`. Concrete check per repo today:
+      `/usr/bin/grep -rn "minio/" --include='*.yml' --include='*.yaml' .`, then inspect each hit.
 
 ## Service alerts — rollout and deferred slice (opened 2026-09-23)
 
