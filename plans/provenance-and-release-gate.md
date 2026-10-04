@@ -69,10 +69,10 @@ That fact does real work in §1.3.
 |---|---|
 | No `provenance:`/`sbom:` is set on any build step | **VERIFIED** — `/usr/bin/grep -rn 'provenance\|sbom' .github/workflows/` matches only comments in `cleanup-gar-images.yml:289-294` |
 | Default build platform is single-arch | **VERIFIED** — `deploy-cloud-run.yml:102-106`, `default: 'linux/amd64'` |
-| Pushes today land as an OCI **index** with an `unknown/unknown` attestation child | **VERIFIED as observed behaviour** — `DECISIONS.md:1618-1622` and the Traide RCA (`DECISIONS.md:1620`): *52 untagged versions, 52 child links, zero orphans* |
+| Pushes today land as an OCI **index** with an `unknown/unknown` attestation child | **VERIFIED as observed behaviour** — `DECISIONS.md:1618-1622` and the consumer A RCA (`DECISIONS.md:1620`): *52 untagged versions, 52 child links, zero orphans* |
 | The sweep already keeps children of kept parents and reports the rest | **VERIFIED** — `cleanup-gar-images.yml:531-537` (child of a kept parent joins the keep-set), `:584-594` (only a *surviving, non-doomed* parent blocks), `:653-655` (`blocked_by_parent` reporting) |
 | buildx's default is `provenance=mode=min` on registry push and `sbom=false` | **UNVERIFIED HERE** — from `docker/build-push-action` documentation, not checked against a live build. See §1.6 for the check that settles it |
-| "Cloud Run needs a plain image" (`Realm-ID/issuer#2`, 2026-08-12) | **UNVERIFIED, and contradicted by current operation** — `deploy-cloud-run.yml` sets nothing, so *if* the default is attestations-on, `issuer` and `api` are both running from an index today. The contradiction is exactly as strong as the unverified default above; do not quote either as settled |
+| "Cloud Run needs a plain image" (`<consumer-C-org>/issuer#2`, 2026-08-12) | **UNVERIFIED, and contradicted by current operation** — `deploy-cloud-run.yml` sets nothing, so *if* the default is attestations-on, `issuer` and `api` are both running from an index today. The contradiction is exactly as strong as the unverified default above; do not quote either as settled |
 
 ⚠️ **Do not infer the default from the child count.** One `unknown/unknown` child per platform is
 consistent with provenance-only *and* with provenance+SBOM — buildx puts both in the **same**
@@ -103,7 +103,7 @@ but **asymmetric**, in a way that decides the item:
    **nothing in this platform reads** (§0). There is no `cosign verify-attestation`, no
    `slsa-verifier`, no admission control on Cloud Run or GKE. Its guarantee is currently
    *potential*, not *realised*.
-3. **The tidiness argument is worth much less than when it was written.** The Traide RCA's 52
+3. **The tidiness argument is worth much less than when it was written.** The consumer A RCA's 52
    undeletable manifests were a **sweep bug**, and that bug is fixed (`cleanup-gar-images.yml:531-537`,
    `:584-594`). What remains is per-sweep registry-API cost (one v2 manifest GET per artifact,
    8-way pool, `cleanup-gar-images.yml:343-346`) and reporting noise.
@@ -158,7 +158,7 @@ Why C over the alternatives:
 - **Over D (`attest-build-provenance`):** D is the only option that makes the guarantee *real*
   (signed, with a verifier that ships in `gh`), and it is where this should eventually go. It is
   **not** recommended now because of a plan constraint: GitHub artifact attestations are
-  available for public repos and for private repos on paid plans. `Traide-Co` and `AutoMahn` are
+  available for public repos and for private repos on paid plans. `<consumer-A-org>` and `consumer B` are
   **free** (ruling in the brief; `Just-Git-Dev` itself measured free — §2.1), and their app repos
   are private, so a reusable that unconditionally attests would fail for two of three orgs. D is
   reachable *from* C by flipping an input, which is the point of C.
@@ -173,7 +173,7 @@ inputs exist so option D is a one-line change per repo when the plan constraint 
 ### 1.6 The check that settles the unverified default — ✅ RUN 2026-09-15, DEFAULT CONFIRMED
 
 **Settled empirically against a live artifact**, not from buildx's documentation. Subject:
-`asia-southeast1-docker.pkg.dev/realm-id/backend/api:v0.124.0`.
+`asia-southeast1-docker.pkg.dev/<consumer-C-project-id>/backend/api:v0.124.0`.
 
 1. The release tag names an **OCI index** (`application/vnd.oci.image.index.v1+json`) with two
    children: `linux/amd64`, and one `unknown/unknown` carrying
@@ -228,8 +228,8 @@ Queried 2026-09-15 via `gh api` (read-only):
 Rulesets and branch/tag protection are available on free plans **for public repositories**;
 private repos need Team or Enterprise. This repo is public, so the free plan is **not** a blocker
 here — INFERRED from GitHub's documented plan matrix, not tested by creating a ruleset. It *is* a
-blocker for the same pattern in the consumers: `Realm-ID` is `team` (fine), `Traide-Co` and
-`AutoMahn` are `free`, so any private app repo there cannot use rulesets at all. That asymmetry
+blocker for the same pattern in the consumers: `<consumer-C-org>` is `team` (fine), `<consumer-A-org>` and
+`consumer B` are `free`, so any private app repo there cannot use rulesets at all. That asymmetry
 matters for which fallback is portable (§2.4).
 
 ### 2.2 What a ruleset can and cannot gate — the part the whole item rests on
@@ -357,7 +357,7 @@ exist.
 **UNVERIFIED — do not quote as fact:** buildx's exact default (`provenance=mode=min`,
 `sbom=false`) on registry push; that a release publish cannot be a ruleset target; that tag-target
 rulesets offer no status-check rule; that GitHub artifact attestations are unavailable for
-free-plan private repos; and the 2026-08-12 `Realm-ID/issuer#2` claim that Cloud Run requires a
+free-plan private repos; and the 2026-08-12 `<consumer-C-org>/issuer#2` claim that Cloud Run requires a
 plain image (contradicted by current operation, but only as strongly as the buildx-default claim
 it depends on).
 

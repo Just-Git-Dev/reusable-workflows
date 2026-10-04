@@ -1,4 +1,4 @@
-# `validate-alerts.yml` vacuity audit (Item 4b, owed to AutoMahn)
+# `validate-alerts.yml` vacuity audit (Item 4b, owed to consumer B)
 
 Scope: `.github/workflows/validate-alerts.yml` (537 lines), cross-checked against its step-body
 tests in `tests/run_step_tests.py` (~L2183-2600) and the two 2026-09-01 findings in `DECISIONS.md`

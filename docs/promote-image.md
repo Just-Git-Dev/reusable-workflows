@@ -128,7 +128,7 @@ jobs:
 ```yaml
     with:
       gcp_region: asia-southeast1
-      gar_project: realm-id
+      gar_project: <consumer-C-project-id>
       gar_repo: backend
       image_name: bff-api
       source_tag: ${{ github.event.inputs.stage_sha }}

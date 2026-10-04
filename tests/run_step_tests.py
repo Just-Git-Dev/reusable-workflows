@@ -1080,7 +1080,7 @@ def policy_yaml(condition: str, *, name="Test policy", documentation=DOC_OK,
 PROMQL_COND = ("  - displayName: promql\n"
                "    conditionPrometheusQueryLanguage:\n"
                "      query: |\n"
-               "        rate(automahn_reconciler_runs_total{status=\"failed\"}[5m]) > 0\n"
+               "        rate(consumer_reconciler_runs_total{status=\"failed\"}[5m]) > 0\n"
                "      duration: 300s\n")
 
 MQL_COND = ("  - displayName: mql\n"
@@ -1623,7 +1623,7 @@ def main():
 
     # ---- coverage: badges are on by default, so a missing report must not fail
     # a caller who never asked for a gate. Regression from v1.21.0, caught by
-    # Traide-Co/webapp (vitest without --coverage). ----
+    # <consumer-A-org>/webapp (vitest without --coverage). ----
     cov = extract_step(CI_NODE, "node", "Coverage")
     print("\nci-node · Coverage")
 
@@ -1780,7 +1780,7 @@ def main():
     # gcloud's delete is ASYNC: it returns an operation id, then polls that operation
     # resource — and the poll can 403 AFTER the image is already gone. del_one() bucketed
     # any unrecognised stderr as FAIL, so 13 successful deletions failed the nightly job
-    # on realm-id (run 33989209302); all 13 digests were independently confirmed absent.
+    # on <consumer-C-project-id> (run 33989209302); all 13 digests were independently confirmed absent.
     OP_403 = ("PERMISSION_DENIED: Permission denied on operation "
               "projects/p/locations/asia-southeast1/operations/abc123 (or it may not exist)")
     GONE = "NOT_FOUND: Image not found."
@@ -1905,13 +1905,13 @@ def main():
     check("failure names the URL", "https://x.pages.dev/" in r["out"], r["out"])
 
     # The outage case: 200, but the wrong bundle is being served.
-    r = run_smoke_step(smoke, expect='<title>RealmID</title>',
+    r = run_smoke_step(smoke, expect='<title>ConsumerC</title>',
                        bodies=["<div id=\"root\"></div>"], attempts=2)
     check("200 with a missing marker FAILS", r["rc"] == 1, r["out"])
-    check("missing marker is named", "RealmID" in r["out"], r["out"])
+    check("missing marker is named", "ConsumerC" in r["out"], r["out"])
 
-    r = run_smoke_step(smoke, expect='id="root"\n<title>RealmID</title>',
-                       bodies=['<div id="root"></div><title>RealmID</title>'])
+    r = run_smoke_step(smoke, expect='id="root"\n<title>ConsumerC</title>',
+                       bodies=['<div id="root"></div><title>ConsumerC</title>'])
     check("all markers present passes", r["rc"] == 0, r["out"])
 
     r = run_smoke_step(smoke, base="", attempts=1)
@@ -2722,7 +2722,7 @@ def main():
     check("lint passes a well-formed PromQL policy", r["rc"] == 0, r["out"])
     check("lint reports promql_found", r["outputs"].get("promql_found") == "1", r["outputs"])
     check("lint hands the PromQL query to the exec layer",
-          r["promql"] and "automahn_reconciler_runs_total" in r["promql"][0][1], r["promql"])
+          r["promql"] and "consumer_reconciler_runs_total" in r["promql"][0][1], r["promql"])
 
     r = run_alerts_lint_step(lint, {"policy-a.yaml": policy_yaml(MQL_COND),
                                     "policy-b.yaml": policy_yaml(PROMQL_COND)})
@@ -3167,7 +3167,7 @@ def main():
     check("and not as an inability to check", "CANNOT VERIFY" not in r["out"], r["out"])
     check("and it checked every prefix before concluding", len(r["filters"]) == 4, r["filters"])
 
-    # The non-empty prefix is deliberately NOT the first one: on realm-id,
+    # The non-empty prefix is deliberately NOT the first one: on <consumer-C-project-id>,
     # custom. and workload. are both legitimately 0 while prometheus. holds 7.
     r = run_descriptors_step(desc, control=1, prefix_counts={CUSTOM: 3})
     check("one non-empty prefix among four passes", r["rc"] == 0, r["out"])

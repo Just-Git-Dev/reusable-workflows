@@ -89,7 +89,7 @@ WIF, SHA-pin. Runtime ≈ 0, and naïve mapping *regresses* it.
    unscoped `cache-from/to type=gha`; in a matrix, legs evict each other
    (mode=max is per-scope). zopsmart scopes by `svc_name`. **Fixed:** added a
    `cache_scope` input (default `image_name`), wired into cache-from/to.
-   Backward-compatible; benefits every caller (incl. RevvUp).
+   Backward-compatible; benefits every caller (incl. Consumer D).
 
 2. **In-docker build cache (R4).** zopsmart builds on the host (warm `setup-go`
    cache) then a trivial `FROM alpine + COPY main`. `deploy-gke-service` compiles
@@ -140,9 +140,9 @@ these GKE monorepo callers, both libraries are performance peers. The win is
 supply-chain + auth, and the *risk* is losing zopsmart's change-detection/config
 handling — which is why we hardened the reusable set instead of a lift-and-shift.
 
-## 2026-07-14 — Deploy-reusable gaps surfaced by the AutoMahn/Traide-Co caller migration (v1.5.0)
+## 2026-07-14 — Deploy-reusable gaps surfaced by the consumer B/A caller migration (v1.5.0)
 
-**Problem.** Migrating all ~11 AutoMahn + Traide-Co caller repos onto the
+**Problem.** Migrating all ~11 consumer B + <consumer-A-org> caller repos onto the
 reusables (one PR per repo) surfaced four places where a faithful re-expression of
 a caller's existing workflow either lost a capability or introduced a latent bug.
 These are library defects, not caller mistakes, so they belong here — fixed once,
@@ -151,22 +151,22 @@ not worked around 11 times.
 **The four gaps (each confirmed against a real caller, not hypothesised).**
 
 1. **`deploy-cloudflare-pages` had no `ref` input.** Callers with a
-   `workflow_dispatch` "re-deploy tag X" flow (AutoMahn `website`/`admin-ui`,
-   Traide-Co `website`/`webapp`) validated the tag then `checkout`ed it. The
+   `workflow_dispatch` "re-deploy tag X" flow (consumer B `website`/`admin-ui`,
+   <consumer-A-org> `website`/`webapp`) validated the tag then `checkout`ed it. The
    reusable always built the triggering ref, so tag-pinned manual re-deploy was
    silently lost.
 2. **`deploy-cloudflare-pages` had no `build_env` passthrough.** The build step
    `eval`s `build_command` with no way to inject build-time vars, so callers
-   (AutoMahn `admin-ui`/`ui`) had to splice 6 `VITE_*`/`FIREBASE_*` values into
+   (consumer B `admin-ui`/`ui`) had to splice 6 `VITE_*`/`FIREBASE_*` values into
    `build_command` — less isolated than the old `env:` block.
 3. **`deploy-cloud-run` expanded `extra_deploy_flags` unquoted** (`… $EXTRA` with
    a blanket `SC2086` disable). Multiple flags need the word-split, but a *value*
    containing a space (e.g. `--set-env-vars=CORS_ORIGINS=https://a, https://b`)
-   also splits and corrupts argv — a live hazard in Traide-Co `api`.
+   also splits and corrupts argv — a live hazard in <consumer-A-org> `api`.
 4. **`deploy-cloud-run` conflated the image tag with the git checkout ref.** The
    single `image_tag` fed both the Docker tag *and* `checkout.ref`, so you could
    not tag an image `0.1.8` while building git tag `v0.1.8` (checkout would fail).
-   Hit in AutoMahn `image-service`, whose old workflow tagged the un-prefixed
+   Hit in consumer B `image-service`, whose old workflow tagged the un-prefixed
    pyproject version.
 
 **Decision.** Ship four **additive, backward-compatible** inputs as **v1.5.0**
@@ -188,7 +188,7 @@ re-defaulted, so no caller breaks → minor bump. (Contrast: removing
 `extra_deploy_flags` would be major — so it stays.)
 
 **Also in v1.5.0 — `ci-go` golangci-lint-action v8 → v9.3.0.** Wiring golangci-lint
-into AutoMahn/api + Traide-Co/api CI for the first time surfaced two things: (a)
+into <consumer-B-org>/api + <consumer-A-org>/api CI for the first time surfaced two things: (a)
 real pre-existing lint debt (handled in those callers, not here), and (b) a
 `Node.js 20 is deprecated … golangci-lint-action forced to run on Node 24`
 warning — the action wrapper was pinned at v8.0.0 (a node20 action). The *linter*
@@ -199,7 +199,7 @@ install-only, module plugin system) — no config break, so it rides the same mi
 bump. Both the linter-version default (`latest`) and its override input are
 unchanged; this only clears the deprecation on the wrapper.
 
-**Caller follow-ups this unblocks.** The AutoMahn/Traide-Co PRs that inlined
+**Caller follow-ups this unblocks.** The consumer B/A PRs that inlined
 `build_env`, dropped tag re-deploy, or unquoted `extra_deploy_flags` can be
 simplified to the new inputs once v1.5.0 is tagged — noted on each PR. Still
 open: `deploy-cloudflare-worker`, `bootstrap-cf`, `cloud-run-update`,
@@ -278,7 +278,7 @@ reuses already-pinned Google/Docker/Azure actions).
 [docs/convergence-audit.md](docs/convergence-audit.md)) showed that the two
 *most*-duplicated workflows are the two this library deliberately left out in the
 first pass: **Cloud-Run deploy** and **language CI**. ~13 repos hand-roll CI and
-~7 hand-roll a deploy, sharing no code. Separately, RevvUp-AI and quizzing-pro
+~7 hand-roll a deploy, sharing no code. Separately, <consumer-D-org> and quizzing-pro
 deploy through **`zopsmart/workflows@main`** — an external org, a mutable ref that
 mints cloud creds and pushes images.
 
@@ -325,13 +325,13 @@ after the tag is cut.
 
 ## 2026-07-13 — Add `rotate-signing-keypair` (v1.2.0, with `rotate-worker-signing-secret`)
 
-**Problem.** Reviewing AutoMahn's workflows for reuse candidates surfaced
+**Problem.** Reviewing consumer B's workflows for reuse candidates surfaced
 `rotate-jwt-keys.yml`: a scheduled, bespoke ~125-line workflow that generates an
 RS256 keypair + `kid`, writes `JWT_*` into the SM bundle, rolls Cloud Run, and
 disables the old version. Same rotation family as `rotate-worker-signing-secret`,
 and just as copy-pasted-per-app.
 
-**Decision.** Extract it as `rotate-signing-keypair`, generalised past AutoMahn:
+**Decision.** Extract it as `rotate-signing-keypair`, generalised past consumer B:
 the `JWT_*` destination key names, `rsa_bits`, `services_csv`, and project are all
 inputs. Named "signing-keypair" (not "jwt") because it's a generic asymmetric-key
 rotation; the JWT-shaped defaults are just defaults.
@@ -348,32 +348,32 @@ rotation; the JWT-shaped defaults are just defaults.
   standalone. Cost: ~40 lines of SM/roll logic overlapping `sync-bundle-key`.
 - *Grace window?* No. Unlike the HMAC secret, asymmetric JWTs carry a `kid` and
   short-lived tokens churn onto the new key naturally, so the old version is disabled
-  as soon as the roll succeeds — matching AutoMahn's original. Documented the
+  as soon as the roll succeeds — matching consumer B's original. Documented the
   contraindication: a verifier that caches one key with no `kid` selection, or
   long-lived tokens, must NOT use this (needs the two-slot pattern instead).
 
-**Improvements over AutoMahn's inline version** (beyond the standard conventions —
+**Improvements over consumer B's inline version** (beyond the standard conventions —
 SHA-pinned actions, `shell: bash`, `dry_run`, `--limit=1` over `| head -1` to
 survive pipefail): added the **roll-forward rollback** the HMAC workflow uses
-(AutoMahn's JWT one had none, so a failed roll left SM ahead of the running
+(consumer B's JWT one had none, so a failed roll left SM ahead of the running
 revisions), and a real `bootstrap` input replacing the derived-from-state flag.
-Separately noted for the AutoMahn repo: its inline summary claims *"disabled after
+Separately noted for the consumer B repo: its inline summary claims *"disabled after
 30 min grace"* but there is no grace step — stale text the extraction retires.
 
 **Release.** Additive, and ships together with `rotate-worker-signing-secret` in a
 single **v1.2.0** — both are new workflows landing in one PR, and this repo already
 bundles additive changes per minor (v1.1.0 shipped `deploy-cloudflare-pages` plus
-the de-brand and fixes). Two identical tags one commit apart would be noise. AutoMahn
+the de-brand and fixes). Two identical tags one commit apart would be noise. Consumer B
 migration to a thin caller deferred to a follow-up in that repo, alongside the
 `rotate-signing-secret` and `rotate-cloudflare-token` migrations (the reusable
-CF-token workflow already exists at v1.1.0 and is a superset of AutoMahn's inline
+CF-token workflow already exists at v1.1.0 and is a superset of consumer B's inline
 copy, which still carries the `curl -f` error-body-swallow bug the reusable one fixed).
 
 ## 2026-07-13 — Add `rotate-worker-signing-secret` (v1.2.0)
 
 **Problem.** Rotating an HMAC signing secret shared between a Cloudflare Worker
 (which *verifies* signed URLs) and a Cloud Run backend (which *signs* them from an
-SM bundle) is a real ops task — AutoMahn does it quarterly for its `files-cdn`
+SM bundle) is a real ops task — consumer B does it quarterly for its `files-cdn`
 Worker fronting R2 — but it lived as a bespoke ~200-line inline workflow in the app
 repo. Every other app with a Worker-signed-URL scheme would have to re-derive the
 same zero-downtime dance and the same two hard-won failure modes.
@@ -382,7 +382,7 @@ same zero-downtime dance and the same two hard-won failure modes.
 R2: the mechanism (generate → SM bundle write + Cloud Run roll → Worker two-slot
 push → grace → cleanup) is object-storage-agnostic, so it is named
 `rotate-worker-signing-secret`, not `rotate-r2-*`. Verified the contract against
-the consumer before extracting — `automahn-files-cdn`'s Worker verifies PRIMARY
+the consumer before extracting — `<service>-files-cdn`'s Worker verifies PRIMARY
 then falls back to PREVIOUS, and the signed-URL TTL is 10 min (`files.go`), which
 the 900s grace default clears.
 
@@ -395,20 +395,20 @@ the 900s grace default clears.
   that write. Delegating it would force the CF push before the sub-call and the
   grace/disable after, contorting the ordering `sync-bundle-key`'s own contract
   guarantees. Chose standalone; the cost is ~40 duplicated lines of SM/roll logic.
-- *Keep AutoMahn's bootstrap tolerance vs. require the bundle to pre-exist
+- *Keep consumer B's bootstrap tolerance vs. require the bundle to pre-exist
   (`sync-bundle-key`'s stance).* Kept it, as a `bootstrap` input (default `false`):
   when true, a missing bundle / missing services degrade to warnings and grace +
   disable are skipped, so first-run setup doesn't block. Scheduled rotations run
   with `bootstrap: false`.
 
-**Preserved verbatim from AutoMahn's inline version (both learned in production):**
+**Preserved verbatim from consumer B's inline version (both learned in production):**
 
 - **CF calls capture status + body, never `curl -f`** — `-f` swallowed
-  Cloudflare's JSON error body, so a 403 surfaced with no error code (AutoMahn run
+  Cloudflare's JSON error body, so a 403 surfaced with no error code (consumer B run
   28499686263).
 - **Rollback is roll-forward, not disable-`latest`** — `latest` tracks the highest
   version number, so disabling it strands `access latest` and Cloud Run's `:latest`
-  mount (AutoMahn run 28500860707). Revert by adding a fresh version with the prior
+  mount (consumer B run 28500860707). Revert by adding a fresh version with the prior
   content, then disabling the bad one. And it fires *only* when the Cloud Run roll
   didn't succeed — reverting after the signer has moved would break signing.
 
@@ -417,7 +417,7 @@ the 900s grace default clears.
 via `defaults.run`, and a `dry_run` input like every destructive workflow here.
 
 **Release.** Additive (new workflow, no change to existing contracts) → minor bump,
-**v1.2.0**. Migrating AutoMahn's inline workflow to a thin caller is deliberately
+**v1.2.0**. Migrating consumer B's inline workflow to a thin caller is deliberately
 deferred to a follow-up in that repo.
 
 ## 2026-07-10 — Make the library genuinely public: de-brand, harden, release properly

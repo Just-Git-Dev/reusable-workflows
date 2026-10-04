@@ -84,12 +84,12 @@ So the number of policies stays close to the number of rules, not rules × servi
 **Log filters on a GoFr app: never filter on `severity`.** GoFr writes its level as
 `jsonPayload.level` (`"ERROR"`, `"FATAL"`, …) and never sets Cloud Logging's `severity`, so
 every GoFr entry is stored at DEFAULT severity. `severity>=ERROR` silently matches nothing
-the app itself logged. On realm-id, across a 27-hour outage, it matched 0 of 500+ datastore
+the app itself logged. On <consumer-C-project-id>, across a 27-hour outage, it matched 0 of 500+ datastore
 errors; it only caught Cloud Run's own readiness-check messages.
 
 **Don't narrow by `jsonPayload.level` either.** `level="ERROR"` excludes `FATAL`, which is the
 worst entry there is. It also drops a `WARN` where the app downgraded a failure to
-"transient". Of the 500 outage entries RealmID's text filter matched, the breakdown was ERROR
+"transient". Of the 500 outage entries consumer C's text filter matched, the breakdown was ERROR
 493, FATAL 6, WARN 1, so an `AND jsonPayload.level="ERROR"` clause loses the six fatal exits.
 Match the **failure text** instead, as in the example above. Check the filter in Logs
 Explorer against a window where the failure happened (it should match) and a healthy one (it
@@ -101,7 +101,7 @@ is a JSON object with the fields `ip`, `method`, `response`, `response_time`, `u
 `user_agent`, `span_id`, `trace_id` and `start_time`. A substring match such as
 `jsonPayload.message:"GET"` looks correct and silently returns nothing. Address the field
 instead: `jsonPayload.message.response>=500`, `jsonPayload.message.uri:"/login"`. Checked on
-realm-id, 2026-09-23: both forms return entries. For status-code or latency alerts, the metric
+<consumer-C-project-id>, 2026-09-23: both forms return entries. For status-code or latency alerts, the metric
 packs are usually the better tool anyway.
 
 **Service names** follow Cloud Run's rule: lowercase letters, digits and `-`, starting with a

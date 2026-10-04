@@ -113,7 +113,7 @@ def build(rule):
                 f"sum by ({L}) (avg_over_time({den}[{W}])) {op} {T}")
     elif rule.kind == "silent_while_serving":
         # Cloud Run's label is service_name, GoFr's is job; label_replace copies one onto the
-        # other so `unless on (job)` can join them. VERIFIED on realm-id history: returns the
+        # other so `unless on (job)` can join them. VERIFIED on <consumer-C-project-id> history: returns the
         # broken services at 2026-09-22T13:00Z and nothing after the fix.
         ex = rule.exporter
         serving = selector(m, rule.services)

@@ -4,7 +4,7 @@
 
 ## Where this came from
 
-After merging the cleanup-caller cleanup into the three project repos (RI #17, AM #45, TH #149),
+After merging the cleanup-caller cleanup into the three project repos (consumer C #17, consumer B #45, a fourth consumer #149),
 the owner asked what else needs fixing *in this repo*. A survey produced four items. Each claim
 below was verified in this tree on 2026-09-15 — none is taken from `TODO.md` on trust, and two of
 them **contradict** what `TODO.md` currently says.
@@ -17,7 +17,7 @@ them **contradict** what `TODO.md` currently says.
 | 2 | `TODO.md`'s top-ranked 🔴 item rests on a **false premise** | correct the doc | no |
 | 3 | `TODO.md`'s consumer pin inventory is **stale** | refresh with real data | no |
 | 4a | `v1`-alias drift CI guard — unbuilt | write a check + wire to CI | no |
-| 4b | `validate-alerts` vacuity audit (owed to AutoMahn) | audit → findings | only if it finds something |
+| 4b | `validate-alerts` vacuity audit (owed to consumer B) | audit → findings | only if it finds something |
 | 4c | `provenance:`/`sbom:` policy — inherited, not chosen | **a decision** | **YES** |
 | 4d | Release ruleset requiring the tag-push check | repo settings | **YES** (outward-facing) |
 
@@ -111,19 +111,19 @@ v2.7.0` → "version sweep is consistent at v2.7.0 (26 workflows, 49 doc pins)",
 
 ### Item 3 — the consumer pin inventory is stale
 
-`TODO.md` §"Consumer pin inventory" reports AutoMahn's 2026-09-06 numbers ("14 callers across
+`TODO.md` §"Consumer pin inventory" reports consumer B's 2026-09-06 numbers ("14 callers across
 THREE versions", "`cleanup-gar-images.yml:56` still v2.4.0"). Six of those pins moved to `v2.7.0`
 on 2026-09-15 and the section does not know it.
 
 **Real current state**, from this repo's own tool
-(`python3 scripts/fleet_drift.py --orgs Realm-ID,Traide-Co,AutoMahn`), raw JSON saved at
+(`python3 scripts/fleet_drift.py --orgs <consumer-C-org>,<consumer-A-org>,consumer B`), raw JSON saved at
 `../.scratch/fleet.json`:
 
 - **57 caller lines total — 37 STALE, 20 OK, 0 MUTABLE.**
 - Spread `v2.3.1` → `v2.5.0`.
 - **Zero mutable pins** — no caller is on `@main` or `@v1`, so the supply-chain risk that
   motivated the section is not currently live anywhere.
-- Deepest stragglers are on the **deploy path**: `Realm-ID/api` and `Realm-ID/issuer`
+- Deepest stragglers are on the **deploy path**: `<consumer-C-org>/api` and `<consumer-C-org>/issuer`
   `deploy.yml` pin `deploy-cloud-run` and `promote-image` at `v2.3.1`, four minors behind.
 
 Replace the narrative numbers with the tool invocation and the current summary, and say plainly
@@ -147,7 +147,7 @@ a gate that fired correctly and was ignored; the companion failure is a gate tha
 because it could not run. If the `v1` tag or the `v1.x` series cannot be resolved, that is a
 failure, not a skip. Give it a `--self-test` so it is not passing vacuously.
 
-## Item 4b — `validate-alerts` vacuity audit (owed to AutoMahn)
+## Item 4b — `validate-alerts` vacuity audit (owed to consumer B)
 
 `TODO.md` §"Two items rehomed", second bullet. The linter's checks were reviewed for MQL
 execution (closed 2026-09-01) but **not** for two classes it may pass vacuously:
@@ -196,7 +196,7 @@ cross-repo probe finding below, which is currently recorded nowhere git-backed.
 ## The probe finding (record in `DECISIONS.md`, wave 2)
 
 **`uses: ./actions/x` inside a reusable workflow called cross-repo resolves against the CALLER's
-workspace, not the workflow's own repo.** Probe run `Realm-ID/project` 34952087036:
+workspace, not the workflow's own repo.** Probe run `<consumer-C-org>/project` 34952087036:
 `Can't find 'action.yml' … under '/home/runner/work/project/project/actions/probe'`.
 A remote SHA-pinned `Just-Git-Dev/reusable-workflows/actions/x@<40-hex>` **does** work with no
 checkout (run 34952240998). This is why the 2026-09-15 composite-action refactor was abandoned in

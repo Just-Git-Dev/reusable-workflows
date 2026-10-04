@@ -122,7 +122,7 @@ jobs:
   deploy:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.10.0
     with:
-      gcp_project: realm-id
+      gcp_project: <consumer-C-project-id>
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_RELEASER_SA }}
       gar_repo: backend
@@ -138,17 +138,17 @@ value with a space or comma is safe:
 
 ```yaml
     with:
-      gcp_project: auto-mahn
+      gcp_project: <consumer-B-project-id>
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_RELEASER_SA }}
       gar_repo: backend
       image_name: image-service
-      service: automahn-image-service
+      service: <service>-image-service
       deploy_mode: deploy
       deploy_flags: |
         --allow-unauthenticated
         --ingress=all
-        --set-env-vars=JWT_ISSUER=automahn,JWT_AUDIENCE=automahn-api
+        --set-env-vars=JWT_ISSUER=<issuer>,JWT_AUDIENCE=<service>-api
         --set-env-vars=^@^CORS_ORIGINS=https://a.example, https://b.example
 ```
 
@@ -163,12 +163,12 @@ the image is tagged independently:
 
 ```yaml
     with:
-      gcp_project: auto-mahn
+      gcp_project: <consumer-B-project-id>
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_RELEASER_SA }}
       gar_repo: backend
       image_name: image-service
-      service: automahn-image-service
+      service: <service>-image-service
       image_tag: '0.1.8'                    # image gets :0.1.8
       checkout_ref: ${{ github.ref_name }}  # but build this git ref (e.g. v0.1.8)
       require_semver: false                 # 0.1.8 is not vX.Y.Z

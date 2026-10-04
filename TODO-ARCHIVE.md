@@ -85,8 +85,8 @@ state only — both files are greppable. Nothing here is open work.
       fallback. Rode along with the `keep_tags` change — same file, same feature area.
 
 - [x] **13 of 15 fleet call sites are still pinned `@v2.0.0`.** Done 2026-08-13 — all 15
-      repinned to `@v2.1.2` across 6 repos (Realm-ID/{issuer, ui, project},
-      Traide-Co/{project, website, webapp}), all merged. `fleet_drift.py` now reports
+      repinned to `@v2.1.2` across 6 repos (<consumer-C-org>/{issuer, ui, project},
+      <consumer-A-org>/{project, website, webapp}), all merged. `fleet_drift.py` now reports
       15/15 at latest, zero stale, zero mutable. See DECISIONS.md 2026-08-13.
 
 ## `DECISIONS.md` index anchors (found 2026-09-13)

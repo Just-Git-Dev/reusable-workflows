@@ -38,7 +38,7 @@ not why.
 > **Make sure your task actually logs to stdout/stderr.** A batch binary wired to a
 > discarded logger produces a failed execution with an empty log — indistinguishable
 > from a silent crash, and expensive to debug. This has bitten a caller before
-> (`AutoMahn/api` v0.0.7, ~1h lost to a silent `migrate` exit).
+> (`<consumer-B-org>/api` v0.0.7, ~1h lost to a silent `migrate` exit).
 
 ## Ordering is the caller's job
 
@@ -120,7 +120,7 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v2.10.0
     with:
       build_only: true
-      gcp_project: auto-mahn
+      gcp_project: <consumer-B-project-id>
       gar_repo: backend
       image_name: app
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -133,11 +133,11 @@ jobs:
       contents: read
       id-token: write
     with:
-      gcp_project: auto-mahn
-      job: automahn-migrate
+      gcp_project: <consumer-B-project-id>
+      job: <service>-migrate
       image: ${{ needs.build.outputs.image }}
       args: migrate
-      runtime_service_account: automahn-api-run@auto-mahn.iam.gserviceaccount.com
+      runtime_service_account: <service>-api-run@<consumer-B-project-id>.iam.gserviceaccount.com
       env_vars: ^|^APP_ENV=prod|CMD_LOGS_FILE=/dev/stderr|DB_HOST=${{ vars.DB_HOST }}
       set_secrets: /app/configs/.prod.env=app-secrets:latest
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -160,7 +160,7 @@ migration runner is a no-op on nothing-pending.
   nightly-reconcile:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/run-db-job.yml@v2.10.0
     with:
-      gcp_project: auto-mahn
+      gcp_project: <consumer-B-project-id>
       job: nightly-reconcile
       image: ${{ needs.build.outputs.image }}
       args: reconcile

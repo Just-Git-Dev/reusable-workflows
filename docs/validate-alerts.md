@@ -73,7 +73,7 @@ that (added 2026-09-07):
 **What this deliberately does NOT check.** Whether a *condition* deserves to page at all is a
 human review call and stays one — a linter cannot know that a 401 on an unauthenticated route
 is the expected behaviour rather than an incident. That judgement produced the deletion of
-`auth_bearerless_reject` on RealmID, and no rule here would have caught it. Two review
+`auth_bearerless_reject` on consumer C, and no rule here would have caught it. Two review
 questions worth asking that this gate cannot:
 
 - **Would the responder do something different at 03:00 because this fired?** If the answer is

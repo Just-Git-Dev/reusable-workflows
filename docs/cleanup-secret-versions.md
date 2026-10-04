@@ -166,10 +166,10 @@ jobs:
       contents: read
       id-token: write
     with:
-      gcp_project:     auto-mahn
+      gcp_project:     <consumer-B-project-id>
       gcp_region:      asia-southeast1
       wif_provider:    projects/750513647348/locations/global/workloadIdentityPools/github-actions/providers/github
-      service_account: github-cleaner@auto-mahn.iam.gserviceaccount.com
+      service_account: github-cleaner@<consumer-B-project-id>.iam.gserviceaccount.com
       secrets_list:    app-secrets
       dry_run:         ${{ github.event_name == 'schedule' || inputs.dry_run }}
       enable_destroy:  ${{ github.event_name != 'schedule' && inputs.enable_destroy }}
