@@ -1,13 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-42 open across 13 live sections. 8 closed items archived.
+43 open across 13 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 1 open
+- **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
 - **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
 - **ACTIVE** — [Third-party images vanish from public registries — MinIO (opened 2026-09-24)](#third-party-images-vanish-from-public-registries--minio-opened-2026-09-24) — 3 open
 - **ACTIVE** — [Service alerts — rollout and deferred slice (opened 2026-09-23)](#service-alerts--rollout-and-deferred-slice-opened-2026-09-23) — 6 open
@@ -37,16 +37,31 @@ reads the fixed folder `./configs` — `.env` first, then overlays `.<APP_ENV>.e
 when `APP_ENV` is unset); process env beats both. A Cloud Run secret volume mounted at
 `/app/configs/.env` replaces the whole `/app/configs` directory, hiding anything baked there.
 
-- [ ] **Pilot the approved single-source layout on one service, then decide the fleet standard.**
-      Approved 2026-10-04: a committed `configs/.env` holding only shared, non-secret values is
-      **baked into the image**; the deploy workflow keeps passing only prod-specific values (no
-      deploy-time builder); the secrets bundle moves from `/app/configs/.env` to
-      `/secrets/app.env`, loaded with `godotenv.Load` before `gofr.New()` so it lands as process
-      env; a pre-push drift script fails on a shared key re-typed in compose or the workflow, or a
-      secret-looking name in `configs/.env`; after the first deploy, read the live env back from
-      Cloud Run. Pilot in progress; close this once its read-back is in, then roll to the second
-      service. Open: whether anything here belongs in a reusable workflow (it would be an input
-      contract change).
+- [x] **Pilot the approved single-source layout on one service.** Approved 2026-10-04: a committed
+      `configs/.env` holding only shared, non-secret values is **baked into the image**; the deploy
+      workflow keeps passing only prod-specific values (no deploy-time builder); the secrets bundle
+      moves from `/app/configs/.env` to `/secrets/app.env`, loaded with `godotenv.Load` before
+      `gofr.New()` so it lands as process env; a pre-push drift check fails on a shared key
+      re-typed in compose or the workflow, or a secret-looking name in `configs/.env`.
+      **Shipped on consumer A, 2026-10-04.** Read back here from the live service the same day: the
+      only secret mount is `/secrets`, deploy-time env went 27 → 20 keys with no shared key left,
+      and a live CORS preflight returns the baked values (credentials `true`, max-age `86400`).
+      Lessons the pilot added (now in the GoFr skill the fleet's sessions use): `configs/.env.*`
+      does not match `configs/.local.env`, so ignore it explicitly in `.gitignore` and
+      `.dockerignore`; every workflow that re-applies the bundle mount must move with it, because
+      `--update-secrets` adds a mount path and never removes one; a boot sentinel key that exists
+      only in the baked file makes a re-hidden `configs/` fail at boot instead of silently dropping
+      CORS; anything that runs the bare binary from a checkout now reads the committed
+      `HTTP_PORT`, not GoFr's default 8000.
+- [ ] **Roll the layout to the second service (consumer B) after its go-live**, carrying the
+      lessons above. Then decide whether it is the fleet standard for every GoFr service.
+- [ ] **Three reusable workflows default `mount_path` into the directory the layout must keep
+      clear.** `rotate-signing-keypair`, `rotate-worker-signing-secret` and `sync-bundle-key`
+      default `mount_path` to `/app/configs/.prod.env`. A service on the new layout that calls one
+      without overriding it gets the bundle re-mounted over `/app/configs` (and `--update-secrets`
+      never removes it), hiding the baked `.env` again. Changing the default is an input-contract
+      change, which means a major version. Until that is decided, the docs for all three should
+      tell callers on the new layout to pass `mount_path: /secrets/app.env`.
 
 ## Pre-commit gates that check the wrong thing (opened 2026-09-27)
 
