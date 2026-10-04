@@ -1,12 +1,14 @@
 # TODO — reusable-workflows
 
 ## Index
-39 open across 11 live sections. 8 closed items archived.
+42 open across 13 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 1 open
+- **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
 - **ACTIVE** — [Third-party images vanish from public registries — MinIO (opened 2026-09-24)](#third-party-images-vanish-from-public-registries--minio-opened-2026-09-24) — 3 open
 - **ACTIVE** — [Service alerts — rollout and deferred slice (opened 2026-09-23)](#service-alerts--rollout-and-deferred-slice-opened-2026-09-23) — 6 open
 - **ACTIVE** — [Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)](#post-deploy-probe--prove-the-observability-pipeline-actually-delivers-opened-2026-09-18) — 1 open, 1 closed
@@ -18,6 +20,55 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)
+
+Filed for fleet triage with the owner's approval. Seen in two consumer services so far.
+
+**Failure class:** a service's non-secret env settings are hand-typed twice — in the local
+docker-compose `environment:` block and in the deploy workflow's `--set-env-vars` string. Nothing
+keeps them in step, and drift fails silently: the app just behaves differently locally vs prod.
+Observed: CORS keys (`ACCESS_CONTROL_MAX_AGE`, `ACCESS_CONTROL_ALLOW_CREDENTIALS`) set only in
+prod, so local Chrome re-sent the preflight every ~5 s; mis-named DB pool keys. In one service the
+deploy step typed 27 keys, 12 of them absent from the local config.
+
+**GoFr facts that shape the fix** (`pkg/gofr/config/godotenv.go`, identical v1.59 → v1.61): GoFr
+reads the fixed folder `./configs` — `.env` first, then overlays `.<APP_ENV>.env` (or `.local.env`
+when `APP_ENV` is unset); process env beats both. A Cloud Run secret volume mounted at
+`/app/configs/.env` replaces the whole `/app/configs` directory, hiding anything baked there.
+
+- [ ] **Pilot the approved single-source layout on one service, then decide the fleet standard.**
+      Approved 2026-10-04: a committed `configs/.env` holding only shared, non-secret values is
+      **baked into the image**; the deploy workflow keeps passing only prod-specific values (no
+      deploy-time builder); the secrets bundle moves from `/app/configs/.env` to
+      `/secrets/app.env`, loaded with `godotenv.Load` before `gofr.New()` so it lands as process
+      env; a pre-push drift script fails on a shared key re-typed in compose or the workflow, or a
+      secret-looking name in `configs/.env`; after the first deploy, read the live env back from
+      Cloud Run. Pilot in progress; close this once its read-back is in, then roll to the second
+      service. Open: whether anything here belongs in a reusable workflow (it would be an input
+      contract change).
+
+## Pre-commit gates that check the wrong thing (opened 2026-09-27)
+
+Filed for fleet triage with the owner's approval. **Not started.** Every item below was
+**reported by one consumer project and not re-checked here**. Each project fixes its own hooks;
+this section is only about the classes, which any repo with local gates can hit.
+
+- [ ] **A gate that reads a neighbouring working tree instead of what is being committed.** An api
+      pre-commit coverage check read the live sibling `../ui` tree, not committed ui content. So a
+      parallel agent's uncommitted ui edits can fail an api commit, or let a wrong one pass. Fleet
+      question: do other repos' gates read sibling clones? The fix shape is to read the committed
+      tree (`git show <ref>:<path>`) or refuse to run on a dirty one.
+- [ ] **The pre-commit tier doesn't include the tier that catches cross-layer breaks.** An api
+      commit broke 6 integration tests and passed its commit hook, because the hook skips the
+      integration suite on some paths. Fleet question: which tier must a commit gate include, and
+      what catches the rest before push?
+- [ ] **Flaky or false-positive guards.** Each one teaches agents to retry or work around a gate.
+      (a) A GoFr lint rule flags `RETURNING id` on valid code. (b) A ui visual check's
+      `.run-started-at` marker races between concurrent runs. (c) A route-registration edit hook
+      gives false positives. (d) An api pre-commit once exited rc=1 after printing "checks
+      passed", and an identical retry succeeded (unexplained). (a) and (c) may be shared
+      developer-tooling guards rather than the project's own; check before assigning an owner.
 
 ## Third-party images vanish from public registries — MinIO (opened 2026-09-24)
 
