@@ -1,12 +1,14 @@
 # TODO — reusable-workflows
 
 ## Index
-39 open across 11 live sections. 8 closed items archived.
+42 open across 13 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 1 open
+- **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
 - **ACTIVE** — [Third-party images vanish from public registries — MinIO (opened 2026-09-24)](#third-party-images-vanish-from-public-registries--minio-opened-2026-09-24) — 3 open
 - **ACTIVE** — [Service alerts — rollout and deferred slice (opened 2026-09-23)](#service-alerts--rollout-and-deferred-slice-opened-2026-09-23) — 6 open
 - **ACTIVE** — [Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)](#post-deploy-probe--prove-the-observability-pipeline-actually-delivers-opened-2026-09-18) — 1 open, 1 closed
@@ -18,6 +20,71 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)
+
+Handed over from the AutoMahn session with the owner's approval. **Filed for fleet triage, not
+started.** AutoMahn's own fix is ruled for after its go-live (AutoMahn root `DECISIONS.md` (ew),
+its `TODO.md`); the open question here is only whether this becomes a fleet standard.
+
+**Failure class:** a service's non-secret env settings are hand-typed twice — in the local
+docker-compose `environment:` block and in the deploy workflow's `--set-env-vars` string. Nothing
+keeps them in step, and drift fails silently: the app just behaves differently locally vs prod.
+
+**Reported by AutoMahn, not re-checked here:** (eo) DB pool env names wrong; (eu)
+`ACCESS_CONTROL_MAX_AGE` set in prod but not locally, so local Chrome re-sent the CORS preflight
+every ~5 s; (ew) `ACCESS_CONTROL_ALLOW_CREDENTIALS` also prod-only. **Checked here 2026-10-04:**
+`api/Dockerfile:104-107` confirms GoFr reads only `./configs` and the Cloud Run secret mount
+replaces `/app/configs` — so a shared env file baked into the image is NOT a fix for GoFr
+services. Also checked: `api/.github/workflows/deploy.yml:417` is one `--set-env-vars` string
+holding ORIGIN, HEADERS, CREDENTIALS and `MAX_AGE=86400`. Local compose gained MAX_AGE (root
+251a992 / api ec8c80d4) and ALLOW_CREDENTIALS (root f797d6a / api a4862a6c) on 2026-10-04;
+before those, both were prod-only (SHAs reported by AutoMahn).
+
+- [ ] **Decide whether a single source of non-secret env becomes a fleet standard.** Proposed
+      shape: one committed non-secret `shared.env` per service; compose loads it via `env_file:`
+      (only truly local values inline); the deploy workflow builds `--set-env-vars` from it plus
+      env-specific vars; a drift-check script in the repo's pre-push gate (not a new Actions job)
+      fails when a shared key is also hand-typed in compose or the workflow. Open questions:
+      whether the `--set-env-vars` builder belongs in a reusable workflow here (it would be an
+      input contract change), and which other repos (Traide, RealmID) show the same drift.
+      **Owner, 2026-10-04: pilot on Traide first** (not AutoMahn). Checked here the same day:
+      Traide `api/.github/workflows/deploy.yml:526` sets 12 keys absent from local
+      `configs/.env`, incl. `ACCESS_CONTROL_MAX_AGE` / `_ALLOW_CREDENTIALS` — the same class.
+      GoFr (v1.59 = v1.61 `config/godotenv.go`) loads `./configs/.env`, then overloads
+      `.<APP_ENV>.env` (or `.local.env` when APP_ENV is unset), and real env vars beat both —
+      so GoFr's own `.env` can be the committed shared layer; no `shared.env` name is needed.
+      **Approved design (owner, 2026-10-04) supersedes the "proposed shape" above:** committed
+      `configs/.env` (shared, non-secret) is BAKED into the image; the workflow keeps passing only
+      prod-specific vars (no deploy-time builder); the secrets bundle moves from `/app/configs/.env`
+      (which hides the whole dir) to `/secrets/app.env`, loaded by `godotenv.Load` before
+      `gofr.New()`; pre-push drift + secret-name check; post-deploy Cloud Run read-back. Handed to
+      the Traide session (`realmid-sdk-upgrade-redis`) 2026-10-04 to build; pattern documented in
+      `~/.claude/skills/gofr` §7. Close this item once Traide reports the read-back; AutoMahn
+      follows after its go-live.
+
+## Pre-commit gates that check the wrong thing (opened 2026-09-27)
+
+Handed over from the AutoMahn session with the owner's approval. **Filed for fleet triage, not
+started.** Every item below is **reported by AutoMahn, not re-checked here**. Each project fixes its
+own hooks; this section is only about the classes, which any repo with local gates can hit.
+AutoMahn pointers: root `DECISIONS.md` entries (bl)-(bp), `api/.githooks/pre-commit`, `api/scripts/`.
+
+- [ ] **A gate that reads a neighbouring working tree instead of what is being committed.**
+      AutoMahn's api pre-commit `check-workflow-coverage` reads the live `../ui` tree, not
+      committed ui content. So a parallel agent's uncommitted ui edits can fail an api commit, or
+      let a wrong one pass. Fleet question: do other repos' gates read sibling clones? The fix
+      shape is to read the committed tree (`git show <ref>:<path>`) or refuse to run on a dirty one.
+- [ ] **The pre-commit tier doesn't include the tier that catches cross-layer breaks.** AutoMahn
+      api commit `115aabf5` broke 6 integration tests and passed its commit hook, because the hook
+      skips the integration suite on some paths. Fleet question: which tier must a commit gate
+      include, and what catches the rest before push?
+- [ ] **Flaky or false-positive guards.** Each one teaches agents to retry or work around a gate.
+      (a) `gofr-rules.py` flags `RETURNING id` on valid code. (b) The ui visual check's
+      `.run-started-at` marker races between concurrent runs. (c) The route-registration
+      PreToolUse hook gives false positives. (d) api pre-commit once exited rc=1 after printing
+      "checks passed", and an identical retry succeeded (unexplained). (a) and (c) may be global
+      `~/.claude/hooks` guards rather than AutoMahn's; check before assigning an owner.
 
 ## Third-party images vanish from public registries — MinIO (opened 2026-09-24)
 
