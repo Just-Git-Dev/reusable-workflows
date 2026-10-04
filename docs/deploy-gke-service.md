@@ -89,7 +89,7 @@ jobs:
       image_name: worker
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GKE_DEPLOYER_SA }}
-      cluster_project: revvup
+      cluster_project: consumer D
       cluster_name: geo-engine
       cluster_location: asia-southeast1
       namespace: staging

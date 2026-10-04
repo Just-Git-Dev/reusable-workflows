@@ -820,7 +820,7 @@ jobs:
               # operation id back, then POLLS that operation resource — and the poll can
               # fail `PERMISSION_DENIED ... operations/<id> (or it may not exist)` after
               # the image is already gone. Bucketing that as FAIL turned 13 successful
-              # deletions into a red nightly job on realm-id (run 33989209302, 2026-09-04
+              # deletions into a red nightly job on <consumer-C-project-id> (run 33989209302, 2026-09-04
               # and 2026-09-05); all 13 digests were independently confirmed absent.
               #
               # Deliberately STRICT: only an explicit not-found readback counts. A readback

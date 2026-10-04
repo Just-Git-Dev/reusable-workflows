@@ -18,7 +18,7 @@ optimize** here. Scope decision and the resulting build are recorded in
 
 | World | Orgs | Reusable home | Verdict |
 |---|---|---|---|
-| **Just-Git-Dev platform** (Cloud Run + Cloudflare + WIF) | AutoMahn, Realm-ID, Traide-Co, RevvUp-AI, quizzing-pro, zop-mannai, Just-Git-Dev | **this repo** | primary convergence target |
+| **Just-Git-Dev platform** (Cloud Run + Cloudflare + WIF) | Consumer B, <consumer-C-org>, <consumer-A-org>, <consumer-D-org>, quizzing-pro, zop-mannai, Just-Git-Dev | **this repo** | primary convergence target |
 | **Legacy ZopSmart** (GKE + GCR/GAR) | zopsmart | `zopsmart/workflows` (modern) + `zopsmart/zs-workflows` (legacy) | do **not** fold in — separate platform. But it is the thing we want app repos to *leave* (see goal below) |
 | **Zopsmart-HIMS** (OpenAPI spec-lint) | Zopsmart-HIMS | `Zopsmart-HIMS/project` | already converged 40→1; leave in-org |
 
@@ -37,14 +37,14 @@ pass's "kept per-repo" call.
    `neon-backup`/`backup-db` — all pin `@v1`, which CLAUDE.md says never to pin
    new callers to. Move them to `v1.2.0` (the current release).
 3. **Several repos hand-rolled inline copies of workflows that already exist as
-   reusables:** Traide-Co/api `neon-backup.yml`, Traide-Co/project
+   reusables:** <consumer-A-org>/api `neon-backup.yml`, <consumer-A-org>/project
    `rotate-cloudflare-token.yml`, and 8× Cloudflare-Pages deploys.
 4. **The classic "old node / deprecated action" rot lives in legacy zopsmart, not
    the platform.** Platform repos are on node 20/22 and checkout@v4–v6. Their
    real debt is: **no `shell: bash` (no `pipefail`) anywhere**, **no SHA-pinned
    third-party actions**, **gcloud-auth v2/v3 drift**, **wrangler-action v3-vs-v4
    skew**.
-5. **Cross-org supply-chain exposure:** RevvUp-AI and quizzing-pro deploy via
+5. **Cross-org supply-chain exposure:** <consumer-D-org> and quizzing-pro deploy via
    **`zopsmart/workflows@main`** — external org, mutable ref, mints cloud creds
    and pushes images. Retiring this is the goal above.
 
@@ -52,7 +52,7 @@ pass's "kept per-repo" call.
 > bug in `deploy-cloudflare-pages.yml` at `@main` that startup-fails callers.
 > Checked against the actual file — local `==` origin/main, clean, **no `vars.`
 > misuse**. Does not reproduce on current `main`. Do not treat as a live defect;
-> ask the RevvUp caller why they inlined.
+> ask the consumer D caller why they inlined.
 
 ## Per-repo migration assessment (platform)
 
@@ -61,23 +61,23 @@ pass's "kept per-repo" call.
 
 | Repo | n | Migrate to reusable? | Est. improvement | Debt cleaned up |
 |---|---|---|---|---|
-| AutoMahn/api | 8 | Yes — deploy→*new* cloud-run; 2 workers→*new* cf-worker; lint→*new* ci-go; backup-db already (repin) | Maint ~60%; deploy 322s→~200s *est.* (gha cache) | gcloud v2→v3; `shell: bash`; SHA-pin; drop @v1 |
-| AutoMahn/image-service | 1 | Yes — deploy→*new* cloud-run | Maint ~70%; 197s→~130s *est.*; fixes 22% fail | gcloud v2→v3; `shell: bash` |
-| AutoMahn/project | 15 | Mostly — 4 rotate-*→*existing*; 4 bootstrap-cf→*new*; alerts+gar already (repin) | Maint ~50%; reliability (proxy 100%, signing-secret 100%, alerts 86% fail) | `shell: bash`; drop @v1 |
-| AutoMahn/{admin-ui,ui,website} | 4 | Yes — *existing* deploy-cloudflare-pages (3); ui/lint→*new* ci-node | Maint ~65% | wrangler v3-vs-v4 unify |
-| Realm-ID/api | 2 | Yes — ci→*new* ci-go; deploy→*new* cloud-run | Maint ~55%; ci 724s→~300s *est.* | gcloud v2→v3; `shell: bash` |
-| Realm-ID/issuer | 4 | Yes — deploy→*new* cloud-run; seed/botuser→*new* run-db-job; flip-audit stays | Maint ~50%; fixes seed 80%/botuser 50% fail | `shell: bash`; SHA-pin |
-| Realm-ID/project | 6 | Yes — provision-*+scaling→*new* cloud-run-update; test→*new* ci-go; gar already (repin) | Maint ~45%; **test.yml 93% fail / 568s** = #1 problem child | `shell: bash`; gcloud v2→v3; drop @v1 |
-| Realm-ID/{ui,website} | 2 | Yes — *existing* deploy-cloudflare-pages | Maint ~65% | wrangler@v3; `shell: bash` |
-| Realm-ID/{sdk,cli} | 3 | No/low — publish maven/npm, goreleaser single-repo | — | SHA-pin only |
-| Traide-Co/api | 3 | Yes — ci→*new* ci-go; deploy→*new* cloud-run; **neon-backup = stale inline → *existing*** | Maint ~55%; fixes backup 75%, deploy 33% | gcloud v2 drift; `shell: bash` |
-| Traide-Co/project | 5 | Yes — rotate-db-redis + rotate-r2→*existing* sync-bundle-key; bootstrap-cf-dns→*new*; rotate-cf-token+alerts stale/legacy-pin | Maint ~50% | drop @v1; align rotate-cf-token semantics |
-| Traide-Co/{webapp,website} | 3 | Partial — deploy→*existing* pages; ci(node)→*new* ci-node | Maint ~50%; **website 78% fail** | `shell: bash` |
-| Traide-Co/sync | 1 | No — WiX/MSI desktop build | — | SHA-pin only |
-| RevvUp-AI/geo-engine | 12 | Yes — **5 ci→2** (ci-go+ci-node); **6 stage + prod→*new* gke deploy** (retires external @main) | **Maint ~70%** (11→~3); retires cross-org creds risk | SHA-pin; `shell: bash`; kill @main |
-| RevvUp-AI/project | 1 | Yes — *new* gke/helm deploy (cleanest WIF template) | Maint ~40% | pin azure/setup-helm |
-| RevvUp-AI/public-audit-api | 1 | Yes — *new* gke deploy | fixes 33% fail | kill external @main |
-| RevvUp-AI/website | 3 | Partial — pages→*existing*; test→*new* ci-node; branch-guard→*new* util | Maint ~40% | SHA-pin wrangler |
+| <consumer-B-org>/api | 8 | Yes — deploy→*new* cloud-run; 2 workers→*new* cf-worker; lint→*new* ci-go; backup-db already (repin) | Maint ~60%; deploy 322s→~200s *est.* (gha cache) | gcloud v2→v3; `shell: bash`; SHA-pin; drop @v1 |
+| <consumer-B-org>/image-service | 1 | Yes — deploy→*new* cloud-run | Maint ~70%; 197s→~130s *est.*; fixes 22% fail | gcloud v2→v3; `shell: bash` |
+| <consumer-B-org>/project | 15 | Mostly — 4 rotate-*→*existing*; 4 bootstrap-cf→*new*; alerts+gar already (repin) | Maint ~50%; reliability (proxy 100%, signing-secret 100%, alerts 86% fail) | `shell: bash`; drop @v1 |
+| <consumer-B-org>/{admin-ui,ui,website} | 4 | Yes — *existing* deploy-cloudflare-pages (3); ui/lint→*new* ci-node | Maint ~65% | wrangler v3-vs-v4 unify |
+| <consumer-C-org>/api | 2 | Yes — ci→*new* ci-go; deploy→*new* cloud-run | Maint ~55%; ci 724s→~300s *est.* | gcloud v2→v3; `shell: bash` |
+| <consumer-C-org>/issuer | 4 | Yes — deploy→*new* cloud-run; seed/botuser→*new* run-db-job; flip-audit stays | Maint ~50%; fixes seed 80%/botuser 50% fail | `shell: bash`; SHA-pin |
+| <consumer-C-org>/project | 6 | Yes — provision-*+scaling→*new* cloud-run-update; test→*new* ci-go; gar already (repin) | Maint ~45%; **test.yml 93% fail / 568s** = #1 problem child | `shell: bash`; gcloud v2→v3; drop @v1 |
+| <consumer-C-org>/{ui,website} | 2 | Yes — *existing* deploy-cloudflare-pages | Maint ~65% | wrangler@v3; `shell: bash` |
+| <consumer-C-org>/{sdk,cli} | 3 | No/low — publish maven/npm, goreleaser single-repo | — | SHA-pin only |
+| <consumer-A-org>/api | 3 | Yes — ci→*new* ci-go; deploy→*new* cloud-run; **neon-backup = stale inline → *existing*** | Maint ~55%; fixes backup 75%, deploy 33% | gcloud v2 drift; `shell: bash` |
+| <consumer-A-org>/project | 5 | Yes — rotate-db-redis + rotate-r2→*existing* sync-bundle-key; bootstrap-cf-dns→*new*; rotate-cf-token+alerts stale/legacy-pin | Maint ~50% | drop @v1; align rotate-cf-token semantics |
+| <consumer-A-org>/{webapp,website} | 3 | Partial — deploy→*existing* pages; ci(node)→*new* ci-node | Maint ~50%; **website 78% fail** | `shell: bash` |
+| <consumer-A-org>/sync | 1 | No — WiX/MSI desktop build | — | SHA-pin only |
+| <consumer-D-org>/geo-engine | 12 | Yes — **5 ci→2** (ci-go+ci-node); **6 stage + prod→*new* gke deploy** (retires external @main) | **Maint ~70%** (11→~3); retires cross-org creds risk | SHA-pin; `shell: bash`; kill @main |
+| <consumer-D-org>/project | 1 | Yes — *new* gke/helm deploy (cleanest WIF template) | Maint ~40% | pin azure/setup-helm |
+| <consumer-D-org>/public-audit-api | 1 | Yes — *new* gke deploy | fixes 33% fail | kill external @main |
+| <consumer-D-org>/website | 3 | Partial — pages→*existing*; test→*new* ci-node; branch-guard→*new* util | Maint ~40% | SHA-pin wrangler |
 | quizzing-pro/{api,engine,admin-ui,ui} | 4 | Strategic — already DRY on external `zopsmart/workflows@main` (GKE). Converge to JGD gke deploy to drop external @main | Maint low; **risk-retirement high** | node 18→20/22; replace @main |
 | zop-mannai/api | 2 | Yes — 2 inline Java→GKE deploys→*new* gke deploy; **both broken, use stored SA-JSON key** | Maint ~50%; fix broken + move to WIF | **SA-JSON→WIF**; docker-login@v2/setup-gcloud@v2; `shell: bash` |
 | Just-Git-Dev/infra-provisioning | 2 | No — provisioning plane, keyless WIF, modern; ownership split keeps it out | — | none (healthy) |
@@ -89,30 +89,30 @@ Zopsmart-Training/* (training assignments), Zopsmart-HIMS/* (already converged).
 
 | Priority | Reusable | Status | Collapses | Reach |
 |---|---|---|---|---|
-| 1 | `deploy-cloud-run.yml` (build→push→`run deploy`, WIF, gha cache) | 🆕 build | AutoMahn api+image-svc, Realm api+issuer, Traide api | 5 repos / 3 orgs |
-| 2 | `ci-go.yml` + `ci-node.yml` (setup→lint→test, cache, `blocking` input) | 🆕 build | AutoMahn 2, Realm 3, Traide 2, RevvUp 6 | ~13 repos / 4 orgs |
-| 3 | `deploy-cloudflare-pages.yml` | ✅ adopt | AutoMahn 3, Realm 2, Traide 2, RevvUp 1 | 8 callers — quick win |
-| 4 | `sync-bundle-key` / `rotate-signing-keypair` / `rotate-worker-signing-secret` | ✅ adopt | AutoMahn 4, Traide 2 (inline today) | 6 callers |
-| 5 | `deploy-gke-service.yml` (kubectl set-image / helm, WIF) | 🆕 build *(strategic)* | RevvUp 9, quizzing 4, zop-mannai 2 | ~10 repos — retires external @main |
-| 6 | `bootstrap-cf.yml` (DNS/origin-rules/routes) | 🆕 build | AutoMahn 4, Traide 1 | worst failure rates |
-| 7 | `deploy-cloudflare-worker.yml` (`wrangler deploy`) | 🆕 build | AutoMahn 2 | 2 callers |
+| 1 | `deploy-cloud-run.yml` (build→push→`run deploy`, WIF, gha cache) | 🆕 build | Consumer B api+image-svc, Realm api+issuer, consumer A api | 5 repos / 3 orgs |
+| 2 | `ci-go.yml` + `ci-node.yml` (setup→lint→test, cache, `blocking` input) | 🆕 build | Consumer B 2, Realm 3, consumer A 2, consumer D 6 | ~13 repos / 4 orgs |
+| 3 | `deploy-cloudflare-pages.yml` | ✅ adopt | Consumer B 3, Realm 2, consumer A 2, consumer D 1 | 8 callers — quick win |
+| 4 | `sync-bundle-key` / `rotate-signing-keypair` / `rotate-worker-signing-secret` | ✅ adopt | Consumer B 4, consumer A 2 (inline today) | 6 callers |
+| 5 | `deploy-gke-service.yml` (kubectl set-image / helm, WIF) | 🆕 build *(strategic)* | Consumer D 9, quizzing 4, zop-mannai 2 | ~10 repos — retires external @main |
+| 6 | `bootstrap-cf.yml` (DNS/origin-rules/routes) | 🆕 build | Consumer B 4, consumer A 1 | worst failure rates |
+| 7 | `deploy-cloudflare-worker.yml` (`wrangler deploy`) | 🆕 build | Consumer B 2 | 2 callers |
 | 8 | `cloud-run-update.yml` (env/secret/scale) + `run-db-job.yml` (one-shot WIF DB job) | 🆕 build | Realm 4 + 3 | Realm-heavy |
-| 9 | `neon-backup.yml` | ✅ adopt | Traide api (stale inline) | 1 caller |
+| 9 | `neon-backup.yml` | ✅ adopt | Consumer A api (stale inline) | 1 caller |
 
 ## Optimize the existing library (from run data)
 
 | Item | Evidence | Fix |
 |---|---|---|
-| All adopters pin frozen `@v1` | AutoMahn/Realm/Traide callers | repin to `v1.2.0`; documented in each caller PR |
-| `bootstrap-alerts` failing where adopted | AutoMahn 86% (7 runs), Traide 100% (1) | triage the one workflow that has real adoption **before** promoting others |
+| All adopters pin frozen `@v1` | Consumer B/C/A callers | repin to `v1.2.0`; documented in each caller PR |
+| `bootstrap-alerts` failing where adopted | Consumer B 86% (7 runs), consumer A 100% (1) | triage the one workflow that has real adoption **before** promoting others |
 | No `ci-*`/`deploy-*` in library | 13+ hand-roll CI, 7 deploy | build catalog items 1, 2, 5 |
-| CF-Pages callers failing | Traide website 78%, webapp 33% | reusable itself verified clean on `main`; publish known-good SHA, drive adoption |
+| CF-Pages callers failing | Consumer A website 78%, webapp 33% | reusable itself verified clean on `main`; publish known-good SHA, drive adoption |
 
 ## Warnings / deprecations cleaned up by this work
 
 - **Platform:** add `shell: bash` fleet-wide; unify gcloud-auth v2→v3; unify
   wrangler-action v3→v4; SHA-pin third-party actions; drop `@v1` alias pins;
-  zop-mannai stored SA-JSON key → keyless WIF; RevvUp/quizzing external
+  zop-mannai stored SA-JSON key → keyless WIF; consumer D/quizzing external
   `zopsmart/workflows@main` → pinned JGD reusable.
 - **Legacy zopsmart (separate effort):** retire `zs-workflows` (checkout@v2/v3,
   setup-node@v3, setup-java@v1, docker-login@v1, build-push@v2, auth@v1,

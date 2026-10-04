@@ -111,7 +111,7 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v2.10.0
     with:
       gcp_region: asia-southeast1
-      gar_project: realm-id
+      gar_project: <consumer-C-project-id>
       gar_repo: backend
       image_name: bff-api
       rollback_digest: ${{ github.event.inputs.rollback_digest }}

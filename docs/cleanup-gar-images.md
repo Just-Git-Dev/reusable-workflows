@@ -46,7 +46,7 @@ Fewer than `build_retention_releases` releases for an image ⇒ no boundary ⇒
 That is deliberate, and it is the direction a destructive workflow should fail
 in. The cost is that a *misconfigured* repo looks exactly like a healthy
 pre-release one, so the run **warns** when an image has no release-tagged
-artifacts at all. Silence is the thing to be afraid of: `traide-in` ran green at
+artifacts at all. Silence is the thing to be afraid of: `<consumer-A-project-id>` ran green at
 `deleted=0` for six consecutive days while its registry grew to 580 MB.
 
 ### The cutoff is anchored to your artifacts, not to `now`

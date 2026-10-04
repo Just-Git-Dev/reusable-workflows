@@ -112,7 +112,7 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloudflare-worker.yml@v2.10.0
     with:
       worker_directory: cf-worker-files
-      worker_name: automahn-files-cdn
+      worker_name: <service>-files-cdn
       ref: ${{ inputs.tag }}
       require_semver_ref: true
       watch_paths: |

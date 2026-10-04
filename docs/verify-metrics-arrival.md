@@ -5,7 +5,7 @@ pipeline actually delivers — and fails the release when it does not.
 
 ## Why this exists
 
-Traide's api ran **for weeks** exporting zero metrics. Its `OTEL_RESOURCE_ATTRIBUTES` lacked
+Consumer A's api ran **for weeks** exporting zero metrics. Its `OTEL_RESOURCE_ATTRIBUTES` lacked
 `gcp.project_id`, so every 30-second export was assembled, authenticated, sent, and rejected
 with `InvalidArgument`. Every gate stayed green the whole time — deploy, the Cloud Run startup
 probe, `/.well-known/alive`, `migrate-smoke`, `storage-probe` — because the only evidence was a
@@ -51,7 +51,7 @@ something the probe is not looking at. That is `cannot-verify`.
 
 They catch different things, and neither subsumes the other.
 
-**1 — Descriptor existence** catches *never worked* (Traide's bug). Descriptors are created on
+**1 — Descriptor existence** catches *never worked* (consumer A's bug). Descriptors are created on
 first ingestion, so their absence proves nothing was ever accepted. But they **persist for
 ~24h** after ingestion stops, so this check cannot see a breakage that started an hour ago.
 
@@ -67,14 +67,14 @@ Both measured on 2026-09-18, and either one sinks a naive implementation.
 - **`gcloud monitoring metrics-descriptors` does not exist.** It errors `Invalid choice`, and
   `| wc -l` over the empty stdout returns `0` — i.e. it reports "no metrics ever arrived". This
   workflow uses the Monitoring REST API and asserts the HTTP status.
-- **A wrong prefix returns a truthful-looking zero.** On `realm-id`, `custom.googleapis.com/`
+- **A wrong prefix returns a truthful-looking zero.** On `<consumer-C-project-id>`, `custom.googleapis.com/`
   = 0 and `workload.googleapis.com/` = 0, while `prometheus.googleapis.com/` = 7 — Managed
   Prometheus publishes under the `prometheus.` prefix. So `metric_prefixes` is a **list**, and
   PASS is the **union**: at least one prefix must hold a descriptor.
 
 Pagination is deliberately not a correctness concern: the question is always "is there at least
 one?", never "how many". Every call uses `pageSize=1` and tests the array for non-emptiness —
-which matters, because `traide-in` holds 8,925 descriptors.
+which matters, because `<consumer-A-project-id>` holds 8,925 descriptors.
 
 ## Inputs
 
@@ -127,16 +127,16 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success'
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/verify-metrics-arrival.yml@v2.10.0
     with:
-      gcp_project: traide-in
+      gcp_project: <consumer-A-project-id>
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_LOG_READER_SA }}
       # Enable the "is it broken right now?" half:
-      cloud_run_service: traide-api
+      cloud_run_service: <service>-api
       region: asia-south1
 ```
 
 ## Where not to adopt it
 
 A service that exports no metrics **at all** will red every release under this probe. Fix the
-exporter first, then adopt. AutoMahn is the current example: it imports no GCP metrics
+exporter first, then adopt. Consumer B is the current example: it imports no GCP metrics
 exporter, so its zero descriptors are an accurate report of a service that exports nothing.

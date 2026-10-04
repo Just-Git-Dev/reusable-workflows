@@ -1,5 +1,5 @@
 {
-  "name": "the live AutoMahn app-secrets shape: 10 versions, 4 enabled, 6 disabled since April/July",
+  "name": "the live consumer B app-secrets shape: 10 versions, 4 enabled, 6 disabled since April/July",
   "secrets": {
     "app-secrets": {
       "latest": 10,
@@ -50,13 +50,13 @@
   "consumers": [
     {
       "kind": "service",
-      "resource": "automahn-api",
+      "resource": "consumer-api",
       "secret": "app-secrets",
       "key": "latest"
     },
     {
       "kind": "service",
-      "resource": "automahn-eventworker",
+      "resource": "consumer-eventworker",
       "secret": "app-secrets",
       "key": "latest"
     }

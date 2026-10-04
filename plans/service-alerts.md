@@ -10,26 +10,26 @@
 | 4 | Every metric alert on GMP is a **PromQL condition**. Checked live: GoFr series and `run_googleapis_com:*` (with the `monitored_resource` matcher) both work, including `histogram_quantile`. | VERIFIED |
 | 5 | **Thresholds carry units** (`5s`, `250ms`, `0.1/s`), converted per metric. GoFr mixes s/ms/µs and Cloud Run latency is ms. A bare number on a duration metric is an error. | design |
 | 6 | New rule **`gofr.metrics.silent_while_serving`**: Cloud Run has traffic but GoFr exports nothing. It fires on the 2026-09-22 broken window and is empty now. | VERIFIED on history |
-| 7 | `bootstrap-alerts` gains `dry_run` and hash-based update of *managed* policies, scoped by an owner label. `prune` is deferred. | RealmID ask 5 + review |
-| 8 | realm-id `github-rotator` gets `monitoring.editor` (fleet precedent). `logging.configWriter` is decided by the first apply. | owner applies |
+| 7 | `bootstrap-alerts` gains `dry_run` and hash-based update of *managed* policies, scoped by an owner label. `prune` is deferred. | Consumer C ask 5 + review |
+| 8 | <consumer-C-project-id> `github-rotator` gets `monitoring.editor` (fleet precedent). `logging.configWriter` is decided by the first apply. | owner applies |
 | 9 | **Slice 1 = v2.10.0**: core, 6 packs whose metrics exist in GMP today, 4 custom kinds, and `dry_run`. Deferred: the rest (§6). | review: was overbuilt |
 | 10 | Release only on explicit ask. Catalog semver rules are in §4. | CLAUDE.md |
 
-Rollout: RealmID first (its session offered; prod has had no alerts since 2026-09-22), then Traide and AutoMahn swap their hand-written 5xx/p95/memory/crash-loop policies for packs. Their 5xx policies are MQL, whose support ended 2025-07-22.
+Rollout: consumer C first (its session offered; prod has had no alerts since 2026-09-22), then consumer A and consumer B swap their hand-written 5xx/p95/memory/crash-loop policies for packs. Their 5xx policies are MQL, whose support ended 2025-07-22.
 
 ---
 
 ## 1. Context
 
-- **Today every app hand-writes its alert policies.** Traide and AutoMahn have near-identical
+- **Today every app hand-writes its alert policies.** consumer A and consumer B have near-identical
   policies differing only by service name. **None alerts on a GoFr metric**, and none uses
-  PromQL. RealmID prod has no active alerts: its uptime check probed `/alive`, which stayed green
+  PromQL. Consumer C prod has no active alerts: its uptime check probed `/alive`, which stayed green
   through a 27h46m Neon outage, and the check was deleted.
 - **Owner's ask (2026-09-23):**
   - reusable alerts on GoFr metrics, with defaults, per-app threshold overrides, and custom
     alerts on app metrics;
   - a config not tied to GMP, wired to GMP for now.
-- **RealmID's session asked devops for the generic layer:**
+- **consumer C's session asked devops for the generic layer:**
   - Cloud Run templates;
   - a health probe that checks the response body, not just the status code;
   - fixes to the shared applier;
@@ -67,7 +67,7 @@ Rollout: RealmID first (its session offered; prod has had no alerts since 2026-0
   anomaly-detector API, Monaco); cloud.google.com `monitoring/promql/promql-in-alerting` and
   `deprecations/mql`.
 
-## 3. Facts the design rests on (VERIFIED live on realm-id unless marked)
+## 3. Facts the design rests on (VERIFIED live on <consumer-C-project-id> unless marked)
 
 **How GoFr metrics look in GMP**
 - Names are stored unsuffixed: `prometheus.googleapis.com/app_http_response/histogram`, labels
@@ -94,18 +94,18 @@ build)
 **The GoFr vs Cloud Run gap was a window artifact**
 - The 1d gap (80 vs 1,795) was the pre-fix gofr#4266 window: GoFr exported zero for 9.5h, until
   `METRICS_CARDINALITY_LIMIT=100` on revisions created 2026-09-22 18:28Z. On top of that, 1,479
-  requests were since-deleted uptime probes. (RealmID localised this.)
+  requests were since-deleted uptime probes. (consumer C localised this.)
 - **I re-checked a post-fix 12h window. Counts:** issuer 32 GoFr / 25 Cloud Run; api 6 / 3.
   **p95:** issuer 1.88s / 1.35s. They track.
 - **The fix is NOT yet proven.** The defect grows with a revision's *uptime*
   (label sets pile up over days warm). Post-fix revisions scale to zero and recycle before they
-  could fail, and one uncapped revision also shows zero failures. Only RealmID's soak check
+  could fail, and one uncapped revision also shows zero failures. Only consumer C's soak check
   against a days-warm revision (~2026-09-26) can tell "fixed" from "never ran long enough".
 - **Silent-while-serving expression, checked on history:** `label_replace(Cloud Run rate→job) > 0
   unless on(job) GoFr rate > 0` returns api and issuer at 2026-09-22T13:00Z and nothing at
   2026-09-23T03:00Z.
 
-**Cloud Run and log-alert constraints** (from RealmID's descriptor/discovery reads, not re-read by
+**Cloud Run and log-alert constraints** (from consumer C's descriptor/discovery reads, not re-read by
 me)
 - `request_count` excludes requests that never reach an instance, such as auth-layer rejects or
   hitting the max-instances wall.
@@ -247,7 +247,7 @@ behaviour stays, because the render job's data check covers that gap.
 ### Wave 0 — go/no-go spikes, before any code
 - **0a ✔ DONE.** `histogram_quantile` works for GoFr and Cloud Run in GMP; the memory metric
   name is confirmed.
-- **0b ✔ Gap explained.** RealmID's soak re-check (~09-26) gates GoFr rules from ticket to page.
+- **0b ✔ Gap explained.** consumer C's soak re-check (~09-26) gates GoFr rules from ticket to page.
 - **0b2 ✔ DONE.** `silent_while_serving` fires on history and is empty now.
 - **0c ⏳ Nested `./` resolution.**
   - Method: push a throwaway branch here with a called workflow that `uses: ./…` another, and
@@ -256,8 +256,8 @@ behaviour stays, because the render job's data check covers that gap.
   - Owner OK is needed to run a probe workflow in a consumer repo.
 - **0d ⏳ OIDC `job_workflow_sha`.** Confirm it appears in the token of a called workflow, and
   step-test the JWT decode.
-- **0e ⏳ `logging.configWriter`.** Settled by the first realm-id apply. Traide's config comment
-  says `logging.notificationRules.create` is needed; RealmID's schema read says it isn't.
+- **0e ⏳ `logging.configWriter`.** Settled by the first <consumer-C-project-id> apply. Consumer A's config comment
+  says `logging.notificationRules.create` is needed; consumer C's schema read says it isn't.
 
 ### Wave 1 — documentation
 - `docs/alertspec.md`: format, precedence, units, kinds, guards, escape hatch, portability matrix
@@ -304,18 +304,18 @@ behaviour stays, because the render job's data check covers that gap.
 
 ### Wave 4 — rollout (each step owner-gated)
 1. PRs merged. **v2.10.0 only on explicit ask.** DECISIONS entries in reusable-workflows.
-2. infra-provisioning: realm-id `github-rotator` += `monitoring.editor`. Dry-run as the fleet SA,
+2. infra-provisioning: <consumer-C-project-id> `github-rotator` += `monitoring.editor`. Dry-run as the fleet SA,
    then the owner applies.
-3. RealmID, in its own session: write `alerts.yaml` as in §4, run with `dry_run`, then apply.
-4. Traide and AutoMahn, in their sessions: swap in the packs, run a parity check, then delete
+3. Consumer C, in its own session: write `alerts.yaml` as in §4, run with `dry_run`, then apply.
+4. Consumer A and consumer B, in their sessions: swap in the packs, run a parity check, then delete
    the MQL/hand-written files.
 
 ## 8. Verification
 - **Local:** `run_alertgen_tests.py`, `run_step_tests.py`, `promtool test rules`,
   `gen_*_catalog --check`, `actionlint`.
-- **Live, read-only:** every un-thresholded expression returns ≥1 series on realm-id. The
+- **Live, read-only:** every un-thresholded expression returns ≥1 series on <consumer-C-project-id>. The
   thresholded expressions run through validate-alerts layer 2.
-- **First apply:** `dry_run` on realm-id, then a real apply. Read each policy back from the API.
+- **First apply:** `dry_run` on <consumer-C-project-id>, then a real apply. Read each policy back from the API.
 - **Fire test:** a throwaway override (e.g. `cloudrun.latency_p95 > 1ms`). The email arrives,
   then revert. That proves the far end, not just the config.
 
@@ -325,6 +325,6 @@ behaviour stays, because the render job's data check covers that gap.
 - **GoFr counters may undercount on scale-to-zero** (INFERRED: `rate` needs two samples per
   instance). So Cloud Run is the default paging source for low-traffic services.
 - **Traffic-based rules detect a hurt user, not a broken idle service.** Only a DB-aware probe
-  closes that gap (deferred; RealmID tracks it).
+  closes that gap (deferred; consumer C tracks it).
 - **Cloud Monitoring pricing is per condition and per series scanned** (UNVERIFIED current
   numbers). Grouping keeps conditions ≈ rules.

@@ -287,7 +287,7 @@ jobs:
             --branch=${{ inputs.branch }}
             --commit-hash=${{ github.sha }}
 
-      # A green deploy only proves the upload succeeded. Realm-ID/ui added this after
+      # A green deploy only proves the upload succeeded. <consumer-C-org>/ui added this after
       # the 2026-06-29 outage: a stale bundle went live with a broken client-routed
       # path and nothing noticed. Opt-in via smoke_path, and blocking when set — a
       # check that reports but does not fail would not have caught that either.

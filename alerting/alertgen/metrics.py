@@ -1,6 +1,6 @@
 """Registry of the metrics the built-in catalog uses.
 
-Names are as GMP's PromQL view exposes them (VERIFIED on realm-id, 2026-09-23): GoFr metrics
+Names are as GMP's PromQL view exposes them (VERIFIED on <consumer-C-project-id>, 2026-09-23): GoFr metrics
 unsuffixed with the service in `job`; Cloud Run metrics as `run_googleapis_com:<name>` with the
 `monitored_resource` matcher, which GMP requires to find them. GoFr v1.61.0 units checked in
 source: app_http_response seconds, app_sql_stats milliseconds, app_redis_stats microseconds.

@@ -90,7 +90,7 @@ Outputs: `policies_rendered`, `policies_created`, `policies_updated`, `policies_
 
 **Log-match rules (pack `gcp-logs`) also need `roles/logging.configWriter`.** Creating a
 `conditionMatchedLog` policy checks `logging.notificationRules.create` on the *logging*
-resource. Verified on realm-id, 2026-09-23: without that role, both log policies failed with
+resource. Verified on <consumer-C-project-id>, 2026-09-23: without that role, both log policies failed with
 `PERMISSION_DENIED`, and the 9 metric policies were created fine. Grant both roles through
 infra-provisioning before the first apply.
 
@@ -146,7 +146,7 @@ a request or two, wait for the email, then revert and apply again.
 **Keep `min_requests: 1`.** Without it, the traffic guard's default of 20 requests per 10
 minutes still applies. On a quiet service the alert then can't fire however low the
 threshold is, and a silent test reads as a broken channel when the guard is working as
-designed. Found on realm-id (about 2 requests an hour), 2026-09-23.
+designed. Found on <consumer-C-project-id> (about 2 requests an hour), 2026-09-23.
 
 For a log-match rule, point its `filter` at a harmless line that appears routinely, then
 revert. There is no traffic guard, and the 300s rate limit caps the emails.
@@ -154,7 +154,7 @@ revert. There is no traffic guard, and the 300s rate limit caps the emails.
 **Confirm the incident OPENED before you revert. A true condition is not an incident.**
 Running the rule's PromQL yourself and seeing it true proves nothing about the policy: Cloud
 Monitoring evaluates on its own schedule (about 3 minutes here), and reverting before that
-leaves nothing to show. This happened on realm-id's first fire test, which was reverted 2.5
+leaves nothing to show. This happened on <consumer-C-project-id>'s first fire test, which was reverted 2.5
 minutes after arming. Poll the incident-open log instead of sleeping for a fixed time:
 
 ```bash

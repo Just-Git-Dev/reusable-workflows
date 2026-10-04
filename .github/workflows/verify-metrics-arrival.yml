@@ -2,7 +2,7 @@ name: Verify metrics arrival (reusable)
 
 # Post-deploy probe: prove the observability pipeline actually DELIVERS.
 #
-# WHY THIS EXISTS. Traide's api ran for weeks exporting ZERO metrics — its
+# WHY THIS EXISTS. Consumer A's api ran for weeks exporting ZERO metrics — its
 # `OTEL_RESOURCE_ATTRIBUTES` lacked `gcp.project_id`, so every 30s export was
 # assembled, authenticated, sent, and rejected with `InvalidArgument`. Every
 # gate stayed green throughout: deploy, the Cloud Run startup probe,
@@ -31,7 +31,7 @@ name: Verify metrics arrival (reusable)
 #
 # TWO CHECKS, because they catch different things:
 #
-#   1. DESCRIPTOR EXISTENCE catches "never worked" — Traide's bug. Descriptors
+#   1. DESCRIPTOR EXISTENCE catches "never worked" — consumer A's bug. Descriptors
 #      are created on first ingestion, so their absence is proof nothing ever
 #      arrived. But they PERSIST for ~24h after ingestion stops, so this check
 #      cannot see a breakage that started an hour ago.
@@ -47,14 +47,14 @@ name: Verify metrics arrival (reusable)
 #     reports "no metrics ever arrived". Hence the REST API, with the HTTP
 #     status asserted.
 #   - THE PREFIX IS NOT OBVIOUS AND A WRONG ONE RETURNS A TRUTHFUL-LOOKING 0.
-#     On `realm-id`: `custom.googleapis.com/` = 0 and `workload.googleapis.com/`
+#     On `<consumer-C-project-id>`: `custom.googleapis.com/` = 0 and `workload.googleapis.com/`
 #     = 0, while `prometheus.googleapis.com/` = 7 — Managed Prometheus publishes
 #     under the `prometheus.` prefix. Hence a LIST of prefixes, PASS on the
 #     union, plus an unfiltered positive control.
 #
 # PAGINATION IS NOT A CORRECTNESS CONCERN HERE because the question is "is there
 # at least one?", never "how many". `metricDescriptors.list` paginates
-# (`traide-in` holds 8,925 descriptors); every call below uses `pageSize=1` and
+# (`<consumer-A-project-id>` holds 8,925 descriptors); every call below uses `pageSize=1` and
 # tests the returned array for non-emptiness.
 
 on:

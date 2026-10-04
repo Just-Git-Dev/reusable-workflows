@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-04` — [Public repo names no private consumer: pseudonyms and placeholders, history left alone](#2026-10-04--public-repo-names-no-private-consumer-pseudonyms-and-placeholders-history-left-alone)
 - `2026-09-23` — [`v2.10.0` is a minor: one new workflow, additive inputs on two](#2026-09-23--v2100-is-a-minor-one-new-workflow-additive-inputs-on-two)
 - `2026-09-23` — [`logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`](#2026-09-23--logscrash_loop-keys-on-gofrs-jsonpayloadlevel-because-gofr-never-sets-severity)
 - `2026-09-23` — [`service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies](#2026-09-23--service-alerts-alerts-as-data-rendered-from-a-semantic-spec-applied-by-the-existing-bodies)
@@ -76,7 +77,7 @@ archived by age only; nothing is deleted, and both files are greppable.
 
 - `2026-07-14` — [key-based auth for `promote-image` (quizzing-pro prod parity)](DECISIONS-ARCHIVE.md#2026-07-14-key-based-auth-for-promote-image-quizzing-pro-prod-parity)
 - `2026-07-14` — [quizzing-pro convergence: parity audit + `manage-config-secrets`](DECISIONS-ARCHIVE.md#2026-07-14-quizzing-pro-convergence-parity-audit-manage-config-secrets)
-- `2026-07-14` — [Deploy-reusable gaps surfaced by the AutoMahn/Traide-Co caller migration (v1.5.0)](DECISIONS-ARCHIVE.md#2026-07-14-deploy-reusable-gaps-surfaced-by-the-automahntraide-co-caller-migration-v150)
+- `2026-07-14` — [Deploy-reusable gaps surfaced by the consumer B/A caller migration (v1.5.0)](DECISIONS-ARCHIVE.md#2026-07-14--deploy-reusable-gaps-surfaced-by-the-consumer-ba-caller-migration-v150)
 - `2026-07-14` — [Capability parity with `zopsmart/workflows`, verified from live callers (v1.4.0)](DECISIONS-ARCHIVE.md#2026-07-14-capability-parity-with-zopsmartworkflows-verified-from-live-callers-v140)
 - `2026-07-14` — [Fleet-wide audit; reverse the "deploy/CI kept per-repo" call](DECISIONS-ARCHIVE.md#2026-07-14-fleet-wide-audit-reverse-the-deployci-kept-per-repo-call)
 - `2026-07-13` — [Add `rotate-signing-keypair` (v1.2.0, with `rotate-worker-signing-secret`)](DECISIONS-ARCHIVE.md#2026-07-13-add-rotate-signing-keypair-v120-with-rotate-worker-signing-secret)
@@ -97,6 +98,23 @@ archived by age only; nothing is deleted, and both files are greppable.
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-10-04 — Public repo names no private consumer: pseudonyms and placeholders, history left alone
+
+**Decision.** This repository is public, so its current files must not name private consumer
+projects. Every consumer name (org, repo, GCP project id, service name, domain, customer) was
+replaced with a stable pseudonym, "consumer A" to "consumer D", or with a placeholder such as
+`<consumer-A-org>/api`, `<consumer-B-project-id>` or `<service>-files-cdn`. The same pseudonym
+means the same consumer in every file, so the prose keeps its meaning. No workflow behaviour,
+default or test assertion changed.
+
+**Rejected: rewriting git history.** The owner chose to leave history, tags, releases and old
+PRs unchanged. A rewrite would re-point 41 immutable release tags, and it still would not erase
+the names from merged PR pages, from forks, or from clones already made, so it costs a lot and
+removes little.
+
+**Rule from now on.** Write "consumer A/B/C/D" or a placeholder, never a real consumer name, in
+any file here: docs, plans, comments, test fixtures, `DECISIONS.md` and `TODO.md` alike.
+
 ## 2026-09-23 — `v2.10.0` is a minor: one new workflow, additive inputs on two
 
 **What.** `v2.10.0` ships:
@@ -110,7 +128,7 @@ carry no `managed_by: alertgen` label takes exactly the old path, so no caller h
 a minor, not a major. The catalog ships at `1.0.0`, its first version, so there is no
 threshold change to flag.
 
-**Cut on the owner's explicit ask** (2026-09-23, "cut v2.10.0, then tell RI"), so RealmID
+**Cut on the owner's explicit ask** (2026-09-23, "cut v2.10.0, then tell consumer C"), so consumer C
 pins a tag rather than a merge SHA for the first live run.
 
 ## 2026-09-23 — `logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`
@@ -120,12 +138,12 @@ pins a tag rather than a merge SHA for the first live run.
 `severity>=CRITICAL OR jsonPayload.level="FATAL" OR textPayload:"panic:"`. The docs'
 `logs.error_match` example no longer filters on `severity`.
 
-**Why.** RealmID's session found this, and I checked it independently:
+**Why.** consumer C's session found this, and I checked it independently:
 - **Source (GoFr v1.61.0).** `logging/logger.go:60` writes the level as `json:"level"`. Cloud
   Logging takes severity only from a `severity` key, so every GoFr entry is stored at DEFAULT.
 - **Recovered panics.** A recovered handler panic (`middleware/logger.go:317-335`) is logged
   at level ERROR with a stack trace, never as the text `panic:`.
-- **Live, realm-id, since 2026-09-21T14:00Z, read-only:**
+- **Live, <consumer-C-project-id>, since 2026-09-21T14:00Z, read-only:**
   - `severity>=CRITICAL`: 0
   - `textPayload:"panic:"`: 0
   - `jsonPayload.level="FATAL"`: 6
@@ -135,14 +153,14 @@ So the shipped rule would have missed six real fatal exits. The old docs example
 (`… AND severity>=ERROR`) could never fire on a GoFr app, and it was written to be copied.
 
 **The docs example is now text-only, not `jsonPayload.level="ERROR" AND …`.** My first version
-of this fix narrowed on the level, and I suggested the same narrowing to RealmID. RealmID
+of this fix narrowed on the level, and I suggested the same narrowing to consumer C. Consumer C
 declined, with evidence. Its text filter's 500 outage entries break down as ERROR 493,
 FATAL 6, WARN 1. The WARN is a DB failure the app itself downgraded to "transient". An ERROR
 clause therefore drops the worst entries: the same bug, one field along. The rule for GoFr
 log filters is to match the failure text and never a level-like field.
 
 `severity>=CRITICAL` stays for apps that do set severity. The unreleased catalog stays at
-1.0.0: nothing has been tagged, so no caller has pinned the old filter by version. RealmID
+1.0.0: nothing has been tagged, so no caller has pinned the old filter by version. Consumer C
 pinned the merge SHA before this change.
 
 ## 2026-09-23 — `service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies
@@ -210,14 +228,14 @@ for the expected reasons.
 
 **Not verified live yet (owner-gated; see `TODO.md`).**
 - `job_workflow_sha` in a called workflow's token (spike 0d). GitHub documents it; the step
-  fails closed if it is missing. **Update 2026-09-23: verified live** (Realm-ID/project run
+  fails closed if it is missing. **Update 2026-09-23: verified live** (<consumer-C-org>/project run
   35840428112). It is present, and for a tag pin it holds the annotated tag object's SHA
   (1687ae3 for `v2.10.0`), not the peeled commit's. checkout peels it, so the pin is still
   exact.
 - The gcloud `--filter` on `userLabels.*`.
 - Whether log-match policies need `logging.notificationRules.create`.
 
-The first realm-id `dry_run` settles the first two, and the first apply settles the third.
+The first <consumer-C-project-id> `dry_run` settles the first two, and the first apply settles the third.
 
 ## 2026-09-23 — `v2.9.0` is a minor: one new workflow, and callers opt in with their own job
 
@@ -239,12 +257,12 @@ states for the other side of the deploy — app-specific PRE-deploy gates stay c
 
 ## 2026-09-18 — `verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy
 
-New reusable workflow. Handed over from the Traide umbrella session; the owner ruled it a
-**platform** concern rather than a Traide one — the incident was Traide's, the failure class is
+New reusable workflow. Handed over from the consumer A umbrella session; the owner ruled it a
+**platform** concern rather than a consumer A one — the incident was consumer A's, the failure class is
 generic. Filed first as `TODO.md` § "Post-deploy probe — prove the observability pipeline
 actually DELIVERS (opened 2026-09-18)", which this closes.
 
-**The incident.** Traide's api ran for *weeks* exporting zero metrics: `OTEL_RESOURCE_ATTRIBUTES`
+**The incident.** consumer A's api ran for *weeks* exporting zero metrics: `OTEL_RESOURCE_ATTRIBUTES`
 lacked `gcp.project_id`, so every 30s export was assembled, authenticated, sent, and rejected
 with `InvalidArgument`. Every gate stayed green throughout — deploy, the Cloud Run startup probe,
 `/.well-known/alive`, `migrate-smoke`, `storage-probe` — because the only evidence was a log line
@@ -276,19 +294,19 @@ empty control is therefore not a quiet project but a project we are not looking 
 reported as cannot-verify.
 
 **Why a list of prefixes, and the union.** The handover named one prefix,
-`prometheus.googleapis.com/`. Verifying `realm-id` live on 2026-09-18 hit the trap the probe is
+`prometheus.googleapis.com/`. Verifying `<consumer-C-project-id>` live on 2026-09-18 hit the trap the probe is
 meant to survive: `custom.googleapis.com/` → 0, `workload.googleapis.com/` → 0,
 `prometheus.googleapis.com/` → **7** (Managed Prometheus publishes under `prometheus.`). A wrong
 single prefix returns a truthful-looking zero. So `metric_prefixes` defaults to the four prefixes
 application metrics can land under and PASS is the **union** — one non-empty prefix is enough.
 
-**Why two checks.** Descriptor existence catches *never worked* (Traide's bug) but cannot catch a
+**Why two checks.** Descriptor existence catches *never worked* (consumer A's bug) but cannot catch a
 *new* breakage, because descriptors persist ~24h after ingestion stops. The exporter log grep
 catches that within minutes. It reads the **serving** revision specifically: grepping a superseded
 revision reports on code that is no longer running, so it would go green over a broken deploy and
 red over a fixed one.
 
-**"Is there at least one?", never "how many".** `metricDescriptors.list` paginates and `traide-in`
+**"Is there at least one?", never "how many".** `metricDescriptors.list` paginates and `<consumer-A-project-id>`
 holds 8,925 descriptors. Every call uses `pageSize=1` and tests the array for non-emptiness, which
 removes pagination as a correctness concern rather than handling it.
 
@@ -298,7 +316,7 @@ and both recorded here because each produces a *confidently wrong answer rather 
 - `gcloud monitoring metrics-descriptors` **does not exist**. It errors `Invalid choice`, and
   `| wc -l` over the empty stdout returns `0` — i.e. it reports "no metrics ever arrived". Hence
   the REST API with the HTTP status asserted.
-- A wrong prefix or scope returns a **0 identical to a true 0**. See the `realm-id` numbers above.
+- A wrong prefix or scope returns a **0 identical to a true 0**. See the `<consumer-C-project-id>` numbers above.
 
 **Tests.** Six paired cases in `tests/run_step_tests.py`, executing the shipped `run:` bodies. The
 pairing is the design: control-403 and empty-control (cannot-verify) against all-prefixes-empty
@@ -313,7 +331,7 @@ it), which had made the serving-revision case pass for the wrong reason.
 **Adoption.** No caller is wired here — that is a change in each app repo. It needs a service
 account that can both list metric descriptors and read logs, which no SA in the fleet currently
 can; `infra-provisioning` grants that as the `observability-read` capability, WIF-only, starting
-with `traide-co`. **AutoMahn is deliberately excluded**: it imports no GCP metrics exporter, so it
+with `<consumer-A-org>`. **consumer B is deliberately excluded**: it imports no GCP metrics exporter, so it
 exports nothing at all and the probe would red every release until that is fixed.
 
 ## 2026-09-15 — RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`
@@ -394,7 +412,7 @@ workspace, every consumer of both workflows would break at once — so this was 
 probe rather than an assumption.
 
 **Result: it resolves against the CALLER.** A throwaway `actions/probe` plus a `workflow_call`
-workflow on a branch here, called from `Realm-ID/project` (run **34952087036**):
+workflow on a branch here, called from `<consumer-C-org>/project` (run **34952087036**):
 
 > `Uses: Just-Git-Dev/reusable-workflows/.github/workflows/probe-local-action.yml@refs/heads/probe/local-action`
 > `##[error]Can't find 'action.yml', 'action.yaml' or 'Dockerfile' under`
@@ -417,16 +435,16 @@ already contains the action, so it cannot be the release commit), plus teaching
 `scripts/stamp_version.py` a second kind of pin, plus a tagged workflow referencing action code
 from an untagged commit. Re-costing against that price changed the answer:
 
-- The saving is ~66 billed min/month, not the ~90 first assumed — `Traide-Co/project` runs these
-  **weekly**, not daily. Only `Realm-ID` and `AutoMahn` are nightly.
+- The saving is ~66 billed min/month, not the ~90 first assumed — `<consumer-A-org>/project` runs these
+  **weekly**, not daily. Only `<consumer-C-org>` and `consumer B` are nightly.
 - Deleting the consumers' `resolve` jobs saves ~**120** billed min/month — nearly double — and
   needs no new mechanism at all, just an expression in `jobs.<id>.with`.
-- ⚠️ The dollar value is **unverified**: Realm-ID is a `team` plan (3,000 included min/month),
-  Traide-Co and AutoMahn are `free` (2,000 each). The org billing endpoint is HTTP 410 and needs
+- ⚠️ The dollar value is **unverified**: <consumer-C-org> is a `team` plan (3,000 included min/month),
+  <consumer-A-org> and consumer B are `free` (2,000 each). The org billing endpoint is HTTP 410 and needs
   `admin:org`, which this token lacks. If the orgs are under quota the saving is **$0**.
 
 So the sweeps stay two workflows, and the work went into the consumers instead (PRs
-`Realm-ID/project#17`, `AutoMahn/project#45`, `Traide-Co/project#149`, all merged 2026-09-15).
+`<consumer-C-org>/project#17`, `<consumer-B-org>/project#45`, `<consumer-A-org>/project#149`, all merged 2026-09-15).
 
 **Trap for whoever revisits this.** If you do build composite actions here, two `if:` conditions
 invert silently on the way in. Composite-action inputs are **strings**, so
@@ -533,13 +551,13 @@ stay exactly where they are; nothing is republished under a tag consumers alread
 ## 2026-09-07 — `validate-alerts` enforces actionability: a page must carry triage, and clear
 
 **Context.** Asked to make sure the platform carries no useless — non-actionable — alerts.
-The rule already existed as owner practice: an expected 401 was deleted from RealmID as an
+The rule already existed as owner practice: an expected 401 was deleted from consumer C as an
 alert on 2026-09-06 because a correct rejection is not something anyone acts on (and its
 filter counted every `/auth/*` 401 regardless of cause). Nothing encoded it, so it held only
 as long as someone remembered it at review time.
 
 **What was audited first, not assumed.** All 12 policy files across the three consumers were
-read: automahn 5, tally-helper 5, auth 2. Every one already carries `documentation.content`
+read: consumer B 5, <consumer-repo> 5, auth 2. Every one already carries `documentation.content`
 (104–2003 chars) and `alertStrategy.autoClose: 1800s`. So there is no backlog of
 non-actionable alerts to clear — the practice is universal, and only the *enforcement* was
 missing. That is the ideal shape for a new gate: it ratchets existing behaviour rather than
@@ -555,7 +573,7 @@ they extend:
    incident that never clears stays open forever and masks the next occurrence, so the alert
    stops carrying information.
 
-**Where the floor came from.** 80, against a shipped minimum of 104 (automahn's
+**Where the floor came from.** 80, against a shipped minimum of 104 (consumer B's
 `policy-latency-p95`). The bar catches the empty and the one-liner; it does not grade prose,
 and it is not a proxy for quality. Deliberately set *below* the fleet minimum so the gate
 lands green everywhere — a gate nobody can merge past is a gate someone disables. Raising it
@@ -580,7 +598,7 @@ silent half of the burn). The threshold itself is pinned by a boundary pair — 
 still have gone green.
 
 **Then verified against reality rather than fixtures.** The lint was extracted as shipped and
-run over each consumer's *real* alerts directory: automahn `checked=5` rc=0, tally-helper
+run over each consumer's *real* alerts directory: consumer B `checked=5` rc=0, <consumer-repo>
 `checked=5` rc=0, auth `checked=2` rc=1 — auth failing only on its two pre-existing gaps (no
 channel file, no `notificationChannels`, both already in `TODO.md`) with **zero actionability
 failures**. Synthetic fixtures of the right length would have proven nothing about the fleet.
@@ -591,7 +609,7 @@ the same-day fix above; both now describe matching, and cite the entry.
 
 ## 2026-09-07 — RCA: `bootstrap-alerts` rejected the JSON policies its own linter had just accepted
 
-**Context.** A peer session handed over RealmID's app-metric SLO alerts: `realm-id` has
+**Context.** A peer session handed over consumer C's app-metric SLO alerts: `<consumer-C-project-id>` has
 uptime alerting only, and the OTel→GMP metrics `app_http_response` / `app_sql_*` have no
 coverage. Investigating what the platform owed that work surfaced a prior question — why
 does `auth` not call `bootstrap-alerts` at all? Its `.github/workflows/` has no alerts
@@ -644,7 +662,7 @@ new checks actually bind. The durable lesson is the general one: **when two work
 the same artifact, they must share a parser, not merely a convention** — a linter that is
 more permissive than its applier turns a green gate into a false promise.
 
-**Not done here (deliberate).** Writing the RealmID SLO policies themselves is app-repo
+**Not done here (deliberate).** Writing the consumer C SLO policies themselves is app-repo
 work — under the ownership split in the workspace `CLAUDE.md`, app repos own their
 resources and `reusable-workflows` owns only the shared ops bodies. The auth-side adoption
 steps (add `NOTIFICATION_CHANNEL_PLACEHOLDER` to each policy file, add a thin caller, retire
@@ -718,13 +736,13 @@ reasoning got wrong.
 
 ## 2026-09-06 — GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback
 
-**Symptom.** `Cleanup GAR images` failed two consecutive nightly runs on `Realm-ID/project`
+**Symptom.** `Cleanup GAR images` failed two consecutive nightly runs on `<consumer-C-org>/project`
 (run 33989209302 and its predecessor), reporting `13 deletion(s) failed for unexpected
 reasons` and skipping the summary step. All 13 errors read:
 
 ```
 PERMISSION_DENIED: Permission denied on operation
-projects/realm-id/locations/asia-southeast1/operations/<id> (or it may not exist)
+projects/<consumer-C-project-id>/locations/asia-southeast1/operations/<id> (or it may not exist)
 ```
 
 **Root cause.** That 403 is not the delete being refused. `gcloud artifacts docker images
@@ -825,7 +843,7 @@ repo's checkout, so a CI job here would find nothing to test and go green — th
 failure the script exists to catch. It is an operator tool: run it by hand when the gate changes
 or when a repo's copy is in doubt.
 
-**Result.** 14 repos across RI, Traide and AutoMahn: all four assertions pass in every one, and
+**Result.** 14 repos across consumer C, consumer A and consumer B: all four assertions pass in every one, and
 the P1 was withdrawn. The alleged bug was never real; had it been, the `no-exemption` mutant in
 the self-test shows exactly the output it would have produced.
 
@@ -838,7 +856,7 @@ about a tree it did not read is worse than one that crashes.
 
 **What.** `docs/TESTING-STANDARD.md` now declares the `testing` skill as source of truth and
 positions itself as that skill's umbrella-repo application. Seven rules derived from auditing
-RI, Traide and AutoMahn were written into the skill; this document gained a pointer on each
+Consumer C, consumer A and consumer B were written into the skill; this document gained a pointer on each
 principle the skill now owns (P1, P2, P3, P5, P6, P7, P9), one new failure mode (§1.7), one new
 principle (11), a sixth layer in the layer cake, three scorecard blocks and seven anti-pattern
 rows. README's "ten principles" was corrected to eleven.
@@ -858,7 +876,7 @@ that is what this file is for. Where a principle is the skill's rule wearing a c
 now says so and cites the section, rather than restating it in words that will drift.
 
 **What the audit actually found**, for the record, since it is what these edits are made of:
-- `Realm-ID/api`'s `await_ci` exits 0 when no CI run exists for the tagged SHA, which is the
+- `<consumer-C-org>/api`'s `await_ci` exits 0 when no CI run exists for the tagged SHA, which is the
   shape that let `issuer` promote a red CI to prod in v0.106.0. **It is not an unported fix**,
   which is what a first pass here recorded and what this bullet said until the claim was
   checked: `api/.github/workflows/deploy.yml:173-186` carries a dated (2026-08-31) note saying
@@ -868,10 +886,10 @@ now says so and cites the section, rather than restating it in words that will d
   is unreachable there. It is a real §1.7 hazard for a different reason: the fact that makes it
   safe lives in a different file in a different repo, so adding a `paths-ignore` to `api/ci.yml`
   reopens the v0.106.0 hole silently. Rationale: root `DECISIONS.md` 2026-08-31.
-- `automahn/api/scripts/check-request-struct-coverage.sh` resolves `../ui/e2e` and exits 0 when
+- `<consumer-B-repo>/api/scripts/check-request-struct-coverage.sh` resolves `../ui/e2e` and exits 0 when
   it is absent. No CI job checks out `ui`, so it has never run there — while ADR-033 and
   `ui/e2e/README.md` both describe it as a CI gate. That is §1.7, and it is why §1.7 is here.
-- 1 of 15 AutoMahn guards has a `--self-test`. The unburned ones include the ADR-047
+- 1 of 15 consumer B guards has a `--self-test`. The unburned ones include the ADR-047
   cross-tenant backstop, whose failure mode is a regex that silently matches nothing.
 - 193 skips across the three projects, concentrated on tests named as *proofs*, and the worst
   shape is a skip guarded by the test's own two-subject precondition.
@@ -1038,7 +1056,7 @@ cannot express "leave it alone", and Cloud Run's boost setting is exactly the ki
 caller updating scaling has no opinion about.
 
 **The env-var delimiter is chosen at runtime, not hardcoded.** gcloud's `^delim^k=v delim k=v`
-form exists because values contain commas. The Realm-ID caller this replaces hardcoded `@` —
+form exists because values contain commas. The <consumer-C-org> caller this replaces hardcoded `@` —
 fine for its values, and a silent corruption for anyone whose values contain an email address.
 The workflow picks the first of `@ # % | ~ ! +` absent from every value, and **fails loudly**
 if all of them occur. Guessing would produce environment variables nobody declared, which is
@@ -1049,14 +1067,14 @@ than deserve typed inputs, and a reusable that must be released every time someo
 `--set-cloudsql-instances` is a bottleneck. One flag per line (rather than a single string)
 keeps a value containing spaces intact instead of word-splitting it.
 
-**The health gate generalises Realm-ID's `sql.status` check.** Its caller asserts
+**The health gate generalises <consumer-C-org>'s `sql.status` check.** Its caller asserts
 `.data.sql.status == "UP"` because GoFr lazy-connects to Postgres: a bad DSN passes the startup
 probe and fails on the first query — the May 2026 v2-DSN incident. `health_jq` +
 `health_expect` express that for any service: apply a jq filter to the health body and require
 a value. A status-code check alone cannot catch an endpoint that returns 200 while reporting a
 dependency as down.
 
-**Built with no caller to adopt it.** Every caller is in Realm-ID, which is frozen on a billing
+**Built with no caller to adopt it.** Every caller is in <consumer-C-org>, which is frozen on a billing
 issue, so this ships with green CI and step tests but **no runtime signal** — nothing has run
 it against a real service. That is a deliberate, user-approved trade (build now, adopt later),
 and worth remembering when the first real run happens: treat it as unproven in execution, the
@@ -1067,15 +1085,15 @@ same way `resource_roles.secrets` was until an apply actually exercised it.
 ## 2026-08-24 — `bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules
 
 **Decision.** New reusable for zone-level Cloudflare state — DNS records plus Origin Rules —
-collapsing `AutoMahn/project`'s `bootstrap-cf-dns.yml` and `bootstrap-cf-origin-rules.yml`
-and `Traide-Co/project`'s `bootstrap-cf-dns.yml`. Records and rules are JSON-array inputs,
+collapsing `<consumer-B-org>/project`'s `bootstrap-cf-dns.yml` and `bootstrap-cf-origin-rules.yml`
+and `<consumer-A-org>/project`'s `bootstrap-cf-dns.yml`. Records and rules are JSON-array inputs,
 because `workflow_call` inputs cannot be objects and a per-record input set would cap the
 number of records a caller may declare.
 
 **The finding, from reading the two callers side by side.** `bootstrap-cf-origin-rules.yml`
 does a **full-ruleset PUT**: "replaces the entire origin ruleset each run with the canonical
 set of rules defined here". `bootstrap-cf-service-proxy.sh` *splices* a per-hostname rule
-into that same ruleset. Both target `automahn.in`. A zone has exactly one entrypoint ruleset
+into that same ruleset. Both target `<consumer-B-domain>`. A zone has exactly one entrypoint ruleset
 per phase, so **running the origin-rules workflow deletes the service workflow's rule**, with
 no error and no output saying so — the hostname simply stops reaching its origin.
 
@@ -1089,13 +1107,13 @@ preserved with their server-assigned fields stripped. That is what lets it and
 declarative behaviour for a zone with a single owner, and logs a warning naming every rule it
 drops — the old behaviour was not wrong, it was just silent.
 
-**TXT records are matched on content, not just name.** Traide's caller already did this and
-AutoMahn's did not, and Traide's is right: several TXT records legitimately share a name (SPF,
+**TXT records are matched on content, not just name.** consumer A's caller already did this and
+Consumer B's did not, and consumer A's is right: several TXT records legitimately share a name (SPF,
 DMARC, one token per verifying vendor). Matching on name+type alone updates whichever the API
 returns first, which can be another vendor's token. Generalising the stricter rule costs
 nothing and removes a way to silently break someone else's domain verification.
 
-**`replaces` rather than a global "clean up conflicting types" switch.** AutoMahn's caller
+**`replaces` rather than a global "clean up conflicting types" switch.** consumer B's caller
 deletes a stale `AAAA` before writing a `CNAME` at the same name — how a hostname moves off a
 worker route. Expressed per record, the destructive act is visible next to the record that
 needs it; a zone-wide boolean would apply it to records that never asked.
@@ -1113,14 +1131,14 @@ This is the second time in this session that a defect invisible to the linters w
 by executing the shipped step body.
 
 **Not done:** no caller is migrated; the three inline workflows stay until their own repos'
-PRs. Whether AutoMahn's live zone currently has a missing Origin Rule is worth checking with a
+PRs. Whether consumer B's live zone currently has a missing Origin Rule is worth checking with a
 token when someone has one.
 
 ---
 
 ## 2026-08-24 — `bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied
 
-**Decision.** New reusable, absorbing `AutoMahn/project`'s `infra/cloudflare/bootstrap-cf-service-dns-only.sh`
+**Decision.** New reusable, absorbing `<consumer-B-org>/project`'s `infra/cloudflare/bootstrap-cf-service-dns-only.sh`
 (192 lines) and `bootstrap-cf-service-proxy.sh` (226 lines) together with the two thin
 workflows that wrapped them. One workflow, `mode: dns-only | proxied`.
 
@@ -1173,13 +1191,13 @@ record and the entrypoint ruleset. `cancel-in-progress` is off for the same reas
 `deploy-cloudflare-worker`.
 
 **Not done:** the two callers are not migrated, and the two shell scripts are not deleted
-from `AutoMahn/project`. Both happen in that repo's own PR, after this is tagged.
+from `<consumer-B-org>/project`. Both happen in that repo's own PR, after this is tagged.
 
 ---
 
 ## 2026-08-24 — `deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy
 
-**Decision.** New reusable, collapsing `AutoMahn/api`'s two inline worker deploys
+**Decision.** New reusable, collapsing `<consumer-B-org>/api`'s two inline worker deploys
 (`deploy-api-proxy-worker.yml`, `deploy-files-worker.yml`). It takes a `worker_directory` and
 runs `wrangler deploy`; it takes **no** input for routes, bindings, vars or the worker name.
 
@@ -1240,7 +1258,7 @@ PRs, after this is tagged.
 
 ## 2026-08-24 — RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists
 
-Found while adopting `cleanup-secret-versions` on AutoMahn and Traide-Co — the first callers
+Found while adopting `cleanup-secret-versions` on consumer B and <consumer-A-org> — the first callers
 it has ever had. It shipped in v2.3.0 on 2026-08-16 and nobody had run it, so both defects
 were latent in a workflow that CI called green.
 
@@ -1308,7 +1326,7 @@ nobody until a new release is cut. The obvious move was `v2.4.1`; we deliberatel
   input contract. A patch action bump inside a `run:`-less setup step changes no behaviour a caller
   can observe.
 - **It would have instantly staled two repos that were repinned hours earlier.**
-  `AutoMahn/project` and `Traide-Co/project` moved to `@v2.4.0` the same day. Cutting `v2.4.1`
+  `<consumer-B-org>/project` and `<consumer-A-org>/project` moved to `@v2.4.0` the same day. Cutting `v2.4.1`
   makes both out-of-date immediately, for no gain.
 - **The release ceremony is disproportionate.** Cutting one is four steps — stamp sweep PR
   (`scripts/stamp_version.py`) → merge → tag → `gh release create` — plus a repin PR per caller
@@ -1342,11 +1360,11 @@ delete the digest, and under build-once/promote a released digest also carries `
 **empty** for these private repos — two control searches for strings that certainly exist came
 back with nothing, so "no results" there is not evidence of absence. Scanned instead by fetching
 every workflow file through the git-trees + contents APIs: **19 active repos, 91 workflow files.
-Zero registry build caches.** Every cache in the fleet is `type=gha` (AutoMahn/api,
-Traide-Co/api, Realm-ID/api, Realm-ID/project) — GitHub's Actions cache, which never creates a
+Zero registry build caches.** Every cache in the fleet is `type=gha` (<consumer-B-org>/api,
+<consumer-A-org>/api, <consumer-C-org>/api, <consumer-C-org>/project) — GitHub's Actions cache, which never creates a
 tagged image in Artifact Registry. The only `buildcache` string anywhere is a comment. Of the
-three `cleanup-gar-images` callers, two run `enforce` (Traide-Co, Realm-ID), one `preserve`
-(AutoMahn), and **none overrides `keep_tags`**.
+three `cleanup-gar-images` callers, two run `enforce` (<consumer-A-org>, <consumer-C-org>), one `preserve`
+(consumer B), and **none overrides `keep_tags`**.
 
 **Decision: opt-in, not default.** `keep_tags` now defaults to `latest`. A registry cache and
 `immutable_tags_policy: enforce` are mutually exclusive, so choosing the cache means choosing
@@ -1434,7 +1452,7 @@ still collide on the whole-blob write, so a per-key lock is no lock at all.
 three plausible, self-consistent prefixes are indistinguishable from a deliberate choice to run
 them in parallel. Nor did run history disprove it: no overlap has been observed, because the
 exposure needs a quarterly or annual scheduled rotation to land on a manual sync — rare enough
-to stay invisible for a long time and still be real. AutoMahn's caller-level
+to stay invisible for a long time and still be real. Consumer B's caller-level
 `group: secrets-rotation` covered two of its four callers, which is the kind of partial mitigation
 that makes the gap look closed.
 
@@ -1595,7 +1613,7 @@ recalled:
   read the mounted volume fail."* Resolution is at **runtime, on every read**.
 - **Env vars** — *"resolved at instance startup time."*
 
-Every Cloud Run service across `realm-id`, `auto-mahn` and `traide-in` uses the **volume**
+Every Cloud Run service across `<consumer-C-project-id>`, `<consumer-B-project-id>` and `<consumer-A-project-id>` uses the **volume**
 form. So there is no "safe until the next deploy" grace window that the original premise
 implied: a wrong destroy breaks a **running** service on its next read. The keep-set is
 therefore stricter than specced, not looser.
@@ -1633,9 +1651,9 @@ extracted from the workflow itself (no second copy to drift), wired into CI as
 off-by-one on the quarantine boundary, substituting `max(version)` for the resolved
 `latest`, ignoring consumer pins, and destroying on an unknown clock each now fail at least
 one fixture; the first two survived the initial suite and drove two extra fixtures. The
-full collection-plus-plan pipeline was additionally driven against live `realm-id`,
-`auto-mahn` and `traide-in` data read-only: the `auto-mahn` plan (disable `5`, destroy
-`8,6,4,3,2,1`) matches fixture `s11` exactly, and `realm-id`'s `issuer-env:1` is correctly
+full collection-plus-plan pipeline was additionally driven against live `<consumer-C-project-id>`,
+`<consumer-B-project-id>` and `<consumer-A-project-id>` data read-only: the `<consumer-B-project-id>` plan (disable `5`, destroy
+`8,6,4,3,2,1`) matches fixture `s11` exactly, and `<consumer-C-project-id>`'s `issuer-env:1` is correctly
 held at 6.7 days of a 30-day quarantine.
 
 **Also caught, and worth recording as a lint win:** shellcheck's SC2259 flagged
@@ -1647,8 +1665,8 @@ the fixture suite, which only covers the plan block.
 
 ## 2026-08-13 — `cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule
 
-**Context.** `Realm-ID/api`, `Traide-Co/api` and `Realm-ID/issuer` stopped pushing `:latest`
-on 2026-08-12 so that `realm-id/backend` and `traide-in/backend` could be locked with immutable
+**Context.** `<consumer-C-org>/api`, `<consumer-A-org>/api` and `<consumer-C-org>/issuer` stopped pushing `:latest`
+on 2026-08-12 so that `<consumer-C-project-id>/backend` and `<consumer-A-project-id>/backend` could be locked with immutable
 tags. The builds changed, but the **last-pushed `:latest` tag stayed**. In a locked repository
 that is permanent: the tag pins its digest alive, `keep_tags` (default `latest,buildcache`)
 shields it from the sweep, and an immutable repository refuses to move or remove it. Nothing
@@ -1657,7 +1675,7 @@ converges — every future sweep keeps it, forever.
 **Discovered while scoping this: the premise could not be verified with anything that existed.**
 The raw `images list --include-tags` output is captured into a Python variable and never
 printed, and the plan JSON enumerates only `to_delete` and `blocked_by_parent` — a keep-set
-digest appears nowhere. `akshat@revvup.ai` gets `IAM_PERMISSION_DENIED` on
+digest appears nowhere. `<owner-email>` gets `IAM_PERMISSION_DENIED` on
 `artifacts repositories describe` for **both** projects, and only `github-cleaner` holds
 `artifactregistry.admin`, reachable exclusively via WIF inside Actions. So there was no read
 path to confirm the tags were still there. That shaped the design: **`dry_run: true` is now the
@@ -1703,7 +1721,7 @@ next scheduled sweep after the repin, with no caller change and no manual dispat
 
 **The CSV was dropped as speculative.** The only same-class candidate is `buildcache`, the other
 entry in the default `keep_tags` — but the PR that would have introduced it
-(`Realm-ID/issuer#2`, registry build cache) was closed as obsolete on 2026-08-12, so it was
+(`<consumer-C-org>/issuer#2`, registry build cache) was closed as obsolete on 2026-08-12, so it was
 probably never pushed. That could not be confirmed: a `gh search code` sweep of both orgs
 returned nothing for `buildcache`, but a control query for `cleanup-gar-images` also returned
 nothing, so the search does not index these private repos and **proves nothing either way**.
@@ -1745,17 +1763,17 @@ verified behaviour-neutral grounds, **this one changes behaviour on upgrade** fo
 the default `enforce` policy: their next sweep removes `:latest`. That is the intent, but it
 means a v2.2.0 repin is not a no-op and should not be described as one.
 
-**Outcome (same day).** Released v2.2.0, repinned both GAR callers (`Realm-ID/project#10`,
-`Traide-Co/project#72`), and applied. **The tags were real** — the first `dry_run: true`
+**Outcome (same day).** Released v2.2.0, repinned both GAR callers (`<consumer-C-org>/project#10`,
+`<consumer-A-org>/project#72`), and applied. **The tags were real** — the first `dry_run: true`
 dispatch was the first time anyone had ever observed them:
 
 | package | `:latest` digest |
 |---|---|
-| `realm-id/backend/api` | `sha256:54efb487939aefb9f477bbdc5362e0244a2ee699de7dfb5b5fd942952ae08b53` |
-| `realm-id/backend/bff-api` | `sha256:ef66703bf2122144f73b30702813fd390e3afeffbd8bf01851107e4d2672f2b6` |
-| `traide-in/backend/api` | `sha256:4a751f54654ba40e1b61058888c6881cc3669930dcf71794fc1cfd44fe094366` |
+| `<consumer-C-project-id>/backend/api` | `sha256:54efb487939aefb9f477bbdc5362e0244a2ee699de7dfb5b5fd942952ae08b53` |
+| `<consumer-C-project-id>/backend/bff-api` | `sha256:ef66703bf2122144f73b30702813fd390e3afeffbd8bf01851107e4d2672f2b6` |
+| `<consumer-A-project-id>/backend/api` | `sha256:4a751f54654ba40e1b61058888c6881cc3669930dcf71794fc1cfd44fe094366` |
 
-Applied runs `31701095105` (RI) / `31701099146` (TC), both green. Both emitted
+Applied runs `31701095105` (consumer C) / `31701099146` (consumer A), both green. Both emitted
 `immutable-tag policy: enforce`, `repository has immutable tags enabled`, `permission to toggle
 immutable tags confirmed` and `immutable tags re-enabled` — so the policy gate acted rather than
 declining, and the unlock/re-lock window closed correctly on both. That is also a **fresh
@@ -1805,7 +1823,7 @@ reconcile exactly against the 15 the pre-sweep scan found.
 **Result.** All 6 PRs merged; `fleet_drift.py` re-run against live state reports 15/15 at
 `v2.1.2`, zero stale, zero mutable.
 
-**`Realm-ID/ui` was included, knowingly.** Its tag-deploy path is still unproven end-to-end (an
+**`<consumer-C-org>/ui` was included, knowingly.** Its tag-deploy path is still unproven end-to-end (an
 open follow-up). The repin cannot change its behaviour — version stamp only — but the first
 real `v*.*.*` tag will now exercise a line touched today. Called out here so that, if that
 deploy misbehaves, this is not mistaken for the cause and the actual unproven surface is
@@ -1814,12 +1832,12 @@ looked at first.
 ## 2026-08-13 — `retire-gar-packages` handles immutability, and preserves it rather than deciding it
 
 **Context.** Enforcing immutable tags fleet-wide (v2.1.0, entries below) locked
-`realm-id/backend` and `traide-in/backend`. `retire-gar-packages` deletes whole packages via
+`<consumer-C-project-id>/backend` and `<consumer-A-project-id>/backend`. `retire-gar-packages` deletes whole packages via
 `gcloud artifacts packages delete`, which a locked repository refuses for any package holding a
 tagged image — and the executor `exit 1`s on that raw error. The workflow was left a trap:
 green in `dry_run`, red on the first apply, with a gcloud message naming neither the cause nor
 the fix. Latent only because no repo in either org calls it today (verified by grepping all 50
-workflow files across Realm-ID + Traide-Co), which is exactly the kind of thing that is
+workflow files across <consumer-C-org> + <consumer-A-org>), which is exactly the kind of thing that is
 discovered by the person retiring a service under time pressure.
 
 **Decision.** Give it the same detect → pre-flight → unlock → act → `always()` restore sequence
@@ -1861,8 +1879,8 @@ failure. Written first and confirmed red (`step 'Check tag immutability' not fou
 ## 2026-08-12 — A locked repo the sweep cannot unlock degrades to untagged-only instead of failing
 
 **Context.** v2.1.0 (entry below) kept the 2026-08-11 rule that a repository which *started*
-locked fails the run when the SA cannot unlock it. For `realm-id/backend` and
-`traide-in/backend` that branch had never been reachable — they were never locked. Enforcing
+locked fails the run when the SA cannot unlock it. For `<consumer-C-project-id>/backend` and
+`<consumer-A-project-id>/backend` that branch had never been reachable — they were never locked. Enforcing
 immutability makes it reachable, so a permission the platform did not need yesterday becomes
 load-bearing for every future sweep: revoke `artifactregistry.admin` and both nightly sweeps
 go red.
@@ -1882,7 +1900,7 @@ guarded against was silence, not partiality.
 accumulate untagged buildx children — which is the growth this job exists to stop, and which
 degrading still handles. Trading that for a red pipeline buys nothing except an outage.
 
-**Why not exit 0 doing nothing.** A green no-op is what hid `traide-in` growing to 580 MB over
+**Why not exit 0 doing nothing.** A green no-op is what hid `<consumer-A-project-id>` growing to 580 MB over
 six days. The degraded run is explicitly not that: it does the available work and reports the
 gap in the summary, and the pre-existing "planned N, deleted 0" warning is suppressed here
 because on a degraded run it would read as a keep-set bug rather than a missing grant.
@@ -1901,7 +1919,7 @@ exactly the two untagged ones, stays green, warns, and reports the skip count.
 **Context.** The 2026-08-11 entry below built detect → unlock → sweep → relock, and stated
 the principle as *"a repository without immutability never has its settings touched."*
 That principle had an unnoticed consequence: **a repository that was never locked is never
-protected, and nothing in the platform ever locks it.** It surfaced when the `realm-id/backend`
+protected, and nothing in the platform ever locks it.** It surfaced when the `<consumer-C-project-id>/backend`
 GAR console still showed immutability disabled after the 2026-08-12 sweep. Nothing was
 broken — run `31573158323` shows detection returning false and both toggle steps skipped
 (zero occurrences of `--immutable-tags` in the run log) — but "relock is on by default" had
@@ -1936,8 +1954,8 @@ failing closed. It is wrong here because the two failures are not the same event
 
 **The real cost, and why the fleet needed three edits first.** An immutable repository
 rejects *any* push that moves an existing tag — which includes `:latest`. Three pipelines
-push `:latest` into the two repositories being locked (`Realm-ID/api` `deploy.yml`,
-`Traide-Co/api` `deploy.yml`, and `Realm-ID/issuer` via `promote-image`'s `also_tag_latest`).
+push `:latest` into the two repositories being locked (`<consumer-C-org>/api` `deploy.yml`,
+`<consumer-A-org>/api` `deploy.yml`, and `<consumer-C-org>/issuer` via `promote-image`'s `also_tag_latest`).
 Turning enforcement on without removing them would have failed the *builds*, not the sweep,
 and only on the second push. Nothing consumes those tags — Cloud Run deploys reference
 semver/sha — so they were retired rather than the policy weakened. **This is documented as
@@ -1951,7 +1969,7 @@ and the one that must never regress (a readback saying "still unlocked" fails th
 
 ## 2026-08-11 — `cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)
 
-**Symptom.** A caller (`Traide-Co/project`, pinned `@v1.15.0`) ran the daily sweep for six
+**Symptom.** A caller (`<consumer-A-org>/project`, pinned `@v1.15.0`) ran the daily sweep for six
 consecutive days at `deleted=0`, `failed=0`, exit 0 — a green check every morning while its
 GAR repo grew to 580 MB / 78 image versions. The plan was never empty: it queued 8, then 8,
 8, 12, 14, 16 candidates. Every one was skipped at execution.
@@ -1997,18 +2015,18 @@ the age rule read, and no fixture modelled the index/child relationship at all.
 **Measured across the fleet, not reasoned** (AGENTS.md §5, and the correction entry below
 it). The first draft of this entry claimed the sweep "never deletes anything" and that no
 tagged image can ever age out. **That generalised one caller to the fleet and was wrong** —
-`AutoMahn/project` deletes ~3 per run and `RealmID` cleared 125 in one. Both plan builders
+`<consumer-B-org>/project` deletes ~3 per run and `consumer C` cleared 125 in one. Both plan builders
 were then run against real dumps of all three registries:
 
 | repo | before (queued) | of which impossible | after (queued) | newly deleted | reported as held |
 |---|---|---|---|---|---|
-| `traide-in` | 20 | 18 | 3 | 1 (`v0.4.0`, 42d) | 18 |
-| `auto-mahn` | 20 | 20 | 3 | 1 (`v0.0.104`, 31d) | 18 |
-| `realm-id` | 112 | 111 | 9 | 2 (`v0.31.0` 32d, `v0.18.1` 31d) | 105 |
+| `<consumer-A-project-id>` | 20 | 18 | 3 | 1 (`v0.4.0`, 42d) | 18 |
+| `<consumer-B-project-id>` | 20 | 20 | 3 | 1 (`v0.0.104`, 31d) | 18 |
+| `<consumer-C-project-id>` | 112 | 111 | 9 | 2 (`v0.31.0` 32d, `v0.18.1` 31d) | 105 |
 
 Two things that only the measurement shows. **The child defect is fleet-wide** — 50/50 and
-200/200 untagged manifests on `auto-mahn` and `realm-id` are index children, and 18 of the
-19 `kept-parent` skips in AutoMahn's 2026-08-11 run are confirmed children by digest. Those
+200/200 untagged manifests on `<consumer-B-project-id>` and `<consumer-C-project-id>` are index children, and 18 of the
+19 `kept-parent` skips in consumer B's 2026-08-11 run are confirmed children by digest. Those
 repos looked healthy because a handful of real deletions hid a plan that was ~95% noise.
 **The age change is small, not sweeping** — one or two extra images per repo, each 31–42
 days old and outside the keep-set. It is still *more* deletion, so it remains a behaviour
@@ -2063,7 +2081,7 @@ Out: `sha_tag_pattern`, `sha_retention_releases`, `untagged_max_age_days`,
 the same defect wearing different clothes:
 
 - A repo whose tags churn faster than `tagged_max_age_days` never ages anything out, so
-  `Traide-Co/project` ran green at `deleted=0` for six consecutive days while its registry grew
+  `<consumer-A-org>/project` ran green at `deleted=0` for six consecutive days while its registry grew
   to 580 MB.
 - Two dry runs 2m27s apart produced different plans because two untagged digests crossed the
   15-day line between them — and the difference was investigated as a behaviour change in the
@@ -2185,7 +2203,7 @@ so it is recorded in `TODO.md` rather than decided here.
 **Closes the open question** left by the "keep-only invariant is not true" entry below.
 
 **What the evidence is.** Both dry-run plans were recovered from the actual runs
-(`Realm-ID/project` run `31492420279` at 12:41 on `v1.15.0`, run `31492618604` at 12:43 on
+(`<consumer-C-org>/project` run `31492420279` at 12:41 on `v1.15.0`, run `31492618604` at 12:43 on
 `v1.21.1`) and diffed digest by digest. The two extra entries are:
 
 ```
@@ -2306,7 +2324,7 @@ names it means it — the regex requires a full `vX.Y.Z` and leaves `@v1` alone 
 ## 2026-08-11 — `deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check
 
 **Context.** A successful `wrangler pages deploy` means the upload succeeded. It says
-nothing about whether the site works. `Realm-ID/ui` learned this on **2026-06-29**, when a
+nothing about whether the site works. `<consumer-C-org>/ui` learned this on **2026-06-29**, when a
 stale bundle sat in production with a broken client-routed path and nothing noticed; it
 hand-rolled a polling check afterwards, and that check is part of why the repo never
 migrated onto this reusable. Six callers had the same gap.
@@ -2333,7 +2351,7 @@ response (one request only), 404→404→200 propagation (passes, stops at three
 bad status (fails, exhausts attempts, names the URL), **200 with a missing marker** — the
 outage case — and a missing deployment URL failing with an explanation.
 
-**Unblocks** migrating `Realm-ID/ui` off `cloudflare/wrangler-action@v4`, a mutable tag on a
+**Unblocks** migrating `<consumer-C-org>/ui` off `cloudflare/wrangler-action@v4`, a mutable tag on a
 workflow holding a Pages deploy token.
 
 ## 2026-08-11 — `cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends
@@ -2399,7 +2417,7 @@ were caused by **what a consumer could not discover**:
 3. **A documented invariant that was never measured.** "keep-only, so it can only ever
    delete less" was false; a dry-run diff showed 103 → 105 candidates.
 4. **Pin drift as the normal state.** 39 example pins across twelve tags, oldest six
-   releases behind; `Traide-Co/webapp` frozen at `v1.15.0` by trap 1.
+   releases behind; `<consumer-A-org>/webapp` frozen at `v1.15.0` by trap 1.
 5. **An EOL default.** `node_version: '20'`, three months past end-of-life, reached every
    caller that omitted the input.
 
@@ -2450,7 +2468,7 @@ release-relative sha retention added in `v1.17.0` as **keep-only — "so it can 
 delete less."** That claim was reasoning about the intent of the change, not a measurement,
 and it was then used to justify treating `cleanup-gar-images` repins as low risk.
 
-**What a measurement shows.** Repinning `Realm-ID/project` from `v1.15.0` to `v1.21.1`,
+**What a measurement shows.** Repinning `<consumer-C-org>/project` from `v1.15.0` to `v1.21.1`,
 dry-run on both pins against the same `backend` repo minutes apart (310 images, 2 live
 digests):
 
@@ -2479,7 +2497,7 @@ than papered over.
 
 ## 2026-08-11 — Default-on badges must not fail CI for callers without a coverage report (bug fix)
 
-**Symptom.** `Traide-Co/webapp`, repinned to `v1.21.0`, failed its first run:
+**Symptom.** `<consumer-A-org>/webapp`, repinned to `v1.21.0`, failed its first run:
 `::error::coverage summary "coverage/coverage-summary.json" not found`. Install, lint and
 test all passed — including the jump to Node 24 — and the run started cleanly, so the
 `v1.21.0` permission fix worked. The Coverage step is what failed.
@@ -2489,7 +2507,7 @@ test all passed — including the jump to Node 24 — and the run started cleanl
 measurement on for every caller, and a missing Istanbul `json-summary` was a hard
 `::error::` + `exit 1`. That was defensible while badges were opt-in — you asked for badges,
 so emit the report — but as a default it fails every caller whose `test_command` does not
-produce coverage. Traide's is `npm test -- --run`: vitest, no `--coverage`.
+produce coverage. Consumer A's is `npm test -- --run`: vitest, no `--coverage`.
 
 **Why it wasn't caught.** When making default-on safe I reasoned through the paths that run
 against repos that never opted in, and softened the missing-`readme_path` error for exactly
@@ -2518,7 +2536,7 @@ re-triaging as "would this be fair to a caller who never asked?"
 conditional — and GitHub validates a **called** workflow's permissions against the caller
 **at startup, before any job-level `if:` is evaluated**. So a caller granting
 `contents: read` failed the entire run with `startup_failure` and no logs, *even with
-`update_badges: false`*. `Traide-Co/webapp` hit this on a real upgrade and froze at
+`update_badges: false`*. `<consumer-A-org>/webapp` hit this on a real upgrade and froze at
 `v1.15.0` with a comment explaining why; the copy-paste example shipped in `v1.20.0` had
 the same defect, patched in `v1.20.1`.
 
@@ -2596,7 +2614,7 @@ smaller jump.
 
 Strictly, changing a default is behaviour-affecting rather than a contract change, which
 argues for a major. It ships in a minor because the blast radius was measured, not assumed:
-of the migrated callers, **only `AutoMahn/website` omits `node_version`, and its
+of the migrated callers, **only `<consumer-B-org>/website` omits `node_version`, and its
 `build_command` is `'true'` — it never executes Node.** Every other Pages/CI caller pins
 `'22'` explicitly and is unaffected. Callers who genuinely need the old runtime can pin
 `node_version: '20'`, though they should not. Called out in the release notes.
@@ -2695,7 +2713,7 @@ here tracks the input contract, not the topic.
 
 ## 2026-07-28 — `run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out
 
-**Context.** Driven by the `AutoMahn/api` conversion — the last of the five in the
+**Context.** Driven by the `<consumer-B-org>/api` conversion — the last of the five in the
 build-once rollout and, per `TODO.md`, the hardest: it drives three Cloud Run resources
 off one image. Auditing what that caller actually needs turned up **fewer** gaps than
 expected, and one input we chose not to add.
@@ -2722,7 +2740,7 @@ notes worth keeping:
   *that* an execution failed, never why, so the workflow prints the execution status and
   a Logs Explorer link. It also names the empty-log case explicitly — a batch binary
   wired to a discarded logger is indistinguishable from a silent crash (cost a caller
-  ~1h on `AutoMahn/api` v0.0.7).
+  ~1h on `<consumer-B-org>/api` v0.0.7).
 - **No `jgd_commit` stamp, no GitHub Deployment record** — deliberately unlike
   `deploy-cloud-run`/`promote-image`/`rollback-service`. Forward-only reads an
   environment's live commit from what its *services* serve; a one-shot Job is not "live",
@@ -2735,7 +2753,7 @@ notes worth keeping:
 (last stage). For Dockerfiles carrying several leaves.
 
 **Not added: a runner-side prebuild hook — and this is the substantive call.**
-`AutoMahn/api` compiles Go on the runner and `COPY`s the binary into a `app-prebuilt`
+`<consumer-B-org>/api` compiles Go on the runner and `COPY`s the binary into a `app-prebuilt`
 stage, because BuildKit cache mounts are not exported by `cache-to: type=gha`, so an
 in-image `go build` starts cold every run. A reusable workflow is a separate job that
 does its own checkout, so that binary cannot cross the boundary — supporting it means
@@ -2763,14 +2781,14 @@ projection is how the caller got here in the first place.
 behaviour, and every caller pins a tag, so nothing moves until a caller repins.
 *Caveat:* the consumer list was **not** fully enumerated — `gh search code` returns
 nothing for the private orgs, and only two callers were confirmed directly
-(`Realm-ID/issuer` @v1.17.1, `AutoMahn/image-service` @v1.15.0). Additive-only is what
+(`<consumer-C-org>/issuer` @v1.17.1, `<consumer-B-org>/image-service` @v1.15.0). Additive-only is what
 makes that acceptable rather than verified.
 
 Ships as **`v1.19.0`**, in the same tag as the `promote-image` race fix above.
 
 ## 2026-07-27 — `deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)
 
-Ships as **`v1.17.1`**. Found by the first real `build_only` run (`Realm-ID/issuer`), not by CI.
+Ships as **`v1.17.1`**. Found by the first real `build_only` run (`<consumer-C-org>/issuer`), not by CI.
 
 **Symptom.** The `build_only` job built the image, pushed it, and set its `image` output — then
 the job went red. The failing step was `Summary`, after all real work had succeeded. The image
@@ -2824,7 +2842,7 @@ Ships as **`v1.18.0`** (`v1.16.0` is claimed by the unreleased `ci-go`/`ci-node`
 "non-empty JSON object" + "every value is a string" and nothing else. Those two checks are
 satisfied by the literal string `-`.
 
-That is not hypothetical. A Traide rotation run in May 2026 **succeeded** while distributing
+That is not hypothetical. A consumer A rotation run in May 2026 **succeeded** while distributing
 exactly that value as the R2 credentials; it sat in the `app-secrets` bundle for two months and
 surfaced only as the 2026-07-26 object-storage outage. Every layer behaved "correctly" — the
 workflow distributed what it was given, Cloud Run mounted it, the app read it. Nothing along the
@@ -2838,7 +2856,7 @@ the floor fails the run before anything is written or rolled.
   unaffected until they repin, so nothing breaks silently — the floor arrives as a deliberate
   version bump, and `min_value_length: 0` is the documented escape hatch for a caller with a
   legitimately short value.
-- **8 characters**, matching the floor Traide's api already enforces at boot (`mustCredEnv`), so
+- **8 characters**, matching the floor consumer A's api already enforces at boot (`mustCredEnv`), so
   the distribution path and the consumption path agree rather than each inventing a threshold.
 - **The error names the KEY, never the value.** Values are masked secrets; printing a too-short
   one to the run log to explain the failure would be its own leak.
@@ -2855,8 +2873,8 @@ Ships as **`v1.17.0`** (`v1.16.0` is already claimed by the unreleased `ci-go`/`
 badges work).
 
 **The defect, restated.** The premise going in was that the container repos double-build —
-once for stage, once at release. They do not. All five (`AutoMahn/api`,
-`AutoMahn/image-service`, `Realm-ID/api`, `Realm-ID/issuer`, `Traide-Co/api`) are a single
+once for stage, once at release. They do not. All five (`<consumer-B-org>/api`,
+`<consumer-B-org>/image-service`, `<consumer-C-org>/api`, `<consumer-C-org>/issuer`, `<consumer-A-org>/api`) are a single
 `deploy.yml` triggered only on `push: tags`, and there is no stage. The real problem is worse
 than a wasted build: **the artifact that ships to production is built at release time, from
 source, and has never run anywhere before production.** A re-run or a re-cut tag produces
@@ -2969,9 +2987,9 @@ generalised rule (index at ~400 lines, archive at ~600) is recorded in the `deci
 ## 2026-07-27 — Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep
 
 **Change.** Repinned every `Just-Git-Dev/reusable-workflows` caller across the platform to
-`@v1.15.0` — 26 `uses:` lines in 8 repos, pin-only, **all merged**: `AutoMahn/project#28`,
-`AutoMahn/api#27`, `AutoMahn/ui#7`, `AutoMahn/image-service#5`, `AutoMahn/admin-ui#2`,
-`AutoMahn/website#2`, `Traide-Co/project#23`, `Realm-ID/project#3`. **`quizzing-pro/api`
+`@v1.15.0` — 26 `uses:` lines in 8 repos, pin-only, **all merged**: `<consumer-B-org>/project#28`,
+`<consumer-B-org>/api#27`, `<consumer-B-org>/ui#7`, `<consumer-B-org>/image-service#5`, `<consumer-B-org>/admin-ui#2`,
+`<consumer-B-org>/website#2`, `<consumer-A-org>/project#23`, `<consumer-C-org>/project#3`. **`quizzing-pro/api`
 deliberately excluded — see below.**
 
 **Why.** A sweep of check-run *annotations* (not just conclusions) over the last 3 runs of
@@ -2999,12 +3017,12 @@ scheduled cross-org pin-drift report.
 `on.workflow_call` `inputs`/`secrets` block of each reusable was parsed at the caller's
 current pin and at `v1.15.0` and diffed: no removed inputs, no removed secrets, no newly
 required inputs, for all 22 (workflow, old-pin) pairs checked — the 17 distinct pairs actually
-repinned, plus `quizzing-pro`'s 4 held-back pairs and the Realm-ID `@v1` pair. This mattered
+repinned, plus `quizzing-pro`'s 4 held-back pairs and the <consumer-C-org> `@v1` pair. This mattered
 concretely — `ci-go`'s
 `github_token`→`go_private_token` secret rename (v1.11.0) is a real breaking change for any
 caller in the `v1.6.0`–`v1.10.0` window; the check confirmed our callers sit at `v1.5.0` and
 `v1.11.0`, i.e. either side of it, so none are affected. Guessing here would have broken
-`AutoMahn/api`.
+`<consumer-B-org>/api`.
 
 **What is *not* proven:** contract compatibility is static. Runtime behaviour on `v1.15.0` is
 only exercised by each workflow's next real run. This is stated in every PR body rather than
@@ -3023,7 +3041,7 @@ one PR. The badges work reaches these callers on the next sweep.
 very PR that unblocks `v1.16.0`, and would move a live GKE prod deploy/promote path in a
 drive-by chore PR. It gets repinned to the tag as part of the `v1.16.0` cut instead.
 
-**A mutable ref was hiding in the fleet.** `Realm-ID/project`'s `cleanup-gar-images.yml` was
+**A mutable ref was hiding in the fleet.** `<consumer-C-org>/project`'s `cleanup-gar-images.yml` was
 pinned to **`@v1`** — the frozen legacy alias this repo's own consumer rule says never to point
 new callers at. `v1` resolves to `b96d0e3`, the *original* 5-workflow commit, so that caller had
 been running the first-ever version of `cleanup-gar-images` continuously, and would have silently
@@ -3033,15 +3051,15 @@ further argument for the automated drift report filed in `TODO.md`, which should
 as well as stale ones.
 
 **Process note — the first sweep was incomplete, and that is the point.** The initial pass
-enumerated `Just-Git-Dev`, `AutoMahn`, `Traide-Co`, `RevvUp-AI`, `quizzing-pro`, `zop-mannai`
-and **missed the `Realm-ID` org entirely**, despite Realm-ID being one of the three projects
+enumerated `Just-Git-Dev`, `consumer B`, `<consumer-A-org>`, `<consumer-D-org>`, `quizzing-pro`, `zop-mannai`
+and **missed the `<consumer-C-org>` org entirely**, despite <consumer-C-org> being one of the three projects
 `infra-provisioning` onboards. It was caught only because a human named it. A hand-maintained
 org list is exactly the wrong source of truth for a fleet audit; the drift report should derive
 its org list from something authoritative (e.g. `infra-provisioning/projects/*` plus the CF/GitHub
 target configs) rather than from whatever was typed that day.
 
 **Also found, not fixed here** (logged to `infra-provisioning/TODO.md`): `rotate-cloudflare-token`
-warns that AutoMahn's CF token lacks `Pages -> Edit`, `R2 -> Edit` and `Workers Scripts -> Edit`
+warns that consumer B's CF token lacks `Pages -> Edit`, `R2 -> Edit` and `Workers Scripts -> Edit`
 (three HTTP 403s) while the job still reports success; and four rotation workflows have **never
 been run at all**, so their IAM paths are unproven in either direction.
 

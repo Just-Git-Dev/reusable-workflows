@@ -13,7 +13,7 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Service alerts — rollout and deferred slice (opened 2026-09-23)](#service-alerts--rollout-and-deferred-slice-opened-2026-09-23) — 6 open
 - **ACTIVE** — [Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)](#post-deploy-probe--prove-the-observability-pipeline-actually-delivers-opened-2026-09-18) — 1 open, 1 closed
 - **ACTIVE** — [Two items rehomed from the inflight tracker (opened 2026-09-08)](#two-items-rehomed-from-the-inflight-tracker-opened-2026-09-08) — 2 open
-- **ACTIVE** — [RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)](#realmid-realm-id-has-no-alerts-caller--adopt-bootstrap-alerts-opened-2026-09-07) — 3 open
+- **ACTIVE** — [consumer C (`<consumer-C-project-id>`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)](#consumer-c-consumer-c-project-id-has-no-alerts-caller--adopt-bootstrap-alerts-opened-2026-09-07) — 3 open
 - **ACTIVE** — [Release hygiene — the `WORKFLOW_VERSION` stamp (regression found 2026-09-06)](#release-hygiene--the-workflow_version-stamp-regression-found-2026-09-06) — 4 open
 - **ACTIVE** — [Build attestations](#build-attestations) — 1 open
 - **ACTIVE** — [Secret Manager](#secret-manager) — 1 open, 2 closed
@@ -72,7 +72,7 @@ this section is only about the classes, which any repo with local gates can hit.
 
 ## Third-party images vanish from public registries — MinIO (opened 2026-09-24)
 
-Handed over from the Traide session with the owner's approval. **Filed for fleet triage, not
+Handed over from the consumer A session with the owner's approval. **Filed for fleet triage, not
 started.** Each project fixes its own repos; this section is only about the fleet-wide class.
 
 **Failure class:** a third-party image disappears from its public registry, and every consumer
@@ -82,21 +82,21 @@ pinned to it breaks at the same moment. Local stacks keep working from the image
 **Verified here, 2026-09-24** (`docker manifest inspect`, exit code per ref):
 `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` → 1, `quay.io/minio/mc:latest` → 1,
 `minio/minio:latest` (Docker Hub) → 1. Positive control `quay.io/prometheus/prometheus:latest` → 0.
-**Reported by Traide, not re-checked here:** the quay repo API answers 401; Traide's api deploy for
-v0.58.0 failed at its MinIO smoke step, and its CI integration jobs fail at the pull. Traide's
+**Reported by consumer A, not re-checked here:** the quay repo API answers 401; consumer A's api deploy for
+v0.58.0 failed at its MinIO smoke step, and its CI integration jobs fail at the pull. Consumer A's
 ruling was Chainguard (`cgr.dev/chainguard/minio`, `…/minio-client`) pinned by digest. Those
 images are distroless (no shell, no curl), so `sh -c` init scripts and curl healthchecks need
-rework. Digests are in `tally-helper/.scratch/minio-digests.txt`, which is scratch and not durable.
-This is the second MinIO registry break: Traide already moved from Docker Hub to quay earlier
-(`tally-helper/DECISIONS.md`, "minio/mc").
+rework. Digests are in `<consumer-repo>/.scratch/minio-digests.txt`, which is scratch and not durable.
+This is the second MinIO registry break: consumer A already moved from Docker Hub to quay earlier
+(`<consumer-repo>/DECISIONS.md`, "minio/mc").
 
-- [ ] **AutoMahn is exposed too, locally only — handed to the AutoMahn session 2026-09-24.**
+- [ ] **consumer B is exposed too, locally only — handed to the consumer B session 2026-09-24.**
       Still on Docker Hub `minio/minio:latest` / `minio/mc:latest` (denied) at six refs:
       `docker-compose.yml:48,65`, `api/docker-compose.yml:56,73`,
-      `api/scripts/docker-compose.test.yml:114,131`. No AutoMahn CI job or deploy pulls MinIO
+      `api/scripts/docker-compose.test.yml:114,131`. No consumer B CI job or deploy pulls MinIO
       (`api/.github/workflows/lint.yml` mentions it only in a comment; prod uses R2), so what
       breaks is a fresh `make up` / `make test-all` on an uncached machine. The test compose's curl
-      healthcheck (`:120`) breaks under a distroless swap. The fix is AutoMahn's to make.
+      healthcheck (`:120`) breaks under a distroless swap. The fix is consumer B's to make.
 - [ ] **Mirror pinned third-party images into our own registry (GHCR or GAR).** Consumers pull
       from the mirror, so an upstream withdrawal becomes a sync failure rather than an outage.
       Owner to decide on the registry and which images are in scope.
@@ -110,7 +110,7 @@ This is the second MinIO registry break: Traide already moved from Docker Hub to
 
 Plan: `plans/service-alerts.md`. Why: DECISIONS 2026-09-23.
 
-- [x] **First live `dry_run` on realm-id** — DONE 2026-09-23, Realm-ID/project run
+- [x] **First live `dry_run` on <consumer-C-project-id>** — DONE 2026-09-23, <consumer-C-org>/project run
   35840428112 @v2.10.0.
   - `job_workflow_sha` is present, but for a tag pin it is the annotated TAG OBJECT's SHA
     (1687ae3), not the commit's. Docs now say so.
@@ -119,7 +119,7 @@ Plan: `plans/service-alerts.md`. Why: DECISIONS 2026-09-23.
   - The `userLabels` filter ran without error, but against an empty project, so it has not
     yet shown a MATCH. The first re-run after the apply proves that: it must read
     `unchanged` × 11.
-- [x] **First apply on realm-id + fire tests** — DONE 2026-09-23. All 11 policies are live
+- [x] **First apply on <consumer-C-project-id> + fire tests** — DONE 2026-09-23. All 11 policies are live
   (read back).
   - Log-match policies DO need `logging.notificationRules.create`: the first apply 403'd, and
     infra-provisioning #81 added `logging.configWriter`.
@@ -131,11 +131,11 @@ Plan: `plans/service-alerts.md`. Why: DECISIONS 2026-09-23.
       test filter stayed armed until the 11:08Z revert.
 
   The first latency attempt opened nothing: it was reverted before evaluation.
-- [ ] **Email delivery for the fire-test incidents** — the owner confirms in the RealmID on-call
+- [ ] **Email delivery for the fire-test incidents** — the owner confirms in the consumer C on-call
   inbox (09:40, 10:28, 10:45 UTC, two each). It is the one link no tool here can read.
-- [ ] **Promote the GoFr rules from ticket to page after RealmID's soak re-check (~2026-09-26).**
+- [ ] **Promote the GoFr rules from ticket to page after consumer C's soak re-check (~2026-09-26).**
   gofr#4266 degrades with revision uptime, and the fix isn't proven on a days-warm revision.
-- [ ] **Traide and AutoMahn migrate** in their own sessions: packs, parity check, then delete
+- [ ] **consumer A and consumer B migrate** in their own sessions: packs, parity check, then delete
   the MQL / hand-written policy files (`docs/service-alerts.md#migrating-from-hand-written-policies`).
 - [ ] **v2.11 slice:** `prune` (owner-scoped), `probe.health_body` uptime check (opt-in, since
   it keeps instances warm), and the `gofr-http-client` / `gofr-pubsub` / `gofr-cron` packs once
@@ -147,8 +147,8 @@ Plan: `plans/service-alerts.md`. Why: DECISIONS 2026-09-23.
 
 ## Post-deploy probe — prove the observability pipeline actually DELIVERS (opened 2026-09-18)
 
-Handed over from the Traide umbrella session. The owner ruled this a **platform** concern, not a
-Traide one: the incident was Traide's, the failure class is generic. **Filed for triage, not
+Handed over from the consumer A umbrella session. The owner ruled this a **platform** concern, not a
+Consumer A one: the incident was consumer A's, the failure class is generic. **Filed for triage, not
 started** — nothing here is designed or agreed yet.
 
 - [x] **A post-deploy probe that fails the release when metrics are not arriving.** ✅ **BUILT
@@ -157,7 +157,7 @@ started** — nothing here is designed or agreed yet.
       unfiltered positive control, a *list* of prefixes with PASS on the union, and the log grep
       pinned to the **serving** revision. Six paired step-body tests. Original entry: The failure
       class: *a broken observability path deletes the very signal that would announce it.*
-      Traide's api ran for weeks with its GCP OTel exporter delivering **zero** metrics because
+      consumer A's api ran for weeks with its GCP OTel exporter delivering **zero** metrics because
       `OTEL_RESOURCE_ATTRIBUTES` lacked `gcp.project_id`. Every gate stayed green the whole time
       — deploy, Cloud Run startup probe, `/.well-known/alive`, `migrate-smoke`, `storage-probe` —
       because the only evidence was a log line *inside the container*, and the thing that would
@@ -166,9 +166,9 @@ started** — nothing here is designed or agreed yet.
 
       The concrete check, as handed over (two parts, post-deploy, fails the release):
       1. List `metricDescriptors` for a given prefix on a given GCP project and **fail on zero**
-         (Traide's case: prefix `prometheus.googleapis.com/`, project `traide-in`).
+         (consumer A's case: prefix `prometheus.googleapis.com/`, project `<consumer-A-project-id>`).
       2. Grep the **serving** revision's logs for the exporter's upload error and fail on any hit
-         (Traide's case: `failed to upload metrics` on service `traide-api`).
+         (consumer A's case: `failed to upload metrics` on service `<service>-api`).
 
       **The positive-control requirement is the load-bearing part.** A probe that returns zero
       because it queried the wrong project, the wrong prefix, or ran under an account without
@@ -182,27 +182,27 @@ started** — nothing here is designed or agreed yet.
         `Invalid choice`, and `| wc -l` over the empty stdout returns 0 — i.e. it reports "no
         metrics ever arrived". Use the Monitoring REST API and assert the HTTP status.
       - **The prefix is not obvious and a wrong one returns a truthful-looking 0.** For
-        `realm-id`, `custom.googleapis.com/` and `workload.googleapis.com/` both return 0 while
+        `<consumer-C-project-id>`, `custom.googleapis.com/` and `workload.googleapis.com/` both return 0 while
         `prometheus.googleapis.com/` returns 7 — GMP publishes under the `prometheus.` prefix.
         This is precisely why the control is mandatory rather than nice-to-have.
 
-      **No fire:** the Traide instance is fixed (api v0.56.3). Verified by that session on
-      2026-09-18 — `traide-in` now holds 7 `prometheus.googleapis.com/` descriptors (was zero)
-      and no `failed to upload metrics` lines on `traide-api` in the preceding 3 hours. This item
+      **No fire:** the consumer A instance is fixed (api v0.56.3). Verified by that session on
+      2026-09-18 — `<consumer-A-project-id>` now holds 7 `prometheus.googleapis.com/` descriptors (was zero)
+      and no `failed to upload metrics` lines on `<service>-api` in the preceding 3 hours. This item
       is the generic prevention.
 
-      Pointers, all in `Traide-Co/api`: `docs/rca-metrics-never-reached-google-2026-09-18.md`
+      Pointers, all in `<consumer-A-org>/api`: `docs/rca-metrics-never-reached-google-2026-09-18.md`
       (full RCA), `DECISIONS.md` 2026-09-18 (b), `TODO.md` L11-21 (the original entry, still
       worded as api-owned; that session is re-pointing it separately).
 
 - [ ] **Wire the first callers.** The workflow ships; nothing calls it yet, and nothing *can*
       until `infra-provisioning` grants an SA that holds both `monitoring.viewer` and
-      `logging.viewer` (the `observability-read` capability, WIF-only). Order: `traide-co` — the
-      incident project — then `realm-id`. Each caller is a PR in that app repo, so it is a
+      `logging.viewer` (the `observability-read` capability, WIF-only). Order: `<consumer-A-org>` — the
+      incident project — then `<consumer-C-project-id>`. Each caller is a PR in that app repo, so it is a
       cross-project change, not work for this repo.
-      **AutoMahn is deliberately excluded**: it imports no GCP metrics exporter, so it exports
+      **consumer B is deliberately excluded**: it imports no GCP metrics exporter, so it exports
       nothing at all and this probe would red every release until that is fixed. Adopting it
-      there is a separate decision about AutoMahn's exporter, not about this probe.
+      there is a separate decision about consumer B's exporter, not about this probe.
 
 ## Two items rehomed from the inflight tracker (opened 2026-09-08)
 
@@ -226,7 +226,7 @@ live state — they are backlog, so they belong here. Recorded verbatim; neither
       drift". Build it that way: pin the expected SHA, fail loudly if it changes, and make the
       failure message say `v1` is frozen on purpose rather than suggesting a re-point.
 
-- [ ] **Owed to AutoMahn: audit `validate-alerts` for derived-comparand and assumed-scope
+- [ ] **Owed to consumer B: audit `validate-alerts` for derived-comparand and assumed-scope
       gates.** The linter's checks were reviewed for MQL execution (closed 2026-09-01, below)
       but not for two classes it may pass vacuously: a threshold compared against a value the
       policy itself derives, and a check that assumes a scope the policy never declares. Until
@@ -249,7 +249,7 @@ live state — they are backlog, so they belong here. Recorded verbatim; neither
       `autoClose` range, and the log-condition rate-limit requirement. Reading the code says they
       are structurally sound; nothing *executes* them. That is the gap to close, not a rewrite.
 
-## RealmID (`realm-id`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)
+## consumer C (`<consumer-C-project-id>`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)
 
 `auth` hand-rolled `infra/alerts/apply-alerts.sh` instead of calling this repo's
 `bootstrap-alerts.yml`, so it re-implements skip-if-exists **without** a `force_update`
@@ -267,7 +267,7 @@ read by both the linter and the applier; see `DECISIONS.md`).
       and `policy_glob: 'policy-*.json'`, then retire `apply-alerts.sh`.
 
 **Cross-repo: the checklist above is auth-repo work, not ours.** Recorded here only so the
-platform side knows why `realm-id` is the one project not on the shared alerts body.
+platform side knows why `<consumer-C-project-id>` is the one project not on the shared alerts body.
 Still uncovered there and the reason this surfaced: the OTel→GMP app metrics
 `app_http_response` / `app_sql_*` have no alert policy at all — uptime only.
 
@@ -311,7 +311,7 @@ GAR readback fix that release shipped.
       worth closing before it bites: fix is to assert that every file containing a
       `uses: .../reusable-workflows/...@` pin (by any regex, not just `PIN_RE`'s) is in the
       swept set, and fail on any that is not — otherwise the next `docs/*.md` added with a
-      real (non-placeholder) pin is silently exempt from the sweep. (Framing owed to AutoMahn's
+      real (non-placeholder) pin is silently exempt from the sweep. (Framing owed to consumer B's
       session, 2026-09-06; false live-instance claim corrected 2026-09-15.)
 - [ ] **Audit the other gates for the same two shapes** — comparands that are all derived, and
       scopes that are assumed rather than computed. Start with `validate-alerts`, which already
@@ -321,14 +321,14 @@ GAR readback fix that release shipped.
 ### Consumer pin inventory (for the separate, unstarted sweep — NOT the v2.6.2 bump)
 
 Regenerate this from this repo's own tool rather than trusting the numbers below to still be
-current: `python3 scripts/fleet_drift.py --orgs Realm-ID,Traide-Co,AutoMahn`.
+current: `python3 scripts/fleet_drift.py --orgs <consumer-C-org>,<consumer-A-org>,consumer B`.
 
 **Verified 2026-09-15** (after six cleanup-caller pins moved to `v2.7.0` that day across
-Realm-ID/project, Traide-Co/project, AutoMahn/project — PRs #17/#149/#45, all merged): **57
+<consumer-C-org>/project, <consumer-A-org>/project, <consumer-B-org>/project — PRs #17/#149/#45, all merged): **57
 caller lines fleet-wide — 37 STALE, 20 OK, 0 MUTABLE**, spread `v2.3.1` → `v2.5.0`. Zero mutable
 pins — nothing is on `@main` or the `v1` alias, so the supply-chain risk that motivated this
 section is not currently live anywhere. Deepest stragglers are on the deploy path:
-`Realm-ID/api` and `Realm-ID/issuer` `deploy.yml` pin `deploy-cloud-run` and `promote-image` at
+`<consumer-C-org>/api` and `<consumer-C-org>/issuer` `deploy.yml` pin `deploy-cloud-run` and `promote-image` at
 `v2.3.1`, four minors behind. `cleanup-secret-versions.yml` is deliberately still at `v2.4.1` in
 all three consumer repos — that bump is not a no-op, it swaps a project-level `gcloud secrets
 list` for a per-secret `gcloud secrets describe` and changes the IAM the caller needs, so it is
@@ -351,9 +351,9 @@ semver here tracks the **input contract**, so each pin needs its own diff read b
       so buildx's default applies and every push adds an
       attestation manifest beside the image. Those are the `unknown/unknown` children
       `cleanup-gar-images` already has to reason about — its own header comment names them, and
-      the Traide RCA found all 52 untagged manifests were index children of exactly this shape.
+      the consumer A RCA found all 52 untagged manifests were index children of exactly this shape.
 
-      Surfaced 2026-08-12 while closing `Realm-ID/issuer#2`, which carried `provenance: false`
+      Surfaced 2026-08-12 while closing `<consumer-C-org>/issuer#2`, which carried `provenance: false`
       on a local build step that no longer exists (build-once moved the build into
       `deploy-cloud-run`). Its stated reason was that Cloud Run consumes a plain image —
       **that claim is unverified here**, and both `issuer` and `api` deploy fine today, so this
@@ -368,7 +368,7 @@ semver here tracks the **input contract**, so each pin needs its own diff read b
 
 ## Secret Manager
 
-- [x] **`cleanup-secret-versions.yml` — ✅ ADOPTED 2026-08-24 (AutoMahn + Traide-Co).**
+- [x] **`cleanup-secret-versions.yml` — ✅ ADOPTED 2026-08-24 (consumer B + <consumer-A-org>).**
       Zero callers since `v2.3.0`; the first adoption attempt immediately surfaced two latent
       defects in the workflow (project-wide `secrets.list` demanded to validate a name;
       `secrets_list` collapsing multi-secret lists) — fixed, with step tests, see DECISIONS
@@ -377,25 +377,25 @@ semver here tracks the **input contract**, so each pin needs its own diff read b
       Live survey, same day, of what the sweep would actually find:
       | project | secret | versions |
       |---|---|---|
-      | `auto-mahn` | `app-secrets` | 2 ENABLED (v9, v10), 8 already DESTROYED |
-      | `traide-in` | `app-secrets` | 3 ENABLED (v3–v5), 2 DISABLED (v1, v2, since 2026-05-24) |
+      | `<consumer-B-project-id>` | `app-secrets` | 2 ENABLED (v9, v10), 8 already DESTROYED |
+      | `<consumer-A-project-id>` | `app-secrets` | 3 ENABLED (v3–v5), 2 DISABLED (v1, v2, since 2026-05-24) |
       So with the defaults (`keep_enabled_count: 3`, `min_age_days: 7`) **both projects plan zero
       disables today** — the accumulation the workflow was built for is not present. Its value
       here is (a) prospective: the sweep runs on a schedule so it never accumulates, and
-      (b) traide-in's two DISABLED versions, which are past any quarantine and are the only
+      (b) <consumer-A-project-id>'s two DISABLED versions, which are past any quarantine and are the only
       destroy candidates in the fleet. Adopt with `dry_run: true` + `enable_destroy: false`
       first, read a plan, and only then consider the destroy flip.
       **DONE, end to end, same day.** IAM: `infra-provisioning#35` merged and APPLIED to both
       projects (3 binds each — `secretVersionManager` + `viewer` ON `app-secrets`, project
       `logging.viewer` → `github-cleaner`); verified live read-only afterwards, not just from
-      the run log. Callers: `AutoMahn/project#42` + `Traide-Co/project#92`, both monthly,
+      the run log. Callers: `<consumer-B-org>/project#42` + `<consumer-A-org>/project#92`, both monthly,
       both pinned `@v2.4.1`, both shaped so the SCHEDULE NEVER ACTS.
       **First real runs (`dry_run: true`) confirm the plan predicted from the survey:**
       | project | latest | enabled | disabled | consumers | to disable | to destroy |
       |---|---:|---:|---:|---:|---|---|
-      | `auto-mahn` | 10 | 2 | 0 | 6 | — | — |
-      | `traide-in` | 5 | 3 | 2 | 2 | — | 2, 1 |
-      AutoMahn's empty plan is the CORRECT result, not a misfire. traide-in's v1+v2 are
+      | `<consumer-B-project-id>` | 10 | 2 | 0 | 6 | — | — |
+      | `<consumer-A-project-id>` | 5 | 3 | 2 | 2 | — | 2, 1 |
+      consumer B's empty plan is the CORRECT result, not a misfire. <consumer-A-project-id>'s v1+v2 are
       eligible and await a human `enable_destroy: true`.
       These runs are also the first live proof of the #66 fixes: a resource-scoped caller
       that never touches project-level `secretmanager.secrets.list` completed `Collect
@@ -449,7 +449,7 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       ✅ **The keep-only claim HOLDS for identical input — root cause of the 105-vs-103
       delta established 2026-08-11** (an earlier note here declared the claim false; that note
       was wrong and is corrected). The `v1.15.0` (103) and `v1.21.1` (105) dry-runs on
-      `Realm-ID/project` were 2m27s apart, and both extra digests are **untagged with
+      `<consumer-C-org>/project` were 2m27s apart, and both extra digests are **untagged with
       `age_days` exactly 15** against `untagged_max_age_days: 15` (`>=`) — they aged past the
       threshold *between the runs*. The delete loop and live-digest collection are
       byte-identical across the two tags, the keep-set can only grow, and HEAD's delete-set is
@@ -459,7 +459,7 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       properly: untagged digests sitting exactly at the threshold age are wall-clock noise;
       tagged images, live digests, or ages away from the boundary are real. Latent `TypeError`
       on a missing `updateTime` fixed in the same pass.
-- [ ] **Pilot `Realm-ID/issuer` end-to-end** (lowest blast radius of the five). In its
+- [ ] **Pilot `<consumer-C-org>/issuer` end-to-end** (lowest blast radius of the five). In its
       `deploy.yml`: add a `main`-triggered `deploy-cloud-run` job with `build_only: true` →
       `:<sha>`; move the migrate-smoke validation to run against that pushed image; rewrite the
       tag path to call `promote-image` with `source_tag: ${{ github.sha }}`,
@@ -470,8 +470,8 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       `timeout_minutes` above it — the tag run and the `main` build run are independent, so
       without it a release cut alongside the merge fails on a healthy build. See the
       2026-07-28 race RCA in DECISIONS.md.
-- [ ] **Roll to the remaining four**, in this order: `Realm-ID/api`, `Traide-Co/api`,
-      `AutoMahn/image-service`, then **`AutoMahn/api` last** — it drives three Cloud Run services
+- [ ] **Roll to the remaining four**, in this order: `<consumer-C-org>/api`, `<consumer-A-org>/api`,
+      `<consumer-B-org>/image-service`, then **`<consumer-B-org>/api` last** — it drives three Cloud Run services
       off one image and has the largest env-var surface.
       **Precondition to confirm per repo before converting:** config is runtime-resolved
       (`APP_ENV=prod` a `--set-env-vars`, not a build arg). That is what makes one image
@@ -509,20 +509,20 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
 The goal (see `docs/convergence-audit.md`, 2026-07-14) is that platform app repos drop the
 external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
 
-- [ ] **Callers not yet migrated:** RevvUp-AI, zop-mannai, and quizzing-pro's other three repos
+- [ ] **Callers not yet migrated:** <consumer-D-org>, zop-mannai, and quizzing-pro's other three repos
       (`engine`, `admin-ui`, `ui` — all still on `zopsmart/workflows@main`, GKE, same pattern as
-      `api`). Realm-ID has only the two `project` ops callers, now repinned. `tally-extension`
+      `api`). <consumer-C-org> has only the two `project` ops callers, now repinned. `tally-extension`
       was never audited and is out of scope until it is.
 - [x] **Reusables still to build** — all built 2026-08-24: `deploy-cloudflare-worker`,
       `bootstrap-cf-service` + `bootstrap-cf-dns` (the `bootstrap-cf` item split in two —
       giving one service a hostname and managing a zone's records are different targets;
       see DECISIONS 2026-08-24), and `cloud-run-update`. **No caller is migrated yet**;
       each moves in its own repo's PR after the next release tag. `cloud-run-update` has
-      no adoptable caller at all until the Realm-ID hold lifts.
+      no adoptable caller at all until the <consumer-C-org> hold lifts.
       Superseded note: ~~`run-db-job`~~ —
       **built 2026-07-28** (Cloud Run Job converge + execute/wait), alongside a
       `docker_target` input on `deploy-cloud-run`. Both additive. Driven by the
-      `AutoMahn/api` conversion; see DECISIONS.md 2026-07-28, which also records why the
+      `<consumer-B-org>/api` conversion; see DECISIONS.md 2026-07-28, which also records why the
       runner-side prebuild hook that conversion seems to need was **not** added.
 - [ ] **quizzing-pro/api #2041** (the migration that removes its last `zopsmart` dependency) has
       been OPEN since 2026-07-14. Note its default branch `development` already carries the
@@ -531,7 +531,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
 - [ ] **Post-migration follow-ups:** WIF onboarding for quizzing-pro (→ `deploy-gke-service`,
       then drop the `promote-image` stored keys); per-service change-skip (`watch_paths` gate).
 - [ ] Two caller PRs were left red on **pre-existing** caller code debt, not on the reusables:
-      `AutoMahn/api#24` (7 golangci findings) and `Traide-Co/api#17` (3). User declined caller-code
+      `<consumer-B-org>/api#24` (7 golangci findings) and `<consumer-A-org>/api#17` (3). User declined caller-code
       fixes; they stay red until the code is fixed or `lint_blocking: false` is set.
 
 - [x] `deploy-cloud-run.yml` / `deploy-gke-service.yml` / `promote-image.yml` —
@@ -589,18 +589,18 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   ownership relationship the project does not have. The scheduled workflow and `fleet.json`
   are **removed**; `scripts/fleet_drift.py` survives as an operator tool requiring an explicit
   `--orgs`. **The consumer-facing answer is Dependabot** (documented in AGENTS.md + README) —
-  it reaches private callers, which nothing we run can. Original entry:  (`scripts/fleet_drift.py` + `.github/workflows/caller-drift.yml`, weekly + dispatch, org list in `fleet.json`). First real run: **24 of 32 caller pins need attention**, incl. nine in `AutoMahn/project` nobody had looked at. Needs `FLEET_READ_TOKEN` (cross-org read) before the schedule is useful. Original entry:  The 2026-07-27 repin sweep
+  it reaches private callers, which nothing we run can. Original entry:  (`scripts/fleet_drift.py` + `.github/workflows/caller-drift.yml`, weekly + dispatch, org list in `fleet.json`). First real run: **24 of 32 caller pins need attention**, incl. nine in `<consumer-B-org>/project` nobody had looked at. Needs `FLEET_READ_TOKEN` (cross-org read) before the schedule is useful. Original entry:  The 2026-07-27 repin sweep
   (see DECISIONS.md) found 18 of the fleet's 27 caller lines stranded on `@v1.4.0`/`@v1.5.0`, six-plus
   releases behind, and only noticed because someone manually read check-run *annotations*
   across every caller. Nothing detects this. Wanted: a scheduled workflow in this repo that
   walks the platform orgs, greps every `.github/workflows/*` for
   `Just-Git-Dev/reusable-workflows/...@<ref>`, and reports (issue or job summary) any caller
   more than one minor behind the latest tag — plus any pinned to a **mutable ref** (the sweep
-  found `Realm-ID/project` on `@v1`, i.e. still running the original `b96d0e3` implementation).
+  found `<consumer-C-org>/project` on `@v1`, i.e. still running the original `b96d0e3` implementation).
   Cheap to build (the sweep was ~30 lines of `gh api`); the value is that fixes we ship actually
   reach the repos that need them. **Derive the org list from an authoritative source** —
   `infra-provisioning/projects/*` + the CF/GitHub target configs — not a hand-typed list: the
-  first manual pass silently omitted the entire `Realm-ID` org.
+  first manual pass silently omitted the entire `<consumer-C-org>` org.
 - [ ] **repin `quizzing-pro/api` as part of the `v1.16.0` cut.** Deliberately excluded from
   the 2026-07-27 sweep — its `main.yaml` is concurrently edited by #2045 (badges dogfood,
   `ci-go` pinned to SHA `3d60a0d`) and #2041, and it is a live GKE prod deploy path. Its
@@ -620,7 +620,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   declares `permissions: contents: write` statically (`ci-node.yml:424`), and GitHub validates a
   called workflow's permissions against the caller **at startup**, before job-level `if:` is
   evaluated — so a `contents: read` caller gets `startup_failure` with no logs **even when
-  `update_badges` is false**. This is not theoretical: `Traide-Co/webapp` hit it and is frozen at
+  `update_badges` is false**. This is not theoretical: `<consumer-A-org>/webapp` hit it and is frozen at
   `v1.15.0` with a comment explaining why, and the copy-paste example shipped in `v1.20.0` had the
   same defect (patched in `v1.20.1` by granting write on the `ci` job).
   **Fix:** drop the workflow-level `permissions: contents: read` and the badge job's explicit
@@ -676,34 +676,34 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   to the reusables is a measurable build-time regression. Worth an opt-in
   `cache_node_modules` input. Note the key must include the Node version, and it is only sound
   because `npm ci` is deterministic.
-- [x] **`deploy-cloudflare-pages` post-deploy smoke check — BUILT 2026-08-11** (`smoke_path`, `smoke_expect`, bounded retry, blocking). Next: migrate `Realm-ID/ui` onto the reusable, which this unblocks. Original entry:  (`smoke_path` + bounded
-  retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `Realm-ID/ui`
+- [x] **`deploy-cloudflare-pages` post-deploy smoke check — BUILT 2026-08-11** (`smoke_path`, `smoke_expect`, bounded retry, blocking). Next: migrate `<consumer-C-org>/ui` onto the reusable, which this unblocks. Original entry:  (`smoke_path` + bounded
+  retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `<consumer-C-org>/ui`
   hand-rolls exactly this after the **2026-06-29 `/device` outage**, where a stale bundle went
   live with a broken client-routed path and nothing caught it — Pages deploys are
   eventually-consistent, so the poll needs a bounded retry, not a single curl. It is also part of
   why that repo has not migrated to the reusable. **Six consumers**: the five current callers
-  (`AutoMahn/{ui,admin-ui,website}`, `Traide-Co/{webapp,website}`) plus `eazyupdates-ui`. Lift the
-  logic from `Realm-ID/ui`'s `deploy.yml` rather than reinventing it.
+  (`<consumer-B-org>/{ui,admin-ui,website}`, `<consumer-A-org>/{webapp,website}`) plus `eazyupdates-ui`. Lift the
+  logic from `<consumer-C-org>/ui`'s `deploy.yml` rather than reinventing it.
 - [x] **Repin the three GAR callers onto `v2.0.0`** (release-relative retention). **DONE — overtaken
       by events 2026-08-20:** all three had already reached `@v2.2.0`, and the fleet-wide repin to
-      `@v2.3.1` (AutoMahn/project#31, Realm-ID/project#13, Traide-Co/project#82) supersedes this
-      item. `Traide-Co/project#65` was closed, so its pin-comment fix did not need folding in; the
+      `@v2.3.1` (<consumer-B-org>/project#31, <consumer-C-org>/project#13, <consumer-A-org>/project#82) supersedes this
+      item. `<consumer-A-org>/project#65` was closed, so its pin-comment fix did not need folding in; the
       stale pin comments were rewritten to name no version at all in the repin PRs. Original text:
-      `Realm-ID/project`
-      is on `@v1.21.1`; **`Traide-Co/project` and `AutoMahn/project` are still on `@v1.15.0`**, which
+      `<consumer-C-org>/project`
+      is on `@v1.21.1`; **`<consumer-A-org>/project` and `<consumer-B-org>/project` are still on `@v1.15.0`**, which
       predates the retention window entirely, so today they run on `keep_semver_count` + age alone.
       Per repo: dry-run BOTH pins, diff the plans, then repin. Expect a larger first sweep — v1 was
-      silently retaining a backlog. `realm-id` takes `grace_period_days: 1` (it is the one doing
-      build-once promotion). Fold `Traide-Co/project#65`'s pin-comment fix and incident record into
-      the Traide-Co repin PR rather than merging it separately — same file, guaranteed conflict.
-- [ ] **`Realm-ID/ui` + `Realm-ID/website` are the unmigrated Cloudflare Pages tail.** `ui` pins
+      silently retaining a backlog. `<consumer-C-project-id>` takes `grace_period_days: 1` (it is the one doing
+      build-once promotion). Fold `<consumer-A-org>/project#65`'s pin-comment fix and incident record into
+      the <consumer-A-org> repin PR rather than merging it separately — same file, guaranteed conflict.
+- [ ] **`<consumer-C-org>/ui` + `<consumer-C-org>/website` are the unmigrated Cloudflare Pages tail.** `ui` pins
   `cloudflare/wrangler-action@v4` — a **mutable tag**, which is precisely what this repo's SHA-pin
   CI rule exists to prevent, on a workflow holding a Pages deploy token; `website` shells out to
   `npx wrangler`. Both should move to `deploy-cloudflare-pages`, but the smoke-check gap above is
   a real blocker for `ui` — do that first, then migrate.
-  ⧖ **`ui` migration OPEN as Realm-ID/ui#3 (2026-08-11)** — pinned `@v1.23.0`; the `guard` job
+  ⧖ **`ui` migration OPEN as <consumer-C-org>/ui#3 (2026-08-11)** — pinned `@v1.23.0`; the `guard` job
   (tag reachable from `origin/main`) and the tag→`package.json` stamp stayed caller-side; the
-  `/device` smoke check became inputs, still aimed at `app.realmid.dev` rather than the preview
+  `/device` smoke check became inputs, still aimed at `<consumer-C-domain>` rather than the preview
   URL. Node deliberately held at `22` (reusable defaults to 24) — bump separately.
   **Unproven until the first `v*.*.*` tag after merge.** `website` (`npx wrangler`) is untouched
   and still the tail.
@@ -740,10 +740,10 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   `app-secrets` blob but declare three different prefixes (`secrets-rotation-<proj>-<bundle>`,
   `keypair-rotation-<proj>-<bundle>`, `signing-rotation-<proj>-<bundle>-<key>`), so a sync and a
   keypair rotation are NOT serialised against each other: both read v5, both write, the second
-  write silently drops the first one's keys. Found 2026-08-17 while mapping the AutoMahn callers;
+  write silently drops the first one's keys. Found 2026-08-17 while mapping the consumer B callers;
   no overlap observed in run history (not checked), the exposure is a scheduled quarterly/annual
   rotation landing on a manual sync. Fixing it in the reusables covers every caller at once —
-  AutoMahn's caller-level `group: secrets-rotation` only papers over two of the four.
+  consumer B's caller-level `group: secrets-rotation` only papers over two of the four.
 - [ ] `cleanup-secret-versions.yml` — adopt Secret Manager **delayed destruction** and drop the
   audit-log clock. `gcloud secrets update <secret> --version-destroy-ttl=30d` (API field
   `version_destroy_ttl`, min 1d / max 1000d) makes a destroy land as `DISABLED` +
