@@ -55,7 +55,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/service-alerts.yml@v2.10.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/service-alerts.yml@v3.0.0
     with:
       gcp_project: my-project
       wif_provider: projects/123456789/locations/global/workloadIdentityPools/github/providers/github

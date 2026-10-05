@@ -122,6 +122,10 @@ the service moves to the single-source layout. Audit 2026-10-05: of seven consum
 relied on the default. `run-db-job`'s `set_secrets` example text moved to `/secrets/app.env` too
 (text only, not a contract change).
 
+**Released as `v3.0.0`** on the owner's explicit ask (2026-10-05, "merge and release"). Beyond
+this change it carries only docs/TODO edits and one SHA-pinned action-group bump (#92) since
+`v2.10.0`, so callers that already pass `mount_path` can bump with no other edits.
+
 ## 2026-10-04 — Public repo names no private consumer: pseudonyms and placeholders, history left alone
 
 **Decision.** This repository is public, so its current files must not name private consumer
