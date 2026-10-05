@@ -67,7 +67,7 @@ bundle if that is a real risk.
 | `wif_provider` / `service_account` | input (req) | — | |
 | `gcp_region` | input | `asia-southeast1` | region of the services |
 | `bundle_secret` | input | `app-secrets` | dotenv bundle secret |
-| `mount_path` | input | `/app/configs/.prod.env` | container path the bundle mounts at |
+| `mount_path` | input (req) | — | container path the bundle mounts at; must match the service's existing mount, e.g. `/secrets/app.env` (no default since v3.0.0) |
 | `services_csv` | input (req) | — | comma-separated Cloud Run service names |
 | `rsa_bits` | input | `2048` | RSA key size |
 | `private_key_name` | input | `JWT_PRIVATE_KEY_BASE64` | bundle key for the base64 private PEM |
@@ -121,6 +121,7 @@ jobs:
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_ROTATOR_SA }}
       services_csv: myapp-api,myapp-cron
+      mount_path: /secrets/app.env
       title: JWT signing keys
 ```
 

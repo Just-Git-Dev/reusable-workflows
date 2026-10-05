@@ -55,13 +55,10 @@ when `APP_ENV` is unset); process env beats both. A Cloud Run secret volume moun
       `HTTP_PORT`, not GoFr's default 8000.
 - [ ] **Roll the layout to the second service (consumer B) after its go-live**, carrying the
       lessons above. Then decide whether it is the fleet standard for every GoFr service.
-- [ ] **Three reusable workflows default `mount_path` into the directory the layout must keep
-      clear.** `rotate-signing-keypair`, `rotate-worker-signing-secret` and `sync-bundle-key`
-      default `mount_path` to `/app/configs/.prod.env`. A service on the new layout that calls one
-      without overriding it gets the bundle re-mounted over `/app/configs` (and `--update-secrets`
-      never removes it), hiding the baked `.env` again. Changing the default is an input-contract
-      change, which means a major version. Until that is decided, the docs for all three should
-      tell callers on the new layout to pass `mount_path: /secrets/app.env`.
+- [x] **Three reusable workflows default `mount_path` into the directory the layout must keep
+      clear.** Decided 2026-10-05: `mount_path` is now required on `rotate-signing-keypair`,
+      `rotate-worker-signing-secret` and `sync-bundle-key` (no default), shipping in `v3.0.0`;
+      docs and examples show `/secrets/app.env`. See DECISIONS.md 2026-10-05.
 
 ## Pre-commit gates that check the wrong thing (opened 2026-09-27)
 

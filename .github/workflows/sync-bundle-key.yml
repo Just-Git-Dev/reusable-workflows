@@ -49,10 +49,12 @@ on:
         required: false
         default: 'app-secrets'
       mount_path:
-        description: 'Container path the bundle is mounted at (e.g. /app/configs/.prod.env).'
+        description: >-
+          Container path the bundle is mounted at — must match where the service already
+          mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds
+          a mount and never removes one, so a guessed path is silently wrong.
         type: string
-        required: false
-        default: '/app/configs/.prod.env'
+        required: true
       services_csv:
         description: 'Comma-separated Cloud Run service names to roll onto the new version.'
         type: string

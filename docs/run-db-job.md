@@ -78,7 +78,7 @@ answer into the baseline the forward-only guard reads back.
 | `args` | `''` | Container args, gcloud's comma-delimited list (e.g. `migrate`). Empty ⇒ flag omitted, image entrypoint decides |
 | `runtime_service_account` | `''` | SA the **task** runs as. Distinct from `service_account`, which is the deployer. Empty ⇒ project default |
 | `env_vars` | `''` | Passed verbatim to `--set-env-vars`. Use gcloud's custom-delimiter form for values containing commas: `^\|^K=V\|K2=V2` |
-| `set_secrets` | `''` | Passed verbatim to `--set-secrets` (e.g. `/app/configs/.prod.env=app-secrets:latest`) |
+| `set_secrets` | `''` | Passed verbatim to `--set-secrets` (e.g. `/secrets/app.env=app-secrets:latest`) |
 | `cpu` | `1` | Task CPU |
 | `memory` | `512Mi` | Task memory |
 | `max_retries` | `1` | Retries before the task is marked failed |
@@ -139,7 +139,7 @@ jobs:
       args: migrate
       runtime_service_account: <service>-api-run@<consumer-B-project-id>.iam.gserviceaccount.com
       env_vars: ^|^APP_ENV=prod|CMD_LOGS_FILE=/dev/stderr|DB_HOST=${{ vars.DB_HOST }}
-      set_secrets: /app/configs/.prod.env=app-secrets:latest
+      set_secrets: /secrets/app.env=app-secrets:latest
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_RELEASER_SA }}
 
