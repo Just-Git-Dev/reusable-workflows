@@ -67,7 +67,7 @@ on:
         required: false
         default: ''
       set_secrets:
-        description: 'Passed verbatim to --set-secrets (e.g. /app/configs/.prod.env=app-secrets:latest).'
+        description: 'Passed verbatim to --set-secrets (e.g. /secrets/app.env=app-secrets:latest).'
         type: string
         required: false
         default: ''

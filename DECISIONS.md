@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-05` — [`mount_path` is required on the three bundle-remount workflows (next release is `v3.0.0`)](#2026-10-05--mount_path-is-required-on-the-three-bundle-remount-workflows-next-release-is-v300)
 - `2026-10-04` — [Public repo names no private consumer: pseudonyms and placeholders, history left alone](#2026-10-04--public-repo-names-no-private-consumer-pseudonyms-and-placeholders-history-left-alone)
 - `2026-09-23` — [`v2.10.0` is a minor: one new workflow, additive inputs on two](#2026-09-23--v2100-is-a-minor-one-new-workflow-additive-inputs-on-two)
 - `2026-09-23` — [`logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`](#2026-09-23--logscrash_loop-keys-on-gofrs-jsonpayloadlevel-because-gofr-never-sets-severity)
@@ -97,6 +98,29 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-05 — `mount_path` is required on the three bundle-remount workflows (next release is `v3.0.0`)
+
+**Decision.** `rotate-signing-keypair`, `rotate-worker-signing-secret` and `sync-bundle-key` no
+longer default `mount_path` to `/app/configs/.prod.env`; the input is now required. Removing a
+default is an input-contract change, so the next release is a major, `v3.0.0`.
+
+**Why.** All three re-apply the secrets bundle with `--update-secrets="${MOUNT_PATH}=…"`, which
+adds a mount and never removes one. The default pointed inside `/app/configs`, the directory the
+single-source env layout (TODO.md, "Service env settings typed twice") must keep clear for the
+baked `configs/.env`. A caller on that layout who forgot the input would re-hide the baked file and
+silently lose its settings. The fleet already mounts the bundle at three different paths, so no
+single default is right for everyone; a missing value now fails when the call is parsed instead of
+writing a wrong mount.
+
+**Rejected.** Changing the default to `/secrets/app.env` (still a guess, and it breaks silently the
+other way for a service not on the new layout). Docs-only warning (leaves the trap in place).
+
+**Upgrade.** Callers that already pass `mount_path` change nothing. A caller relying on the old
+default adds `mount_path: /app/configs/.prod.env` to keep today's behaviour, or the new path once
+the service moves to the single-source layout. Audit 2026-10-05: of seven consumer call sites, two
+relied on the default. `run-db-job`'s `set_secrets` example text moved to `/secrets/app.env` too
+(text only, not a contract change).
 
 ## 2026-10-04 — Public repo names no private consumer: pseudonyms and placeholders, history left alone
 

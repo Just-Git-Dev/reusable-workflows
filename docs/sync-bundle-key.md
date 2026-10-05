@@ -73,7 +73,7 @@ bundle if that is a real risk.
 | `wif_provider` / `service_account` | input (req) | — | |
 | `gcp_region` | input | `asia-southeast1` | region of the Cloud Run services |
 | `bundle_secret` | input | `app-secrets` | |
-| `mount_path` | input | `/app/configs/.prod.env` | container path the bundle is mounted at |
+| `mount_path` | input (req) | — | container path the bundle mounts at; must match the service's existing mount, e.g. `/secrets/app.env` (no default since v3.0.0) |
 | `services_csv` | input (req) | — | comma-separated Cloud Run service names |
 | `title` | input | `secrets` | label for the run summary |
 | `dry_run` | input | `false` | validate + print the plan; write nothing |
@@ -114,7 +114,7 @@ jobs:
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_ROTATOR_SA }}
       services_csv: myapp-api,myapp-cron
-      mount_path: /app/configs/.prod.env
+      mount_path: /secrets/app.env
       title: DB + Redis passwords
       dry_run: ${{ inputs.dry_run }}
     secrets:

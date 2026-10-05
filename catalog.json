@@ -2923,9 +2923,9 @@
           "type": "string"
         },
         "mount_path": {
-          "default": "/app/configs/.prod.env",
-          "description": "Container path the bundle is mounted at.",
-          "required": false,
+          "default": null,
+          "description": "Container path the bundle is mounted at \u2014 must match where the service already mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds a mount and never removes one, so a guessed path is silently wrong.",
+          "required": true,
           "type": "string"
         },
         "private_key_name": {
@@ -3062,9 +3062,9 @@
           "type": "string"
         },
         "mount_path": {
-          "default": "/app/configs/.prod.env",
-          "description": "Container path the bundle is mounted at.",
-          "required": false,
+          "default": null,
+          "description": "Container path the bundle is mounted at \u2014 must match where the service already mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds a mount and never removes one, so a guessed path is silently wrong.",
+          "required": true,
           "type": "string"
         },
         "secret_bytes": {
@@ -3200,7 +3200,7 @@
         },
         "set_secrets": {
           "default": "",
-          "description": "Passed verbatim to --set-secrets (e.g. /app/configs/.prod.env=app-secrets:latest).",
+          "description": "Passed verbatim to --set-secrets (e.g. /secrets/app.env=app-secrets:latest).",
           "required": false,
           "type": "string"
         },
@@ -3340,9 +3340,9 @@
           "type": "number"
         },
         "mount_path": {
-          "default": "/app/configs/.prod.env",
-          "description": "Container path the bundle is mounted at (e.g. /app/configs/.prod.env).",
-          "required": false,
+          "default": null,
+          "description": "Container path the bundle is mounted at \u2014 must match where the service already mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds a mount and never removes one, so a guessed path is silently wrong.",
+          "required": true,
           "type": "string"
         },
         "service_account": {

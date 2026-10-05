@@ -81,7 +81,7 @@ bundle if that is a real risk.
 | `gcp_region` | input | `asia-southeast1` | region of the services |
 | `bundle_secret` | input | `app-secrets` | dotenv bundle secret |
 | `bundle_key` | input (req) | — | key inside the bundle to rotate |
-| `mount_path` | input | `/app/configs/.prod.env` | container path the bundle mounts at |
+| `mount_path` | input (req) | — | container path the bundle mounts at; must match the service's existing mount, e.g. `/secrets/app.env` (no default since v3.0.0) |
 | `services_csv` | input (req) | — | comma-separated Cloud Run service names |
 | `cf_account_id` | input (req) | — | Cloudflare account owning the Worker |
 | `cf_worker_script` | input (req) | — | Worker script name that verifies |
@@ -134,6 +134,7 @@ jobs:
       service_account: ${{ vars.GCP_ROTATOR_SA }}
       bundle_secret: app-secrets
       bundle_key: FILES_SIGNING_SECRET
+      mount_path: /secrets/app.env
       services_csv: myapp-api,myapp-cron
       cf_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       cf_worker_script: myapp-files-cdn
