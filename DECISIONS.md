@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-07` — [`TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default](#2026-10-07--testing-standard-follows-the-rewritten-testing-skill-injected-stand-ins-root-only-cross-repo-release-log-no-schedule-by-default)
 - `2026-10-05` — [`mount_path` is required on the three bundle-remount workflows (next release is `v3.0.0`)](#2026-10-05--mount_path-is-required-on-the-three-bundle-remount-workflows-next-release-is-v300)
 - `2026-10-04` — [Public repo names no private consumer: pseudonyms and placeholders, history left alone](#2026-10-04--public-repo-names-no-private-consumer-pseudonyms-and-placeholders-history-left-alone)
 - `2026-09-23` — [`v2.10.0` is a minor: one new workflow, additive inputs on two](#2026-09-23--v2100-is-a-minor-one-new-workflow-additive-inputs-on-two)
@@ -98,6 +99,35 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-07 — `TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default
+
+**What.** `docs/TESTING-STANDARD.md` follows the reference fleet's rewritten testing skill, in
+generic words (per 2026-09-05: the skill is the source of truth and the standard follows it).
+The changes:
+- Stand-ins are injected per dependency. Hand-written fakes are published and conformance-tested
+  by the provider.
+- Outside services sit behind adapters, with a fake on PR. Real checks use test accounts only.
+- End-to-end lives only in the root repo, tagged by depth.
+- PR tier = unit, contract and mocked browser. Integration runs at the tag, and a same-commit
+  verdict counts.
+- Release = a root PR appending to a release log. It re-runs the consumer contract checks, runs
+  `smoke`, then creates draft Releases and publishes them.
+- Only the root repo reads other repos. Releases are created by a per-project App with
+  `contents: write`, fenced by rulesets.
+- The CI host-port overlay is removed; the test runner joins the compose network.
+- The mocked-tier directory is renamed `smoke/` → `mocked/`, so `smoke` is only the depth tag.
+
+A scheduled full run stays a valid trigger option, marked "not used by the reference fleet",
+because the standard does not impose one adopter's choice. `docs/release-process.md` gains a
+short note that an adopter may record what is live in an append-only root release log instead
+of reading the latest linear tag.
+
+**Why.** The reference fleet's QA strategy was re-ruled on 2026-10-07. Its doctrine ("third
+parties real at every tier") disagreed with practice, nothing re-validated any fake, and E2E
+re-proved rules the services already proved. The build-once/promote model (2026-07-27/28) is
+reused unchanged: a tag still retags and the Release triggers promotion. No consumer is named,
+per 2026-10-04.
 
 ## 2026-10-05 — `mount_path` is required on the three bundle-remount workflows (next release is `v3.0.0`)
 

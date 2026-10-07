@@ -162,6 +162,13 @@ live, prod is back to "latest linear tag = live" and the bridge is superseded.
 **This** is the git-native, cleanly-tracked record of the incident; the fast bridge
 is just there to stop the bleeding until it ships.
 
+> **Note.** "Latest linear tag = live" is this document's default way to say what is
+> deployed. An adopter may instead record what is live in an append-only release log kept
+> in its root repo (one new file per release, never edited), and read "live" from the most
+> recent entry that names each service. This document does not impose either choice; the
+> forward-only guard and the promote path above work the same under both. See
+> `TESTING-STANDARD.md` (Principle 8) for the log.
+
 ### The hard constraint — migrations
 
 Fast rollback only restores service if the prior image can still run against the
