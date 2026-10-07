@@ -30,10 +30,11 @@ laptop and `actions/checkout` targets in CI. The umbrella owns the *test*; anoth
 repo owns the *code under test*; and the commit that would break the test lands in
 neither of them at the same time.
 
-This document is the standard we arrived at for that shape. It is organised as ten
-principles, a reference implementation, and an adoption scorecard. Every principle
-exists because its absence produced a real, expensive, and — this is the part worth
-your attention — *silent* failure.
+This document is the standard we arrived at for that shape — we call that top repo the **root
+repo** (earlier drafts said *umbrella*; the two words mean the same thing). It is organised as
+eleven principles, a reference implementation, and an adoption scorecard. Every principle exists
+because its absence produced a real, expensive, and — this is the part worth your attention —
+*silent* failure.
 
 ---
 
@@ -127,7 +128,7 @@ conventions belong in configuration, not in runtime control flow.
 
 A guard in repo A asserts something about repo B — every handler struct has an E2E spec,
 every route has a UI reference. It resolves the sibling by relative path
-(`"$ROOT/../ui/e2e"`), and when that directory is absent it prints a friendly note and
+(`"$ROOT/../<sibling>/e2e"`), and when that directory is absent it prints a friendly note and
 exits zero. Locally the sibling *is* checked out, so it works, and the author sees it
 work. In CI nothing checks out the sibling, so it takes the skip branch on every run it
 has ever had.
@@ -135,9 +136,11 @@ has ever had.
 The tell is not in the script — it is that **the ADR and the contributor README both
 describe it as a CI gate.** Documentation asserting a gate that does not exist is the
 most expensive version of this failure, because the documentation is the reason nobody
-checks. Cross-repo guards are the umbrella's native habitat, so this one is worth
-hunting for by hand: for each guard, name the CI job that checks out the *other* repo. If
-you cannot, the guard is decoration.
+checks. For each guard, name the CI job that can actually see *both* sides. In a service
+repo there is none by design — service repos never check out each other (Principle 2) —
+so the guard must be redesigned to run in the repo it inspects, moved to the root repo,
+or labelled local-only in the docs. If you cannot do one of the three, the guard is
+decoration.
 
 See the skill's §0.4 (repo guards) for the general rule.
 
@@ -199,6 +202,16 @@ This is the rule that decides what the umbrella owns.
 - A test that touches **more than one repo** belongs in the umbrella, gated by the
   umbrella's CI. This is the *only* category the umbrella should own.
 
+The rule cuts both ways. **A service repo's tests never depend on another repo** — no
+sibling checkout, no reading another repo's `main`, no peer image to test against. Each
+business rule is proven once, in the service that owns it, with that service's own
+datastores real and every service it calls replaced by a stand-in (Principle 5). A
+consumer checks its calls against **its own committed copy** of the provider's API
+definition; refreshing the copy is an ordinary pull request on the consumer. The root
+repo is the only repo that reads the others — with a read-only GitHub App, or by pulling
+the built images (preferred: they are exactly what deploys). Importing a private library
+is a build dependency, not a cross-repo test, and is outside this rule.
+
 The failure this prevents is subtle: an integration suite that lives in the umbrella
 but exercises exactly one service. It looks harmless, and it costs you the single most
 valuable property in testing — **the ability to change code and its test in one
@@ -247,10 +260,10 @@ your *workflow YAML* is your stack driver, and it is one you cannot run locally.
 lesson learned in CI has to be re-learned on the laptop. Put the logic in the script;
 let the workflow call the script.
 
-### Principle 4 — Container-native by default; host ports only as a CI overlay
+### Principle 4 — Container-native everywhere; the test runner joins the network
 
-> **The local stack binds no host ports. CI, which has no reverse proxy, re-adds them
-> through an overlay compose file.**
+> **No stack binds host ports — not locally, not in CI. The test runner runs inside the
+> compose network and reaches services by their service names.**
 
 Local development runs behind a shared reverse proxy on stable hostnames. Nothing
 binds `127.0.0.1:5432`, including the datastores — you reach a containerised Postgres
@@ -258,50 +271,50 @@ with an ephemeral container joined to the compose network, and you run the test 
 there too. This keeps parallel stacks from colliding on ports and keeps the test
 environment honest about service discovery.
 
-CI runners have no such proxy. The naive resolutions are both bad: bind host ports
-everywhere (and lose the property locally), or stand up a proxy in CI (and maintain
-it). The right answer is a **layered overlay**:
-
-```
-docker-compose.test.yml    # base — no host ports, proxy hostnames
-docker-compose.ci.yml      # overlay — re-adds host port bindings, nothing else
-```
-
-with the driver taking an env knob:
-
-```bash
-COMPOSE_EXTRA_FILE=docker-compose.ci.yml ./support/stack.sh up
-```
-
-The base file stays the source of truth for *what the stack is*; the overlay says only
-*how CI reaches it*. Nobody has to remember to strip ports back out.
+CI runners have no such proxy, and they do not need one: the runner is a container in
+the same compose network (`stack.sh test` already runs "inside the network", §3.3).
+The tempting alternative — an overlay file that re-adds host ports for CI — means CI
+reaches the stack a different way than the laptop does, and the ports leak back into
+local use the first time someone runs with the overlay "just to debug". If a CI job
+truly needs a proxy hostname (cookie domain, TLS), run the proxy as one more service in
+the same compose file; still no host ports.
 
 **Test datastores are throwaway.** `tmpfs` or unnamed volumes, `down -v` on exit, so
 every run starts from a known-empty database. This is the one place `-v` is correct;
 in a *development* stack it destroys the migration ledger and seed data and must never
 be run casually.
 
-### Principle 5 — Tier your stacks, and state what each tier cannot see
+### Principle 5 — Tier your stacks, say what stands in for what, and state what each tier cannot see
 
-*Skill §0 (tiers) and §8 (the spec-generated peer-mock carve-out).*
+*Skill §0 (tiers) and §8 (what stands in for what).*
 
 > **Every stack tier carries a written statement of the bug class it is structurally
 > incapable of catching.**
 
-A mature setup has at least two e2e tiers:
+| Tier | Lives in | Backend | Catches | **Structurally cannot catch** |
+|---|---|---|---|---|
+| **Integration** | each service repo | the service + its own real datastores; every other service injected as a stand-in | every business rule the service owns | whether the stand-ins tell the truth; whether the pieces connect |
+| **Mocked browser** | the UI repo | request interception; replies **generated from the provider's API definition** | UI logic, routing, rendering, empty/error states | anything on the far side of the wire — whether the server implements the definition, tenant leaks, real query behaviour |
+| **End-to-end** | the root repo only | every service at a chosen version + real datastores | "do the pieces connect", contract drift between real services | little; slow, so depth is chosen by tag (`smoke`, `full`) rather than by deleting tests |
 
-| Tier | Backend | Catches | **Structurally cannot catch** |
-|---|---|---|---|
-| **Mocked** | Request interception in the browser | UI logic, routing, rendering, empty/error states | Anything on the far side of the wire — contract drift, tenant leaks, auth bugs, real query behaviour |
-| **Real** | Actual service + database + cache | Contract drift, isolation failures, integration bugs | Little; it is slow and heavier to keep green |
+**What stands in for what.** A service's own datastores are always real. A service you own is
+replaced, at the integration tier, by a stand-in **generated from its API definition**; where
+that is not enough, the service being imitated **publishes a hand-written fake and proves it
+faithful in its own CI**, running one set of conformance cases against both the real service and
+the fake. Consumers use the published fake and never write their own. A service you **do not**
+own sits behind one adapter in your code, with a fake of that adapter for every pull request;
+the fake and the real checks share one case list. Real checks run in the root repo's end-to-end
+suite **where the outside service offers a test account or test mode with no real side effects**;
+where it does not, it stays a fake (built from recordings of the real system if no sandbox
+exists).
 
-The mocked tier is fast, hermetic, and — the critical part — **asserts the UI against
-fixtures the test itself wrote**. It cannot fail because the server changed, because
-it never talks to a server. Left unstated, this reads as coverage. Stated plainly, it
-reads as what it is: a fast tier that must be paired with a real one.
+The same integration suite can be pointed at the actual services instead of stand-ins — the
+test code does not change, only the injected target. That is not a CI job: its purpose is to
+find **gaps in the stand-in**, and a gap found is fixed in the provider's fake and added to its
+conformance cases, so the provider's CI catches it from then on.
 
-Write it in the compose file or the job comment, in those words. Future readers will
-otherwise assume the green mocked suite means the integration works.
+Write each tier's blind spot in the compose file or the job comment, in those words. Future
+readers will otherwise assume the green mocked suite means the integration works.
 
 ### Principle 6 — Build before you trust
 
@@ -371,33 +384,38 @@ private repos and execute arbitrary build steps over the result. If you decide t
 exempt them anyway, **write the exemption down**; the common state of the world is not
 a decision but an oversight that a lint rule would have caught.
 
-**Pin what you test** — sibling repo refs. Default to each sibling's `main` so the
-gate tracks reality:
+**Pin what you test** — the service versions. The root repo's pre-release run tests a
+**chosen set of release candidates** (service tags) with **every other service at its
+current live version**. Never default to a service's `main`: a push to a service's main
+would then retroactively red-line the root repo with no root commit involved, and the run
+would test something nobody is about to ship.
+
+**Keep an append-only release log in the root repo.** Every release pull request adds one
+new file naming the versions it releases; files are never edited or deleted. "Live", for
+each service, is the **most recent log entry that names it**, read from git. Do not use the
+forge's "latest release": it is ordered by when a release was created, not by version, so a
+re-published old release would read as live. The log is also your release history.
 
 ```yaml
-env:
-  API_REF: ${{ vars.API_REF || 'main' }}
-  UI_REF:  ${{ vars.UI_REF  || 'main' }}
+# releases/2026-10-07-1.yml — added by the release PR; merging it starts the release run.
+# Providers first: Releases are published in this order.
+api: v1.4.0
+web: v2.0.1        # every service not listed runs at its last logged version
 ```
 
-Using repository *variables* rather than hardcoded values buys you the release
-cutover: when the umbrella's tests require unreleased sibling behaviour, pin the
-variables to the release SHAs for the duration of the window, then clear them back to
-`main`. Without this you get a genuinely nasty property — **a push to a sibling's main
-can retroactively red-line the umbrella's main**, with no umbrella commit involved.
-
-Whatever the refs resolve to, **echo them in the job**:
+Whatever the versions resolve to, **echo them in the job**:
 
 ```yaml
-- name: Print the refs under test
+- name: Print the versions under test
+  shell: bash
   run: |
-    echo "umbrella $(git rev-parse --short HEAD)"
-    echo "api      $(git -C api rev-parse --short HEAD) (${API_REF})"
-    echo "ui       $(git -C ui  rev-parse --short HEAD) (${UI_REF})"
+    echo "root     $(git rev-parse --short HEAD)"
+    echo "api      ${API_VERSION}  (candidate | live)"
+    echo "web      ${WEB_VERSION}  (candidate | live)"
 ```
 
 Ten lines of log that convert "the e2e failed" into "the e2e failed against api
-`a1b2c3d`" — the difference between a bisect and a shrug.
+`v1.4.0`" — the difference between a bisect and a shrug.
 
 ### Principle 9 — Every gate is observable and leaves nothing behind
 
@@ -437,33 +455,89 @@ trap teardown EXIT
 
 ### Principle 10 — Trigger policy is a decision; record it
 
-There is no universal right answer for *when* the umbrella suite runs, and pretending
-otherwise produces cargo-culted triggers.
+There is no universal right answer for *when* the root repo's suite runs, and pretending
+otherwise produces cargo-culted triggers. The reference fleet's choice is described below.
+Whatever you choose, record it with its reason. The valid options:
 
-- **Umbrella owns real specs that change often** → run on push and PR. The suite is
-  part of the repo's own feedback loop.
-- **Umbrella is mostly docs and decision logs, and the code under test is entirely in
-  siblings** → run on manual dispatch, plus a nightly schedule against siblings'
-  `main`. Auto-running a fifteen-minute multi-repo stack on every documentation commit
-  is pure waste, and the resulting noise is how a blocking gate becomes an ignored one.
+- **On a merged release pull request** (the reference fleet's gate, described below).
+- **By hand** (`workflow_dispatch`), for the full tag set, or to run a red release again.
+- **On a schedule** (e.g. a nightly full run against the last logged versions). This is a
+  valid option, and it catches outside-service drift sooner. **It is not used by the
+  reference fleet**, which accepts noticing that drift at the next release instead.
+- **On the root repo's own push and PR** — only if the root repo itself owns real specs
+  that change often. A root push that is almost always a docs change should not start a
+  fifteen-minute multi-repo stack.
 
-Either is defensible. What is not defensible is having whichever one you have by
-accident. Put the reasoning in a comment at the top of the workflow, with a date:
+**The release gate.** A release starts as a pull request in the root repo that **adds one
+new file to an append-only release log** (Principle 8), naming the service tags to
+release (the *candidates*), providers before consumers. Review happens on that PR, so
+every release leaves a reviewed record. Merging it starts the run. In order, and each step
+stops the release on red:
+  1. **Contract re-check.** Run each consumer's own contract check against the provider's
+     API definition **at the version being released**, instead of against the consumer's
+     committed copy. Any call or fixture that no longer matches fails the release, naming
+     the consumer, the call and the file. (A consumer's own check proves only "my code
+     matches my copy"; this is the one place that proves the copy is still true.) It does
+     not compare definition files, so a change to an endpoint no consumer calls does not
+     block — and it covers every call a consumer makes, in seconds, where `smoke` covers a
+     few journeys.
+  2. **`smoke`** — the end-to-end scenarios tagged `smoke`, against the candidates' exact
+     images, every other service at its live version. It starts from a freshly migrated,
+     empty database, so it does **not** prove a migration against live data. That stays
+     each service's own pre-deploy migration check.
+  3. **Create every Release as a draft.** A draft deploys nothing.
+  4. **Publish them all in one pass**, in the order the log entry lists them, but only
+     once every draft exists. If any earlier step fails, a red `smoke` included, **delete
+     the drafts**, so nothing goes live. The workflow also has a `workflow_dispatch` trigger
+     to run it again, so a flaky red can be retried without a new commit. That is the only
+     retry. Don't auto-retry inside a run: it hides real intermittent bugs.
+
+**Build once; a tag only retags.** Every push to a service's main builds one image,
+labelled with its commit. A tag on a service repo means **"ready"**. First, the tag needs a
+green integration run that the forge already recorded for that exact commit; if there is
+none, the tag runs the suite. Then it **retags** the existing image as `vX.Y.Z`, with no
+rebuild and no deploy. A laptop run never counts: the forge has no record of it. So the
+images `smoke` passes are byte-for-byte the ones that deploy (see this repo's
+`docs/release-process.md` and the `promote-image` workflow). When a Release is published,
+the service deploys itself: migrations first, then promote the image.
+
+**Every deploy ends up in the log.**
+- A hand-started deploy may only re-deploy a version the log already records.
+- A hotfix goes through a normal release pull request.
+- A fast rollback (`rollback-service`) is allowed at any time, followed by a log entry
+  recording what is now live.
+- A multi-service release relies on expand/contract migrations (`docs/release-process.md`):
+  old and new versions work against the same schema, so deploy order does not matter.
+
+**Dependencies point one way.** Services never call the root repo. The root repo only reads
+service repos and creates Releases in them.
+
+Traps in this flow:
+
+- **A Release created with a workflow's default `GITHUB_TOKEN` does not start other
+  workflows.** Create Releases with a GitHub App token. Before relying on it, prove once
+  that an App-created Release starts the service's `release: published` workflow.
+- **The permission that creates Releases also allows pushing.** `contents: write` is the
+  narrowest permission that can create a Release. So "the root repo never pushes" must be
+  enforced: use rulesets on each service repo that let only humans push to `main` or create
+  `v*` tags. The App never needs either. Prove that the ruleset blocks the App's push while
+  still allowing its Release.
+- **Once published, each deploy can still fail on its own.** The rollback and log rules
+  above handle that. The gate does not.
+- **Whatever trigger you choose is a cost you accept, not one you forget.** Write it at the
+  top of the workflow, with a date:
 
 ```yaml
-# MANUAL-TRIGGER ONLY (<date>). This umbrella holds documentation plus the
-# multi-repo suite; the code under test lives in sibling repos checked out at run
-# time. An umbrella push is almost always a docs change with no bearing on the
-# sibling code the suite exercises. Run by hand, or let the nightly schedule
-# gate siblings' current main.
+# RELEASE GATE (<date>). Runs when a release PR adds a file under releases/; also
+# workflow_dispatch to run again. Order: contract re-check -> smoke -> draft
+# Releases -> publish all (delete drafts on any failure). No schedule, by decision:
+# outside-service drift surfaces at the next release, for smoke-tagged journeys only.
 ```
 
-If you choose dispatch-only, you have opted into failure mode 1.4 and owe yourself the
-mitigation: a **cheap always-on CI job** that statically checks what the dispatch-only
-workflows can no longer check for themselves — a linter over every workflow file, and
-an assertion that every script path a `run:` body invokes actually exists in the tree.
-That check costs seconds and catches the class of defect that dispatch-only workflows
-are uniquely prone to.
+Whatever runs by hand only has opted into failure mode 1.4 and owes the mitigation: a
+**cheap always-on CI job** that statically checks what the dispatch-only workflows can no
+longer check for themselves — a linter over every workflow file, and an assertion that
+every script path a `run:` body invokes actually exists in the tree.
 
 ---
 
@@ -516,12 +590,12 @@ Six layers, each owned by exactly one repo per Principle 2:
 
 | Layer | Lives in | Runs in CI of | Needs a stack? | Wall clock |
 |---|---|---|---|---|
-| **Unit** | service repo | service repo, every push/PR | no | seconds |
-| **Contract** | service repo | service repo, every push/PR | no | seconds |
-| **Integration** | service repo | service repo, every push/PR | yes, service-local | 1–3 min |
-| **E2E (mocked)** | umbrella | umbrella | yes, no real backend | 2–5 min |
-| **E2E (real)** | umbrella | umbrella | yes, full multi-repo | 8–20 min |
-| **Config-embedded** | the repo shipping the config | that repo, every push/PR | no — stubs + a faked clock | seconds |
+| **Unit** | service repo | service repo, every PR — never switched off | no | seconds |
+| **Contract** | service repo | service repo, every PR — against the committed copy | no | seconds |
+| **Integration** | service repo | service repo, **at each tag**, before the image is retagged (an existing green run for the same commit counts), or by hand — never on a PR; stand-ins only | yes, service-local | 1–3 min |
+| **Mocked browser** | UI repo | UI repo, every PR | no real backend | 1–5 min |
+| **End-to-end** | root repo | root repo: `smoke` pre-release, full tag set by hand | yes, whole project | 8–20 min |
+| **Config-embedded** | the repo shipping the config | that repo, every PR | no — stubs + a faked clock | seconds |
 
 The **contract** layer deserves more attention than it usually gets: it is the cheapest
 place to catch the most expensive class of cross-repo bug. Two gates pay for
@@ -542,32 +616,40 @@ silent-green in waiting. Defend it in the comment:
 
 ### 3.2 File layout
 
-```
+```text
 <core-service-repo>/
   test/
-    docker-compose.test.yml       # base stack — no host ports
-    docker-compose.ci.yml         # overlay — host ports for CI
+    docker-compose.test.yml       # base stack — no host ports, here or in CI
     support/
       stack.sh                    # THE driver. One copy in the whole system.
-    integration/                  # service-spanning tests, gated here
+    integration/                  # this service's rules; peers are stand-ins
 
-<umbrella-repo>/
+<ui-repo>/
+  tests/mocked/                   # mocked browser tier; replies generated from
+                                  # the committed copy of the API definition
+
+<root-repo>/
   tests/
     docker-compose.test.yml       # include:s the base, adds bff/web/runner
     support/
       stack.sh                    # SHIM → core-service driver
       factories.ts                # shared test data builders
     e2e/
-      smoke/                      # mocked tier
-      live/                       # real tier
-      workflows/                  # multi-step user journeys, real tier
+      workflows/                  # one scenario per documented workflow,
+                                  # each tagged @smoke and/or @full
       contract/                   # static checks, no stack
       pages/                      # page objects
       fixtures/                   # auth, seed, api helpers
       playwright.config.ts
+  releases/                       # append-only release log; never edited
+    2026-10-07-1.yml              # one file per release PR; "live" = the latest
+                                  #   entry naming a service
   .github/workflows/
     ci.yml                        # always-on: lint + static checks. Seconds.
-    e2e.yml                       # the multi-repo gate
+    release.yml                   # on a merged release PR (+ run again by hand):
+                                  #   contract re-check -> smoke -> draft Releases
+                                  #   -> publish all, or delete the drafts
+    e2e-full.yml                  # by hand: the full tag set
 ```
 
 ### 3.3 The `stack.sh` verb contract
@@ -588,7 +670,7 @@ Design notes that matter:
 
 - **Single-source the compose project name.** The `-p` flag and any leak check must
   name the same project; two string literals will drift.
-- **Env knobs, not forks:** `COMPOSE_FILE`, `COMPOSE_EXTRA_FILE`, `COMPOSE_PROFILES`.
+- **Env knobs, not forks:** `COMPOSE_FILE`, `COMPOSE_PROFILES`.
 - **Generate secrets before compose parses the file.** `env_file:` is resolved by the
   Docker CLI at parse time, so a key minted *during* `up` is invisible to the
   containers until the *next* `up` — the stack boots with a stale key and everything
@@ -598,82 +680,115 @@ Design notes that matter:
 - **Every `run:` block declares `shell: bash`.** The implicit default omits
   `pipefail`, so a failure mid-pipe is invisible.
 
-### 3.4 Multi-repo job skeleton
+### 3.4 Release job skeleton
 
 ```yaml
+on:
+  push:                     # a merged release PR adds one file to the release log
+    branches: [main]
+    paths: ['releases/**']
+  workflow_dispatch: {}     # "run again" on the newest log entry, without a new commit
+
+concurrency: { group: release, cancel-in-progress: false }   # one release at a time
+
 jobs:
-  e2e:
+  release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      HAS_KEY: ${{ secrets.SERVICE_CHECKOUT_KEY != '' && 'yes' || 'no' }}
+    permissions: { contents: read, id-token: write }   # id-token: cloud login to pull images
     steps:
       # P1 — fail loud, first, with an actionable message
-      - name: Fail if a cross-repo checkout credential is missing
-        if: env.HAS_KEY != 'yes'
+      - name: Fail if the GitHub App credential is missing
+        shell: bash
+        env: { HAS_KEY: "${{ secrets.ROOT_APP_PRIVATE_KEY != '' && 'yes' || 'no' }}" }
         run: |
-          echo "::error title=E2E cannot run::SERVICE_CHECKOUT_KEY is not provisioned.
-          Provision it rather than removing this step — a suite that cannot check out
-          what it tests must go red."
+          [ "$HAS_KEY" = yes ] && exit 0
+          echo "::error title=Pre-release cannot run::ROOT_APP_PRIVATE_KEY is not provisioned.
+          Provision it rather than removing this step — a gate that cannot read what it
+          tests, or create the Releases it promises, must go red."
           exit 1
 
-      # Checkout layout is load-bearing: compose reaches services at ../../<svc>
-      # relative to tests/e2e, i.e. INSIDE the umbrella checkout where they are
-      # gitignored. Checking a service out at the workspace root instead silently
-      # leaves the build context missing.
-      - uses: actions/checkout@<sha>
-        with: { path: project }
-      - uses: actions/checkout@<sha>
+      - uses: actions/create-github-app-token@<sha>
+        id: app
         with:
-          repository: <org>/<service>
-          path: project/<service>
-          ref: ${{ env.SERVICE_REF }}
-          ssh-key: ${{ secrets.SERVICE_CHECKOUT_KEY }}
+          app-id: ${{ vars.ROOT_APP_ID }}
+          private-key: ${{ secrets.ROOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
 
-      - name: Print the refs under test        # P8
-        working-directory: project
-        run: |
-          echo "umbrella $(git rev-parse --short HEAD)"
-          echo "service  $(git -C <service> rev-parse --short HEAD) (${SERVICE_REF})"
+      - uses: actions/checkout@<sha>
 
-      - name: Run the suite                    # P3 + P6 (--build, via the driver)
-        working-directory: project
-        run: ./tests/support/stack.sh test
+      - name: Resolve versions (newest log entry, else last logged version)   # P8
+        shell: bash
+        run: ./tests/support/resolve-versions.sh releases/
+
+      # P10 step 1: each consumer's OWN contract check, pointed at the provider's
+      # definition at the candidate version instead of the consumer's committed copy.
+      - name: Contract re-check — every consumer against the released definitions
+        shell: bash
+        env: { GH_TOKEN: "${{ steps.app.outputs.token }}" }
+        run: ./tests/support/recheck-consumer-contracts.sh
+
+      # Pull the images that deploy; check out source only where seeding needs it.
+      - name: Run the smoke scenarios          # P3 + P6, via the driver
+        shell: bash
+        run: ./tests/support/stack.sh test --grep "@smoke"
+
+      # P10 steps 3-4 — App token, not GITHUB_TOKEN (that one starts no deploy).
+      - name: Create every Release as a draft  # a draft deploys nothing
+        shell: bash
+        env: { GH_TOKEN: "${{ steps.app.outputs.token }}" }
+        run: ./tests/support/releases.sh draft   # gh release create --draft --verify-tag
+
+      - name: Publish all drafts, in log order (providers first)
+        shell: bash
+        env: { GH_TOKEN: "${{ steps.app.outputs.token }}" }
+        run: ./tests/support/releases.sh publish
+
+      - name: Delete the drafts on any failure before publishing
+        if: failure()
+        shell: bash
+        env: { GH_TOKEN: "${{ steps.app.outputs.token }}" }
+        run: ./tests/support/releases.sh delete-unpublished-drafts
 
       - name: Stack logs on failure            # P9
         if: failure()
-        working-directory: project
+        shell: bash
         run: ./tests/support/stack.sh logs
 
       - uses: actions/upload-artifact@<sha>    # P9
         if: failure()
         with:
           name: e2e-report
-          path: project/tests/e2e/playwright-report
+          path: tests/e2e/playwright-report
           retention-days: 14
 
       - name: Tear down                        # P9
         if: always()
-        working-directory: project
+        shell: bash
         run: ./tests/support/stack.sh down
 ```
 
-### 3.5 Cross-repo checkout credentials
+### 3.5 How the root repo reads service repos
 
-Three options, in increasing order of scalability:
+Only the root repo reads other repos (Principle 2). Two ways to read, which you can combine,
+plus one separate identity for writing Releases:
 
 | Mechanism | Good for | Cost |
 |---|---|---|
-| **Per-repo deploy key** (read-only) | 2–3 siblings | One secret *per pair*; N×M rotation |
-| **Fine-grained PAT**, `contents: read` on the named repos | 3–6 siblings, one org | One secret; but it is *somebody's* token and it expires |
-| **Org-reader GitHub App**, short-lived installation token | many consumers of many providers | Setup cost once, then free; no expiry surprises |
+| **Pulled images** from your registry, with the CI's cloud OIDC login | every service that ships as an image — preferred, it is exactly what deploys | none beyond the login you already have |
+| **A read-only GitHub App**, short-lived installation token | source checkouts (seeding tools not in the image, static sites rebuilt from source) | setup once; read-only |
+| **A per-project release GitHub App**, key held only by that project's root repo | **creating Releases** | `contents: write` on its own project's service repos only. That permission also allows pushing, so pair it with rulesets that let only humans push to `main` or create `v*` tags |
 
-Deploy keys are the right first move and the wrong tenth. The migration trigger is
-when rotation becomes a chore, or when a *person* leaving would break CI — a PAT tied
-to an individual is a bus factor of one hiding inside your pipeline.
+Distribute the App keys and any test-account credentials through your config-driven
+provisioning engine, not by hand, so they are reviewed and rotated centrally.
 
-Whichever you choose, Principle 1 applies to all three: check for presence explicitly,
-fail loudly, name what to provision.
+Per-repo deploy keys and personal access tokens still work but scale badly (one secret
+per pair; a token tied to a person is a bus factor of one). A **build** dependency — a
+service importing a private library — is not a cross-repo test and may keep whatever
+credential it already uses.
+
+Whichever you choose, Principle 1 applies: check for presence explicitly, fail loudly,
+name what to provision.
 
 ---
 
@@ -684,12 +799,17 @@ Score honestly. Every "no" is a gate you cannot currently trust.
 **Silent-green defence**
 - [ ] No gate has a fallback path that exits zero when its input is missing
 - [ ] No test `skip`s on the absence of a fixture, mount, or credential
-- [ ] Every test command has a call site on push/PR, not only on tag or deploy
-- [ ] Dispatch-only workflows are covered by an always-on static check
+- [ ] Every test command has an automatic call site (pull request, service tag, or the
+      pre-release run); whatever runs only by hand is covered by an always-on static check
 - [ ] The skip count is zero, or every skip is justified in review
 - [ ] The harness rebuilds the image under test on every invocation
 - [ ] No test-result cache is trusted on a tier with real dependencies (skill §11.2)
-- [ ] For every cross-repo guard, a named CI job checks out the *other* repo (§1.7)
+- [ ] No service repo's CI checks out another repo; every cross-repo guard runs in the repo
+      it inspects, in the root repo, or is documented as local-only (§1.7)
+- [ ] No job that is off by default is counted as proven by a green "skipped" tick — one
+      executed run is on record
+- [ ] Fixtures are committed and byte-checked; a missing one fails
+- [ ] Every parity check strips comments before matching
 - [ ] No skip is guarded by the test's own precondition (skill §14)
 
 **Guards that can be wrong**
@@ -712,24 +832,42 @@ Score honestly. Every "no" is a gate you cannot currently trust.
 - [ ] There is exactly one definition of each shared compose service
 
 **Environment**
-- [ ] The local stack binds no host ports, datastores included
-- [ ] CI gets its ports from an overlay, not from edits to the base file
+- [ ] No stack binds host ports — locally or in CI; the test runner joins the network
+- [ ] CI creates any `external: true` volume the compose file needs before `up`
+- [ ] A production backend is chosen only by an explicit opt-in, never by a variable merely
+      being set
 - [ ] Test datastores are throwaway and torn down with `-v` on exit
 - [ ] Secrets are generated *before* compose parses the file
 
 **Observability**
-- [ ] Every stack job echoes the resolved sibling refs
+- [ ] Every stack job echoes the resolved service versions (candidate or live)
 - [ ] Stack logs are dumped on failure
 - [ ] Reports and traces are uploaded on failure with a retention period
 - [ ] Teardown runs on `always()`
 
 **Pinning**
 - [ ] Third-party actions are SHA-pinned — or the exemption is written down
-- [ ] Sibling refs default to `main` and are pinnable via repository variables
+- [ ] The pre-release run tests chosen candidates plus live versions, never `main`
 
 **Layers**
-- [ ] Unit + contract + integration run in each service repo on every PR
-- [ ] The umbrella owns a mocked tier and a real tier
+- [ ] Unit + contract + mocked browser run in each service repo on every PR, never switched
+      off, and nothing else does; integration runs at each tag, before build + publish, against
+      stand-ins only
+- [ ] The UI repo owns the mocked tier; the root repo owns the end-to-end tier, tagged by depth
+- [ ] Every hand-written stand-in is published by the service it imitates and passes the same
+      conformance cases as the real service
+- [ ] Every outside service sits behind one adapter with a fake; fake and real checks share
+      one case list; real checks use test accounts or test modes only, never production
+- [ ] The pre-release run first re-runs every consumer's contract check against the
+      provider's definition at the released version
+- [ ] A release starts as a reviewed pull request adding one file to an append-only
+      release log; "live" is read from that log, never from the forge's release order
+- [ ] Releases are created as drafts and published together; a failure deletes the drafts
+- [ ] An image is built once at main; a tag retags it, and the gate tests that exact image
+- [ ] The trigger choice (release PR, by hand, schedule, push) is written at the top of the
+      workflow with its date and reason
+- [ ] Every `flaky` tag has an owner and an expiry, and a check fails past the expiry;
+      no automatic retries inside a run
 - [ ] Each tier states, in writing, the bug class it cannot catch
 - [ ] A contract spec-drift gate exists
 - [ ] A contract version-bump gate exists and is defended by a comment
@@ -746,7 +884,7 @@ Score honestly. Every "no" is a gate you cannot currently trust.
 | `workflow_dispatch:` with no other trigger and no static check | Rots undetected until needed | Always-on lint + path check |
 | `compose run` without `--build` | Tests the previous build | `--build`, or build in the driver |
 | Bare `compose build` with shared image tags | Concurrent tag export race | Build one service |
-| A guard resolving `"$ROOT/../<sibling>"` and `exit 0` when absent | Inert in CI, alive on a laptop — while the ADR calls it a CI gate | Check the sibling out, or move the guard to the repo spanning both |
+| A guard resolving `"$ROOT/../<sibling>"` and `exit 0` when absent | Inert in CI, alive on a laptop — while the ADR calls it a CI gate | Redesign it to run in the repo it inspects, move it to the root repo, or document it as local-only |
 | `if len(subjects) < 2: skip` | Skips exactly when the test was valuable | Hard-fail the precondition |
 | `go test` on a tier with a real DB and no `-count=1` | `ok (cached)` after a full truncate + re-seed | Bypass the result cache in the driver |
 | A baseline compared as a subset | A fixed offender never leaves the file | Compare as an equality |
@@ -756,8 +894,20 @@ Score honestly. Every "no" is a gate you cannot currently trust.
 | Stable nonzero skip count | Real skips hide among conventional ones | Convert to `testIgnore` / project selection |
 | `docker compose …` inline in workflow YAML | The workflow *is* the driver; unrunnable locally | Move into `stack.sh` |
 | Two copies of the stack script | Drift presenting as flakiness | Shim + `include:` |
-| Host port bindings "just for dev" | Collisions; dishonest service discovery | Overlay for CI only |
-| Sibling refs unpinned during a release cutover | A sibling push retroactively reds your main | Repository variables |
+| Host port bindings "just for dev", or "just for CI" | Collisions; dishonest service discovery; CI reaches the stack differently from the laptop | Runner inside the compose network |
+| Root suite testing services' `main` | A service push retroactively reds the root repo; tests what nobody is shipping | Candidates + last logged versions |
+| A service repo's CI checking out a sibling | The service's tests now depend on another repo's state | Committed copy of the definition; move the test to the root repo |
+| A hand-written fake of a service you own, kept by the consumer | Drifts from the real service with nobody to notice | Provider publishes the fake and runs conformance cases against both |
+| Mocked browser replies written by hand | The UI is tested against what the author believed | Generate them from the API definition |
+| A required check satisfied by a skipped job | A job whose `if:` is false shows green | One executed run on record per off-by-default job |
+| A parity check matching commented-out lines | A disabled gate still counts as present | Strip comments first |
+| `external: true` volume on a fresh CI runner | `compose up` fails before a test runs | `docker volume create <name>` in the job first |
+| Production backend selected because its URL is in the environment | A test run writes to production | Explicit opt-in variable |
+| A "real" outside-service check that reads production | Tests now depend on, and can leak, live data | Test account or test mode; otherwise stay a fake |
+| A nightly run as the *only* release gate | Nobody owns its red; it tests what nobody is shipping | A release gate on a reviewed release PR; a schedule may run alongside it |
+| Rebuilding at the tag or at deploy | The gate tested different bytes from the ones that ship | Build once at main; retag; promote |
+| A hand deploy of a version the gate never saw | An untested version goes live | Hand deploys re-deploy logged versions only; hotfixes go through a release PR |
+| Automatic retries inside a test run | Real intermittent bugs pass on the second try | Tag `flaky` with owner + expiry; retry the whole run by hand |
 | E2E red with no artifacts | Rumour, not signal | `if: failure()` upload |
 
 ---
@@ -769,6 +919,6 @@ every other item here is a specific instance of it:
 
 > **A gate that cannot do its job must go red.**
 
-Everything else — the single driver, the overlay, the tiering, the ref echo, the
+Everything else — the single driver, the shared network, the tiering, the version echo, the
 unconditional rebuild — is machinery for making sure that when something is broken,
 you find out.
