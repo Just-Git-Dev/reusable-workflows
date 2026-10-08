@@ -21,6 +21,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO / ".github" / "workflows"
 DOCS = REPO / "docs"
 README = REPO / "README.md"
+ACTIONS = REPO / "actions"
 
 # Not a `workflow_call` reusable — this repo's own CI, and this repo's own
 # release ritual (`workflow_dispatch`, tags + publishes a Release; see its
@@ -39,15 +40,25 @@ def main():
         if f"docs/{name}.md" not in readme:
             problems.append(f"{name}: not linked from README.md")
 
-    # And the reverse: a docs page whose workflow was deleted or renamed.
+    # Composite actions (`actions/<name>/action.yml`) are a product too, held to the
+    # same rule. The README row names the action, not a .yml, but links the same page.
+    actions = sorted(p.parent.name for p in ACTIONS.glob("*/action.yml"))
+    for name in actions:
+        if not (DOCS / f"{name}.md").is_file():
+            problems.append(f"actions/{name}: no docs/{name}.md")
+        if f"docs/{name}.md" not in readme:
+            problems.append(f"actions/{name}: not linked from README.md")
+
+    # And the reverse: a docs page whose workflow (or action) was deleted or renamed.
     for doc in sorted(DOCS.glob("*.md")):
         # Standalone guidance pages, not workflow references. They have no
         # corresponding .yml and never will.
         if doc.stem in {"PLATFORM", "convergence-audit", "release-process", "alertspec",
                         "TESTING-STANDARD"}:
             continue
-        if not (WORKFLOWS / f"{doc.stem}.yml").is_file():
-            problems.append(f"{doc.stem}: docs/{doc.stem}.md has no workflow")
+        if not (WORKFLOWS / f"{doc.stem}.yml").is_file() \
+                and not (ACTIONS / doc.stem / "action.yml").is_file():
+            problems.append(f"{doc.stem}: docs/{doc.stem}.md has no workflow or action")
 
     if problems:
         print("::error::workflow documentation is incomplete")
@@ -55,7 +66,8 @@ def main():
             print(f"  - {p}")
         return 1
 
-    print(f"All {len(names)} reusable workflows have a docs page and a README link.")
+    print(f"All {len(names)} reusable workflows and {len(actions)} composite actions "
+          "have a docs page and a README link.")
     return 0
 
 

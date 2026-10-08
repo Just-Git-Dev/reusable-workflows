@@ -50,6 +50,14 @@ lands everywhere.
 | [`deploy-cluster-keyed.yml`](docs/deploy-cluster-keyed.md) | **Key-based** deploy: **multi-cloud** (GKE/EKS/AKS/kubeconfig) + **multi-registry** (GAR/ECR/ACR/GHCR/DockerHub/…) build → push → roll |
 | [`run-db-job.yml`](docs/run-db-job.md) | Converge a **Cloud Run Job** from an already-built image → execute + wait — schema migrations that gate a service roll, backfills, one-shot tasks |
 
+### Release
+
+Composite actions under `actions/`, used as a **step** (`uses: Just-Git-Dev/reusable-workflows/actions/<name>@<tag>`), not as a job.
+
+| Action | Purpose |
+|---|---|
+| [`check-release-gate`](docs/check-release-gate.md) | **Read-only** root-release gate: for each service, the tag still points at the listed commit and the newest GitHub Actions `release-gate` check on it succeeded. It never waits and reports every service before failing |
+
 ### Secrets & rotation
 
 | Workflow | Purpose |

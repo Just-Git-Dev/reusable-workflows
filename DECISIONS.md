@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-08` — [`check-release-gate` is a composite action that only reads: newest GitHub Actions run, never waits](#2026-10-08--check-release-gate-is-a-composite-action-that-only-reads-newest-github-actions-run-never-waits)
 - `2026-10-07` — [`TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default](#2026-10-07--testing-standard-follows-the-rewritten-testing-skill-injected-stand-ins-root-only-cross-repo-release-log-no-schedule-by-default)
 - `2026-10-05` — [`mount_path` is required on the three bundle-remount workflows (next release is `v3.0.0`)](#2026-10-05--mount_path-is-required-on-the-three-bundle-remount-workflows-next-release-is-v300)
 - `2026-10-04` — [Public repo names no private consumer: pseudonyms and placeholders, history left alone](#2026-10-04--public-repo-names-no-private-consumer-pseudonyms-and-placeholders-history-left-alone)
@@ -99,6 +100,71 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-08 — `check-release-gate` is a composite action that only reads: newest GitHub Actions run, never waits
+
+**Context.** A multi-repo project releases its services from a root repo. Each service runs
+its own `release-gate` check on the commit it is about to tag, before its release PR. The root
+release must refuse to draft or publish a service whose gate did not pass on the exact tagged
+commit. Every project needs that same reader, and one copy per project drifts. Plan:
+`plans/2026-10-08-check-release-gate.md`.
+
+**Decision.** Ship it as a **composite action**, `actions/check-release-gate/`, the repo's
+first `actions/` directory. It is not a reusable workflow.
+
+- **Why a composite action.** The token is minted from a GitHub App key that is a secret
+  scoped to the caller's `release` environment. A `workflow_call` cannot be handed an
+  environment-scoped secret. A composite action runs inside the caller's own
+  `environment: release` job, so the caller mints the token and passes it in. The owner chose
+  this over the original "reusable workflow" wording (2026-10-08).
+- **Why read-only and never waiting.** The gate runs before the release PR, so by the time the
+  root release runs the verdict is already final. `queued`/`in_progress` therefore FAILS rather
+  than being polled. A poller would hang a release on the slowest gate and hide a service that
+  was tagged before its gate finished. The action never starts or re-runs anything either: the
+  release App's only Actions write is re-running its own failed Deploy jobs.
+- **Why the newest run from `github-actions` is the one that counts.** Any App with
+  `checks:write` can post a same-named check, so a check from another app is ignored and
+  reported as missing. A re-run gets a later `started_at` and a higher `id`, so "newest" (sorted
+  by `started_at`, then `id`) means a red-then-fixed gate passes and a green-then-red gate
+  fails. The order the API lists runs in is never trusted.
+- **Only `completed` + `success` passes.** `neutral` and `skipped` fail too: a gate that
+  skipped itself did not verify anything. Zero services fails. Any API error other than a 404
+  on the tag fails closed, with the HTTP status named.
+- **The tag must still resolve to the listed commit**, with annotated tags peeled for at most
+  5 hops. A gate that passed on the old commit says nothing about a moved tag.
+- **Every service is reported, then the step fails once,** with `examined N services, M
+  passed`, so one red service never hides a second.
+
+**CI for the first `actions/` directory.** Each extension was shown failing on a planted
+violation, then restored.
+
+- `check_docs_coverage.py` requires `docs/<name>.md` and a README link per
+  `actions/<name>/action.yml`.
+- `gen_catalog.py` emits an `actions` section.
+- The `pinned-actions` grep also scans `actions/`: an action's steps run in the caller's job
+  with the caller's token.
+- The lint job shellchecks `actions/**/*.sh`, because actionlint only reads
+  `.github/workflows/`. It fails on zero files, so a moved script cannot drop out silently.
+
+**Version stamp: actions carry none, but their doc pins are swept and checked.** The
+`WORKFLOW_VERSION` stamp exists so a called workflow can tell its caller it is stale, and no
+action here reports that. Skipping actions silently would instead have let a stale
+`actions/<name>@vX.Y.Z` doc pin pass `--check`. So `PIN_RE` now also matches
+`actions/<name>@`, which puts action pins in both the sweep and the `--check` agreement.
+`tests/run_stamp_tests.py` covers it and fails against the old regex.
+
+**Verification.** `tests/run_check_release_gate_tests.py` runs the shipped `check.sh` against
+a `gh` stub. It was confirmed red against an exit-0 stub (59 failing assertions), then green
+(72). Live positive control, read-only, against this repo's annotated `v3.0.0` tag
+(commit `c45c0f7`):
+
+- `check_name="actionlint + shellcheck"` → pass. This exercises URL-encoding and the peel.
+- `release-gate` → `no release-gate run`.
+- A wrong sha → `tag moved`.
+- A nonexistent tag → `tag missing`, from a real 404.
+
+**Release.** Adding an action is a minor bump, so the next tag is `v3.1.0`. It is cut only on
+the owner's explicit ask.
 
 ## 2026-10-07 — `TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default
 
