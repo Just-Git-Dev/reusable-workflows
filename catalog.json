@@ -2522,6 +2522,12 @@
           "required": false,
           "type": "string"
         },
+        "skip_existing_tag": {
+          "default": false,
+          "description": "Make a re-run safe: when :target_tag already sits on the source digest, skip the retag (the roll still runs); when it sits on ANOTHER digest, fail. A describe error other than \"not found\" fails. :latest is exempt and always moves. Default false = always retag.",
+          "required": false,
+          "type": "boolean"
+        },
         "source_tag": {
           "default": null,
           "description": "Existing tag to promote FROM (usually the stage commit SHA).",
