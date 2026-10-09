@@ -124,6 +124,61 @@ def run_wait_step(body: str, *, wait_seconds: int, appear_at_attempt: int | None
         }
 
 
+def run_retag_step(body: str, *, skip, target_digest, source_digest="sha256:aaa",
+                   describe_err=None, dry_run="false", also_latest="false"):
+    """Execute the Retag body against a stubbed gcloud that logs every call.
+
+    target_digest: digest `:v1.2.3` currently sits on; None = tag absent (describe
+                   fails NOT_FOUND, as the registry answers).
+    describe_err:  if set, describing the TARGET fails with this on stderr instead.
+    The source always describes successfully as `source_digest`.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        calls = tmp / "calls"
+        calls.write_text("")
+        base = "us-docker.pkg.dev/p/r/img"
+        source = f"{base}:deadbeef"
+        if describe_err:
+            target_answer = f"  echo {shlex.quote(describe_err)} >&2; exit 1\n"
+        elif target_digest is None:
+            target_answer = ("  echo 'ERROR: (gcloud.container.images.describe) NOT_FOUND: "
+                             "Requested entity was not found.' >&2; exit 1\n")
+        else:
+            target_answer = f"  echo {shlex.quote(target_digest)}; exit 0\n"
+        stub_text = (
+            "#!/usr/bin/env bash\n"
+            f'echo "$*" >> "{calls}"\n'
+            'case "$*" in\n'
+            f'  *"describe {source}"*) echo {shlex.quote(source_digest)}; exit 0 ;;\n'
+            f'  *"describe {base}:v1.2.3"*)\n'
+            + target_answer +
+            "  ;;\n"
+            "esac\n"
+            "exit 0\n")
+        (stub / "gcloud").write_text(stub_text)
+        (stub / "gcloud").chmod(0o755)
+        out = tmp / "gh_output"
+        out.write_text("")
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(BASE=base, SOURCE=source, TARGET_TAG="v1.2.3", ALSO_LATEST=also_latest,
+                   DRY_RUN=dry_run, SKIP_EXISTING=skip, GITHUB_OUTPUT=str(out))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            env=env, capture_output=True, text=True,
+        )
+        lines = [l for l in calls.read_text().splitlines() if l]
+        return {
+            "rc": proc.returncode,
+            "out": proc.stdout + proc.stderr,
+            "add_tag": [l for l in lines if "add-tag" in l],
+            "output": out.read_text(),
+        }
+
+
 def run_badge_push_step(body: str, *, push_mode: str, has_changes: bool = True):
     """Execute the badge Commit + push body against a stubbed git.
 
@@ -1581,6 +1636,64 @@ def main():
     r = run_wait_step(body, wait_seconds=1, appear_at_attempt=None)
     check("1s budget probes twice", r["attempts"] == 2, r["attempts"])
     check("1s budget clamps the sleep", r["sleeps"] == [1], r["sleeps"])
+
+    # ---- promote-image retag: skip_existing_tag makes a failed-roll re-run safe ----
+    body = extract_step(PROMOTE, "promote", "Retag (server-side, no rebuild)")
+    print("promote-image · Retag (skip_existing_tag)")
+    tgt = "us-docker.pkg.dev/p/r/img:v1.2.3"
+    lat = "us-docker.pkg.dev/p/r/img:latest"
+
+    # a. Positive control: default off retags even when the tag exists (today's behaviour).
+    r = run_retag_step(body, skip="false", target_digest="sha256:aaa")
+    check("skip off: exits 0", r["rc"] == 0, r["out"])
+    check("skip off: add-tag targets the tag", len(r["add_tag"]) == 1 and tgt in r["add_tag"][0],
+          r["add_tag"])
+
+    # b. Tag absent: retag as usual.
+    r = run_retag_step(body, skip="true", target_digest=None)
+    check("absent: exits 0", r["rc"] == 0, r["out"])
+    check("absent: add-tag targets the tag", len(r["add_tag"]) == 1 and tgt in r["add_tag"][0],
+          r["add_tag"])
+
+    # c. Same digest: no write, run continues, says why.
+    r = run_retag_step(body, skip="true", target_digest="sha256:aaa")
+    check("same digest: exits 0", r["rc"] == 0, r["out"])
+    check("same digest: no add-tag", r["add_tag"] == [], r["add_tag"])
+    check("same digest: notice says already", "::notice::" in r["out"] and "already" in r["out"],
+          r["out"])
+    check("same digest: records retag_skipped", "retag_skipped=true" in r["output"], r["output"])
+
+    # d. Different digest: the tag already means another image — fail, name both.
+    r = run_retag_step(body, skip="true", target_digest="sha256:bbb")
+    check("other digest: exits 1", r["rc"] == 1, r["out"])
+    check("other digest: names both digests",
+          "sha256:aaa" in r["out"] and "sha256:bbb" in r["out"], r["out"])
+    check("other digest: no add-tag", r["add_tag"] == [], r["add_tag"])
+
+    # e. Describe error is never "absent" (false-zero trap).
+    r = run_retag_step(body, skip="true", target_digest=None,
+                       describe_err="ERROR: PERMISSION_DENIED: caller lacks permission")
+    check("describe error: exits 1", r["rc"] == 1, r["out"])
+    check("describe error: surfaces the error", "PERMISSION_DENIED" in r["out"], r["out"])
+    check("describe error: no add-tag", r["add_tag"] == [], r["add_tag"])
+
+    # f. :latest is exempt — still moved even when the target is skipped.
+    r = run_retag_step(body, skip="true", target_digest="sha256:aaa", also_latest="true")
+    check("latest exempt: exits 0", r["rc"] == 0, r["out"])
+    check("latest exempt: add-tag moves :latest only",
+          len(r["add_tag"]) == 1 and lat in r["add_tag"][0] and tgt not in r["add_tag"][0],
+          r["add_tag"])
+
+    # g. Dry run prints the decision without writing.
+    r = run_retag_step(body, skip="true", target_digest="sha256:aaa", dry_run="true")
+    check("dry run: exits 0", r["rc"] == 0, r["out"])
+    check("dry run: says would skip", "would skip" in r["out"], r["out"])
+    check("dry run: no add-tag", r["add_tag"] == [], r["add_tag"])
+
+    # Empty source digest can't be compared — fail rather than guess.
+    r = run_retag_step(body, skip="true", target_digest="sha256:aaa", source_digest="")
+    check("empty source digest: exits 1", r["rc"] == 1, r["out"])
+    check("empty source digest: no add-tag", r["add_tag"] == [], r["add_tag"])
 
     # ---- badge push: must never fail a caller's CI over a cosmetic README ----
     node_body = extract_step(CI_NODE, "badges", "Commit + push")

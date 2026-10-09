@@ -30,6 +30,7 @@ For the build-and-deploy step itself, use `deploy-cloud-run` / `deploy-gke-servi
 | `target_tag` | `''` | tag to promote TO; empty ⇒ the triggering ref name (e.g. the pushed git tag) |
 | `require_semver` | `true` | reject a `target_tag` that is not `vX.Y.Z` |
 | `also_tag_latest` | `false` | also move `:latest` onto the promoted image |
+| `skip_existing_tag` | `false` | make a re-run safe: skip the retag when `:target_tag` already sits on the source digest, fail when it sits on another — see "Re-running a release" below |
 | `wif_provider` / `service_account` | `''` | keyless WIF; empty `wif_provider` ⇒ **key-based** auth via the credential secrets below |
 | `deploy_target` | `none` | `none` \| `gke` \| `cloud-run` — what to roll after retagging |
 | `cluster_project` / `cluster_name` / `cluster_location` | — | GKE target (`deploy_target=gke`) |
@@ -188,6 +189,36 @@ jobs:
 `dry_run: true` prints the exact `gcloud container images add-tag` and roll
 commands without executing them — the retag is a mutation, so it honours the
 repo convention that every mutating workflow has a safe plan mode.
+
+## Re-running a release (`skip_existing_tag`)
+
+A release run that retagged and then failed at the roll cannot simply be re-run
+by default: the retag fires again, and on a repository with **immutable tags** a
+second `add-tag` for an existing tag has been reported to fail with
+`FAILED_PRECONDITION` — even onto the same digest.
+Set `skip_existing_tag: true` to make the retag step idempotent. Before any
+`add-tag` it reads the source digest and describes `:<target_tag>`:
+
+| `:target_tag` today | Result |
+|---|---|
+| absent | retag as usual |
+| present, **same digest** as the source | retag skipped with a `::notice::` naming the digest; the run **continues** to the roll and the deployment record |
+| present, **different digest** | **fails**, naming both digests — the tag already means another image, and the re-run must not deploy something else under its name |
+| describe fails for any reason other than "not found" (auth, API) | **fails** — an error is never read as "tag absent" |
+
+The check runs *before* `add-tag`, so it does not depend on what the registry
+answers for a same-digest re-add.
+
+`:latest` (with `also_tag_latest: true`) is **exempt**: it is meant to move, so it
+is always re-pointed at the source, even when `:target_tag` was skipped. Example:
+`v1.2` is re-run, `:v1.2` already sits on digest A → skipped, and `:latest` is
+still pointed at A.
+
+With `dry_run: true` the step still reads both digests and prints the decision
+(`would skip …` or the `add-tag` it would run) without writing anything.
+
+Forward-only is unaffected: a release equal to live passes, and a run that failed
+at the roll never recorded its Deployment anyway.
 
 ## Live-commit stamping
 

@@ -68,6 +68,15 @@ on:
         type: boolean
         required: false
         default: false
+      skip_existing_tag:
+        description: >-
+          Make a re-run safe: when :target_tag already sits on the source digest,
+          skip the retag (the roll still runs); when it sits on ANOTHER digest, fail.
+          A describe error other than "not found" fails. :latest is exempt and
+          always moves. Default false = always retag.
+        type: boolean
+        required: false
+        default: false
       wif_provider:
         description: >-
           Workload Identity Federation provider resource name. Empty ⇒ KEY-BASED
@@ -436,12 +445,14 @@ jobs:
           exit 1
 
       - name: Retag (server-side, no rebuild)
+        id: retag
         env:
           BASE: ${{ steps.ref.outputs.base }}
           SOURCE: ${{ steps.ref.outputs.source }}
           TARGET_TAG: ${{ steps.ref.outputs.target_tag }}
           ALSO_LATEST: ${{ inputs.also_tag_latest }}
           DRY_RUN: ${{ inputs.dry_run }}
+          SKIP_EXISTING: ${{ inputs.skip_existing_tag }}
         run: |
           # Verify the source image exists before promoting. When source_wait_seconds
           # is set this has already been satisfied by the wait step; it still runs so
@@ -453,7 +464,45 @@ jobs:
           fi
 
           DESTS=("${BASE}:${TARGET_TAG}")
+
+          # skip_existing_tag: decide BEFORE add-tag, so a re-run is safe whatever the
+          # registry answers for a same-digest re-add. Only a "not found" describe means
+          # absent; any other error fails — an error is never read as "tag absent".
+          if [ "$SKIP_EXISTING" = "true" ]; then
+            SRC_DIGEST=$(gcloud container images describe "$SOURCE" \
+                           --format='value(image_summary.digest)')
+            if [ -z "$SRC_DIGEST" ]; then
+              echo "::error::could not read the digest of $SOURCE — refusing to compare." >&2
+              exit 1
+            fi
+            ERR_FILE=$(mktemp)
+            if TGT_DIGEST=$(gcloud container images describe "${BASE}:${TARGET_TAG}" \
+                              --format='value(image_summary.digest)' 2>"$ERR_FILE"); then
+              if [ "$TGT_DIGEST" = "$SRC_DIGEST" ]; then
+                DESTS=()
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "DRY RUN — would skip the retag: ${BASE}:${TARGET_TAG} is already on $SRC_DIGEST"
+                else
+                  echo "::notice::${BASE}:${TARGET_TAG} is already on $SRC_DIGEST — retag skipped (skip_existing_tag)."
+                fi
+                echo "retag_skipped=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "::error::${BASE}:${TARGET_TAG} already exists on ${TGT_DIGEST:-<unknown>}, but the source $SOURCE is $SRC_DIGEST — refusing to re-point a released tag." >&2
+                exit 1
+              fi
+            elif grep -qiE "not found|does not exist|NOT_FOUND|manifest unknown" "$ERR_FILE"; then
+              echo "${BASE}:${TARGET_TAG} not present yet — retagging."
+            else
+              echo "::error::could not describe ${BASE}:${TARGET_TAG} (not a 'not found' answer — failing rather than treating it as absent):" >&2
+              cat "$ERR_FILE" >&2
+              exit 1
+            fi
+          fi
+
           [ "$ALSO_LATEST" = "true" ] && DESTS+=("${BASE}:latest")
+          if [ "${#DESTS[@]}" -eq 0 ]; then
+            exit 0
+          fi
 
           if [ "$DRY_RUN" = "true" ]; then
             echo "DRY RUN — would run:"
@@ -601,11 +650,15 @@ jobs:
           SOURCE: ${{ steps.ref.outputs.source }}
           TARGET_DESC: ${{ inputs.deploy_target }}
           DRY_RUN: ${{ inputs.dry_run }}
+          RETAG_SKIPPED: ${{ steps.retag.outputs.retag_skipped }}
         run: |
           {
             echo "## Promote image"
             echo ""
             echo "- From: \`${SOURCE}\`"
             echo "- To:   \`${IMAGE}\`${DRY_RUN:+ (dry run)}"
+            if [ "$RETAG_SKIPPED" = "true" ]; then
+              echo "- Retag: skipped — the tag was already on the source digest (skip_existing_tag)"
+            fi
             echo "- Roll: \`${TARGET_DESC}\`"
           } >> "$GITHUB_STEP_SUMMARY"
