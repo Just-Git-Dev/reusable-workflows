@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-09` — [`promote-image` `skip_existing_tag`: a same-digest re-run skips the retag, another digest fails](#2026-10-09--promote-image-skip_existing_tag-a-same-digest-re-run-skips-the-retag-another-digest-fails)
 - `2026-10-08` — [`check-release-gate` is a composite action that only reads: newest GitHub Actions run, never waits](#2026-10-08--check-release-gate-is-a-composite-action-that-only-reads-newest-github-actions-run-never-waits)
 - `2026-10-07` — [`TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default](#2026-10-07--testing-standard-follows-the-rewritten-testing-skill-injected-stand-ins-root-only-cross-repo-release-log-no-schedule-by-default)
 - `2026-10-05` — [`mount_path` is required on the three bundle-remount workflows (next release is `v3.0.0`)](#2026-10-05--mount_path-is-required-on-the-three-bundle-remount-workflows-next-release-is-v300)
@@ -100,6 +101,41 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-09 — `promote-image` `skip_existing_tag`: a same-digest re-run skips the retag, another digest fails
+
+**Decision.** `promote-image` gains `skip_existing_tag` (bool, default `false`). When it is on, the
+Retag step reads the source digest and describes `:<target_tag>` before any `add-tag`:
+- tag absent → retag.
+- tag on the same digest → skip the retag with a notice; the roll and the Deployment record still run.
+- tag on another digest → fail, naming both.
+- a describe error that is not "not found" → fail.
+
+`:latest` is exempt and always moves. Adding an optional input with today's behaviour as the
+default is a minor change (v3.x, released only on an explicit ask). There is no v2 backport. Plan:
+`plans/2026-10-09-promote-skip-existing-tag.md`.
+
+**Why.** A release run that retagged and then failed at the roll could not be re-run: the re-run
+calls `add-tag` again, and on an immutable repository consumer C reported `FAILED_PRECONDITION`
+even for the same digest (not re-verified here). Consumer C's release flow re-runs a failed deploy
+(at most twice), so the re-run has to be safe. The check runs before `add-tag`, so it is correct
+whether or not the registry rejects a same-digest re-add.
+
+The other-digest case fails rather than skips, because the tag already names a different image.
+Rolling the source under that name would deploy something the tag does not mean. A describe error
+fails rather than counting as "absent", because reading an error as a zero is the false-zero trap.
+Without that, an auth fault would send the run on to the very `add-tag` this input exists to avoid.
+
+**Rejected.** Treating the registry's `FAILED_PRECONDITION` as success after the fact. It relies on
+an error string and cannot tell "same digest" from "another digest". Making it the default, which
+would change behaviour for existing callers mid-major. Applying the rule to `:latest`, whose whole
+purpose is to move, so "exists on another digest" is normal for it.
+
+**Tests.** `tests/run_step_tests.py` runs the shipped step body against a stubbed `gcloud`, with
+21 new checks (cases a–g plus an empty source digest). Default-off retagging an existing tag is the
+positive control: it passed before and after the change. 13 of the 21 failed before the
+implementation; the 8 that passed assert behaviour the old body already had (retag when absent,
+exit 0, no write in dry run).
 
 ## 2026-10-08 — `check-release-gate` is a composite action that only reads: newest GitHub Actions run, never waits
 
