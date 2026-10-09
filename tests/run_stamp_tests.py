@@ -143,6 +143,19 @@ def test_bump_pins_idempotent():
     check("pins: second pass reports zero", n, 0)
 
 
+def test_action_pins_are_swept_and_reconciled():
+    # Composite actions under actions/ carry no stamp, so their doc pins are the
+    # only version they have. If the sweep missed them, a stale action pin would
+    # pass `--check` and ship docs pointing at a release without the action.
+    text = "- uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@v1.22.0\n"
+    out, n = S.bump_pins(text, "v1.24.0")
+    check("action pin: rewritten", n, 1)
+    check("action pin: now current", S.find_pins(out), ["v1.24.0"])
+    problems = S.reconcile({"wf.yml": "v1.24.0"}, {"docs/a.md": S.find_pins(text)})
+    check("action pin: stale one is reported",
+          problems, ["docs/a.md: example pinned to v1.22.0, expected v1.24.0"])
+
+
 def test_find_pins_ignores_v1_alias():
     # `v1` is a frozen legacy alias (CLAUDE.md); the sweep must not drag it forward,
     # or a doc that deliberately documents the alias would be rewritten every release.
@@ -209,6 +222,7 @@ def main():
         test_stamp_uses_existing_env_block,
         test_bump_pins_rewrites_only_our_pins,
         test_bump_pins_idempotent,
+        test_action_pins_are_swept_and_reconciled,
         test_find_pins_ignores_v1_alias,
         test_version_must_be_a_release_tag,
         test_repo_is_internally_consistent,

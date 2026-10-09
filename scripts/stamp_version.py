@@ -37,8 +37,13 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 # `v1` (no minor/patch) is a frozen legacy alias — a doc that mentions it means it,
 # so the sweep must not drag it forward. Only full vX.Y.Z pins are swept.
+# Composite actions (`actions/<name>@`) are pinned the same way and swept with the
+# workflows. They carry no WORKFLOW_VERSION stamp: the stamp exists so a called
+# workflow can tell its caller it is stale, and no action here reports that. Their
+# doc pins are the only version they have, so they are part of `--check`.
 PIN_RE = re.compile(
-    r"(Just-Git-Dev/reusable-workflows/\.github/workflows/[A-Za-z0-9._-]+\.yml@)"
+    r"(Just-Git-Dev/reusable-workflows/"
+    r"(?:\.github/workflows/[A-Za-z0-9._-]+\.yml|actions/[A-Za-z0-9._-]+)@)"
     r"(v\d+\.\d+\.\d+)\b"
 )
 VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+$")

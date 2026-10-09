@@ -1,0 +1,47 @@
+name: Check release gate
+description: >-
+  Read-only release gate. For each listed service, confirm the tag still points at
+  the listed commit and the newest GitHub Actions check named `check_name` on that
+  commit completed with success. Never waits for, starts or re-runs a run. Reports
+  every service, then fails once if any did not pass. See docs/check-release-gate.md.
+
+# A composite action, not a reusable workflow, on purpose: it runs inside the
+# caller's own job, so the caller can mint the token from a secret scoped to its
+# `release` environment — something a `workflow_call` cannot be handed.
+# DECISIONS.md 2026-10-08.
+
+inputs:
+  token:
+    description: >-
+      A token that can read checks and contents on every listed repo (a GitHub App
+      installation token with checks:read + contents:read).
+    required: true
+  services:
+    description: >-
+      JSON array of {"repo": "owner/name", "tag": "vX.Y.Z", "sha": "<40-hex commit>"}.
+      An empty array fails.
+    required: true
+  check_name:
+    description: >-
+      Name of the check run that is each service's release gate. Override only to
+      point a positive-control test at a check that really exists.
+    required: false
+    default: release-gate
+
+outputs:
+  result:
+    description: >-
+      JSON array of {repo, tag, sha, verdict, reason}, one per service, verdict
+      "pass" or "fail".
+    value: ${{ steps.check.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        SERVICES: ${{ inputs.services }}
+        CHECK_NAME: ${{ inputs.check_name }}
+      run: '"$GITHUB_ACTION_PATH/check.sh"'
