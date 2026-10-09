@@ -10,7 +10,7 @@ once, before it drafts or publishes anything. For each listed service it checks 
 It only reads. It never waits for a run, never starts one and never re-runs one.
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@v3.0.0
+- uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@v3.1.0
 ```
 
 ## Why this exists
@@ -132,7 +132,7 @@ jobs:
           permission-contents: read
 
       # Pin the commit SHA of the release tag if your repo SHA-pins every action.
-      - uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@v3.0.0
+      - uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@v3.1.0
         with:
           token: ${{ steps.app.outputs.token }}
           services: |
