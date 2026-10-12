@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-12` — [`refresh-api-spec` is a composite action: fetch, compare by meaning, one PR, merge only on the caller's checks](#2026-10-12--refresh-api-spec-is-a-composite-action-fetch-compare-by-meaning-one-pr-merge-only-on-the-callers-checks)
 - `2026-10-09` — [`promote-image` `skip_existing_tag`: a same-digest re-run skips the retag, another digest fails](#2026-10-09--promote-image-skip_existing_tag-a-same-digest-re-run-skips-the-retag-another-digest-fails)
 - `2026-10-08` — [`check-release-gate` is a composite action that only reads: newest GitHub Actions run, never waits](#2026-10-08--check-release-gate-is-a-composite-action-that-only-reads-newest-github-actions-run-never-waits)
 - `2026-10-07` — [`TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default](#2026-10-07--testing-standard-follows-the-rewritten-testing-skill-injected-stand-ins-root-only-cross-repo-release-log-no-schedule-by-default)
@@ -101,6 +102,52 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-12 — `refresh-api-spec` is a composite action: fetch, compare by meaning, one PR, merge only on the caller's checks
+
+**Decision.** A new composite action `actions/refresh-api-spec/` keeps a consumer's committed copy
+of a provider's OpenAPI document current. The consumer calls it from its own scheduled workflow.
+It fetches the document from a configured URL, compares it with the copy by meaning, and on a
+change writes the copy, runs the caller's `update_command` and `check_command`, force-pushes the
+fixed branch `spec-refresh/<name>`, opens (or reuses) one PR, and merges it only if the checks
+passed. A failed check leaves the PR open with the last 60 lines of output as a comment and fails
+the run. Adding an action is a minor change: next release v3.2.0, cut only on an explicit ask.
+Plan: `plans/2026-10-12-refresh-api-spec.md`.
+
+**Why.** The owner's QA ruling (K4, 2026-10-12) has each consumer keep a copy of each provider's
+API definition, refreshed either by hand (path a) or by a scheduled fetch with an automatic merge
+(path b), with no service repo reading another. Path (b) is the same loop in every repo, so it
+belongs here once.
+
+- **Composite action, not a reusable workflow.** The checks are the caller's own and need its
+  toolchain and installed dependencies. Those only exist inside the caller's job, after its setup
+  steps. A reusable workflow would have to re-implement every repo's setup. The ruling's text said
+  "shared workflow"; it is a shared action.
+- **Compared by meaning.** A provider may serve JSON while the copy is YAML, or the same JSON with
+  other spacing or key order. Both sides go through `yq` to sorted, compact JSON. Only a real change
+  makes a commit, and the copy is written back in its own format.
+- **Refuses a non-spec.** GoFr's catch-all `/.well-known/{name}` answers 200 with the Swagger UI
+  HTML page. The action needs HTTP 200, a non-empty body, and a mapping with a top-level `openapi`
+  or `swagger` key. A wrong URL is a red run, never a merged HTML "spec".
+- **One fixed branch.** Repeated failures update one PR instead of piling up new ones. An open PR
+  whose change has since reverted upstream is left alone with a notice; closing it is a human call.
+- **Clean tree, default-branch head.** The update step's changes are committed with `git add -A`,
+  so the action refuses a dirty tree and a checkout that is not the default branch's head.
+- **Merge pinned with `--match-head-commit`**, so a branch moved between push and merge is not
+  merged unchecked.
+
+**Rejected.** A per-repo copy of the loop (drifts). A reusable workflow (cannot run the caller's
+checks in the caller's toolchain). Byte comparison (churns on formatting, fails JSON-vs-YAML).
+Closing the PR automatically when the document reverts (hides a change a human may want to see).
+Relying on CI in the PR to gate the merge: a PR opened with `GITHUB_TOKEN` triggers no workflows,
+so the action runs the checks itself, and callers must not require a status check on the branch.
+
+**Tests.** `tests/run_refresh_api_spec_tests.py` runs the shipped `refresh.sh` with real `curl`
+against a local HTTP server, a temporary repo pushing to a bare remote, and a `gh` stub: 19 groups,
+78 assertions. Red first: script absent, then a no-op script failed 46 assertions. Writing the
+tests found two real faults before release: an inherited `GIT_AUTHOR_NAME` overrode `-c user.name`
+(identity now set by env), and `yq` kept JSON flow style when writing a YAML copy (now `-P`).
+Live positive control is after release, in the first adopting repo.
 
 ## 2026-10-09 — `promote-image` `skip_existing_tag`: a same-digest re-run skips the retag, another digest fails
 

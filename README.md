@@ -58,6 +58,12 @@ Composite actions under `actions/`, used as a **step** (`uses: Just-Git-Dev/reus
 |---|---|
 | [`check-release-gate`](docs/check-release-gate.md) | **Read-only** root-release gate: for each service, the tag still points at the listed commit and the newest GitHub Actions `release-gate` check on it succeeded. It never waits and reports every service before failing |
 
+### API contracts
+
+| Action | Purpose |
+|---|---|
+| [`refresh-api-spec`](docs/refresh-api-spec.md) | Scheduled refresh of a committed copy of another service's **OpenAPI document** from its published URL: compares by meaning, opens one `spec-refresh/<name>` PR, runs the repo's own checks, and **merges only if they pass** — else comments the output and fails. Refuses a non-spec response (e.g. a Swagger UI HTML page served with 200) |
+
 ### Secrets & rotation
 
 | Workflow | Purpose |
@@ -110,7 +116,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v3.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v3.2.0
     with:
       go_version_file: go.mod
       coverage_threshold: 50
@@ -128,7 +134,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v3.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v3.2.0
     with:
       gcp_project: my-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

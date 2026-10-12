@@ -1,0 +1,80 @@
+name: Refresh API spec
+description: >-
+  Fetch a provider's published OpenAPI document, compare it by meaning with the
+  committed copy, and if it changed: write the copy, run the repo's update and
+  checks, push branch spec-refresh/<name>, open (or reuse) one PR, and merge it only
+  if the checks passed — otherwise comment the check output and fail. Refuses a
+  response that is not an OpenAPI document. See docs/refresh-api-spec.md.
+
+# A composite action, not a reusable workflow, on purpose: the checks are the
+# caller's own and need its toolchain and installed dependencies, which only
+# exist inside the caller's job after its setup steps. DECISIONS.md 2026-10-12.
+
+inputs:
+  name:
+    description: >-
+      Short id for this provider, e.g. `api`. Branch spec-refresh/<name>, PR title
+      "chore: refresh <name> API spec". Letters, digits, '.', '_', '-'.
+    required: true
+  url:
+    description: Where the provider publishes its OpenAPI document (JSON or YAML).
+    required: true
+  copy_path:
+    description: >-
+      The committed copy, relative to the repo root. Format from the extension:
+      .json, .yaml or .yml. May not exist yet.
+    required: true
+  check_command:
+    description: >-
+      The repo's checks, run after the copy is written. Pass = merge; fail = PR left
+      open with the output commented, and the run fails.
+    required: true
+  update_command:
+    description: >-
+      Optional. Runs after the copy is written and before the checks (regenerate
+      types, rewrite a pin file). Its changes are committed with the copy.
+    required: false
+    default: ""
+  request_headers:
+    description: >-
+      Optional newline-separated `Name: value` headers sent with the fetch. Take
+      sensitive values from secrets; each value is also masked.
+    required: false
+    default: ""
+  merge_method:
+    description: squash, merge or rebase.
+    required: false
+    default: squash
+  token:
+    description: >-
+      Token for gh (contents: write, pull-requests: write). Defaults to the job's
+      GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  changed:
+    description: '"true" if the published document differs in meaning from the copy, else "false".'
+    value: ${{ steps.refresh.outputs.changed }}
+  pr_url:
+    description: The refresh PR, when one was opened or updated.
+    value: ${{ steps.refresh.outputs.pr_url }}
+  checks:
+    description: passed, failed, or skipped (nothing changed).
+    value: ${{ steps.refresh.outputs.checks }}
+
+runs:
+  using: composite
+  steps:
+    - id: refresh
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        SPEC_NAME: ${{ inputs.name }}
+        SPEC_URL: ${{ inputs.url }}
+        COPY_PATH: ${{ inputs.copy_path }}
+        CHECK_COMMAND: ${{ inputs.check_command }}
+        UPDATE_COMMAND: ${{ inputs.update_command }}
+        REQUEST_HEADERS: ${{ inputs.request_headers }}
+        MERGE_METHOD: ${{ inputs.merge_method }}
+      run: '"$GITHUB_ACTION_PATH/refresh.sh"'
