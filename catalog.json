@@ -26,6 +26,59 @@
       },
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/check-release-gate"
+    },
+    "refresh-api-spec": {
+      "action": "actions/refresh-api-spec",
+      "inputs": {
+        "check_command": {
+          "default": null,
+          "description": "The repo's checks, run after the copy is written. Pass = merge; fail = PR left open with the output commented, and the run fails.",
+          "required": true
+        },
+        "copy_path": {
+          "default": null,
+          "description": "The committed copy, relative to the repo root. Format from the extension: .json, .yaml or .yml. May not exist yet.",
+          "required": true
+        },
+        "merge_method": {
+          "default": "squash",
+          "description": "squash, merge or rebase.",
+          "required": false
+        },
+        "name": {
+          "default": null,
+          "description": "Short id for this provider, e.g. `api`. Branch spec-refresh/<name>, PR title \"chore: refresh <name> API spec\". Letters, digits, '.', '_', '-'.",
+          "required": true
+        },
+        "request_headers": {
+          "default": "",
+          "description": "Optional newline-separated `Name: value` headers sent with the fetch. Take sensitive values from secrets; each value is also masked.",
+          "required": false
+        },
+        "token": {
+          "default": "${{ github.token }}",
+          "description": "Token for gh (contents: write, pull-requests: write). Defaults to the job's GITHUB_TOKEN.",
+          "required": false
+        },
+        "update_command": {
+          "default": "",
+          "description": "Optional. Runs after the copy is written and before the checks (regenerate types, rewrite a pin file). Its changes are committed with the copy.",
+          "required": false
+        },
+        "url": {
+          "default": null,
+          "description": "Where the provider publishes its OpenAPI document (JSON or YAML).",
+          "required": true
+        }
+      },
+      "name": "Refresh API spec",
+      "outputs": {
+        "changed": "\"true\" if the published document differs in meaning from the copy, else \"false\".",
+        "checks": "passed, failed, or skipped (nothing changed).",
+        "pr_url": "The refresh PR, when one was opened or updated."
+      },
+      "runs": "composite",
+      "uses": "Just-Git-Dev/reusable-workflows/actions/refresh-api-spec"
     }
   },
   "workflows": {

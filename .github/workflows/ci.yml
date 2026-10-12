@@ -250,6 +250,12 @@ jobs:
       - name: Run check-release-gate tests
         run: python3 tests/run_check_release_gate_tests.py
 
+      # The composite action's script, run as shipped with real curl against a
+      # local HTTP server, a temp repo pushing to a bare remote, and a `gh` stub —
+      # unchanged / changed+pass (merged) / changed+fail (not merged) / refusals.
+      - name: Run refresh-api-spec tests
+        run: python3 tests/run_refresh_api_spec_tests.py
+
   alertgen:
     name: alertgen compiler + service-alerts (promtool oracle)
     runs-on: ubuntu-latest
