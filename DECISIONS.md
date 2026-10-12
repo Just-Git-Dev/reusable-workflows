@@ -112,6 +112,8 @@ change writes the copy, runs the caller's `update_command` and `check_command`, 
 fixed branch `spec-refresh/<name>`, opens (or reuses) one PR, and merges it only if the checks
 passed. A failed check leaves the PR open with the last 60 lines of output as a comment and fails
 the run. Adding an action is a minor change: next release v3.2.0, cut only on an explicit ask.
+**Released as `v3.2.0`** (2026-10-12, on the owner's ask; PR #114 squash-merged as `160453b`,
+stamp included in that PR). Live positive control pending the first adopting repo.
 Plan: `plans/2026-10-12-refresh-api-spec.md`.
 
 **Why.** The owner's QA ruling (K4, 2026-10-12) has each consumer keep a copy of each provider's
@@ -247,7 +249,8 @@ a `gh` stub. It was confirmed red against an exit-0 stub (59 failing assertions)
 - A nonexistent tag → `tag missing`, from a real 404.
 
 **Release.** Adding an action is a minor bump, so the next tag is `v3.1.0`. It is cut only on
-the owner's explicit ask.
+the owner's explicit ask. **Released as `v3.1.0`** (2026-10-09, on the owner's ask; stamp #112
+`08b6f72`). First consumer use: the gate passed on three root Release runs on 2026-10-09.
 
 ## 2026-10-07 — `TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default
 
