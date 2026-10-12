@@ -12,8 +12,11 @@ scheduled workflow. On each run it:
    owner.
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v3.2.0
+- uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v3.1.0
 ```
+
+> **Not released yet.** This action first ships in the next minor release (v3.2.0). Until that
+> tag exists, the pins on this page are stamped to the current release, which does not contain it.
 
 ## Why this exists
 
@@ -102,7 +105,7 @@ jobs:
         with: { node-version-file: .nvmrc }
       - run: npm ci
         shell: bash
-      - uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v3.2.0
+      - uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v3.1.0
         with:
           name: api
           url: ${{ vars.API_SPEC_URL }}
