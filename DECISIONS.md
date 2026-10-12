@@ -247,7 +247,8 @@ a `gh` stub. It was confirmed red against an exit-0 stub (59 failing assertions)
 - A nonexistent tag → `tag missing`, from a real 404.
 
 **Release.** Adding an action is a minor bump, so the next tag is `v3.1.0`. It is cut only on
-the owner's explicit ask.
+the owner's explicit ask. **Released as `v3.1.0`** (2026-10-09, on the owner's ask; stamp #112
+`08b6f72`). First consumer use: the gate passed on three root Release runs on 2026-10-09.
 
 ## 2026-10-07 — `TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default
 
