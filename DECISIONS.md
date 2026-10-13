@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-13` — [`release-flow`: `app-id` must resolve at the caller — an environment-only variable is empty](#2026-10-13--release-flow-app-id-must-resolve-at-the-caller--an-environment-only-variable-is-empty)
 - `2026-10-13` — [`v3.3.0` released (`release-flow`); the `checks` output schema was under-documented](#2026-10-13--v330-released-release-flow-the-checks-output-schema-was-under-documented)
 - `2026-10-13` — [`release-flow`: the proven multi-repo release flow, shared — CLI action, four workflows, publish in per-service slots](#2026-10-13--release-flow-the-proven-multi-repo-release-flow-shared--cli-action-four-workflows-publish-in-per-service-slots)
 - `2026-10-12` — [`refresh-api-spec` is a composite action: fetch, compare by meaning, one PR, merge only on the caller's checks](#2026-10-12--refresh-api-spec-is-a-composite-action-fetch-compare-by-meaning-one-pr-merge-only-on-the-callers-checks)
@@ -104,6 +105,27 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-13 — `release-flow`: `app-id` must resolve at the caller — an environment-only variable is empty
+
+**Context.** A consumer's first `release-flow` rehearsal (on `v3.3.0`) stopped at the first App-token
+mint: "The 'client-id' (or deprecated 'app-id') input must be set to a non-empty string". It made zero
+writes. The consumer kept `RELEASE_APP_ID` only as a variable on its `release` environment. The doc
+said GitHub "resolves that environment's variables in the called workflow". That is true for
+expressions *inside* the environment-scoped jobs, but `app-id` is an input, and its `with:`
+expression is evaluated in the caller job. A job that `uses:` a reusable workflow has no environment,
+so the value was empty. The consumer's old local release workflow read the variable inside an
+`environment: release` job, which is why the problem never showed before.
+
+**Decision.** Correct the doc instead of changing the workflows. `app-id` must resolve at the caller,
+as a repo/org variable or a literal; the id is not secret. No release: the workflow bodies and
+`RELEASE_FLOW_TREE` are unchanged, so the consumer's pin and everything the rehearsal already proved
+(the tree-hash pin, the manifest sha256 check, the CLI self-test) stay valid.
+
+**Rejected for now.** Falling back to `vars.RELEASE_APP_ID` inside the mint jobs. It would let the id
+sit beside the key on the environment, but it costs a minor release, a new tree hash and a re-pin
+for every caller, all to save one non-secret repo variable. Kept in TODO.md, to do only if a
+second consumer hits the same thing.
 
 ## 2026-10-13 — `v3.3.0` released (`release-flow`); the `checks` output schema was under-documented
 

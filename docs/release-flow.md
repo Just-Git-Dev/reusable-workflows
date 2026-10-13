@@ -246,9 +246,9 @@ owner pushes each **annotated** tag before opening the release PR; the flow neve
 ## Inputs, outputs, secrets
 
 **Secrets: call `release-plan`, `release-drafts` and `release-publish` with
-`secrets: inherit`.** The jobs that mint a token declare `environment: <environment>`. GitHub
-then resolves that environment's *variables* in the called workflow, but its *secrets* come
-through empty unless the caller passes `secrets: inherit`. This was measured in a consumer's
+`secrets: inherit`.** The jobs that mint a token declare `environment: <environment>`. Inside
+those jobs GitHub resolves that environment's *variables*, but its *secrets* come through empty
+unless the caller passes `secrets: inherit`. This was measured in a consumer's
 release run: the mint failed with "The 'private-key' input must be set to a non-empty string",
 and `inherit` fixed it, proven by a later run. Keep the root repo free of repo-level and org
 secrets the release does not need, because `inherit` hands over all of them. The environment
@@ -257,6 +257,16 @@ every repo in `allowed` and `read-only-repos`, with contents read/write, actions
 checks read. Restrict the environment to `base_branch`. Inside the shared workflows the key is
 named only as the `private-key` of a mint step. `release-pr-check` takes no secret: do not
 pass `inherit` to it.
+
+**`app-id` must resolve in the CALLER, so it cannot live only on the environment.** The shared
+workflows never read `vars.RELEASE_APP_ID` themselves; the mint steps use `inputs.app-id`, and
+an input's `with:` expression is evaluated in the caller's job. A job that `uses:` a reusable
+workflow has no environment, so `${{ vars.RELEASE_APP_ID }}` there sees only repo and org
+variables. If the variable exists only on the `release` environment, the input arrives empty
+and the first mint fails with "The 'client-id' (or deprecated 'app-id') input must be set to a
+non-empty string", before any write. This was measured in a consumer's rehearsal. Define
+`RELEASE_APP_ID` as a **repo (or org) variable**, or pass the id as a literal. It is not
+secret.
 
 **The caller's `GITHUB_TOKEN`** is used only for reads of the root repo and the PR comment. A
 called workflow's token can never have more than the calling job grants, so grant what each
@@ -278,7 +288,7 @@ Job name `release-pr`; called from a caller job also named `release-pr`, the che
 |---|---|---|---|
 | `allowed` | yes | — | comma list of the service repos the App may write. **Hard-code it** in `release.yml`. |
 | `read-only-repos` | no | `''` | comma list of extra repos the App may only read (the `consumers_only` repos) |
-| `app-id` | yes | — | the release App's id (not secret; e.g. `${{ vars.RELEASE_APP_ID }}`) |
+| `app-id` | yes | — | the release App's id (not secret; e.g. `${{ vars.RELEASE_APP_ID }}` as a **repo/org** variable — an environment-only variable is empty here, see above) |
 | `environment` | no | `release` | the environment holding `RELEASE_APP_KEY` |
 | `config` | no | `releases/services.json` | |
 | `release-workflow` | no | `release.yml` | file name of the caller's release workflow (for the concurrent-run guard) |

@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-43 open across 13 live sections. 8 closed items archived.
+44 open across 14 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 1 open
 - **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
 - **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
 - **ACTIVE** — [Third-party images vanish from public registries — MinIO (opened 2026-09-24)](#third-party-images-vanish-from-public-registries--minio-opened-2026-09-24) — 3 open
@@ -20,6 +21,20 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Release flow — app-id from the environment (opened 2026-10-13)
+
+A consumer's first `release-flow` rehearsal failed at the mint because `RELEASE_APP_ID` existed
+only as a `release`-environment variable. `inputs.app-id` is evaluated in the caller job, which
+has no environment, so the input arrived empty. The fix shipped as a doc correction
+(`docs/release-flow.md` §Inputs: define a repo/org variable). The consumer chose that route, so
+no release was needed.
+
+- [ ] `.github/workflows/release-{plan,drafts,publish}.yml` — optional: make `app-id` not
+  required and fall back to `vars.RELEASE_APP_ID` inside the environment-scoped mint jobs, so the
+  id can sit beside `RELEASE_APP_KEY` on the environment. This is an additive input-contract
+  change, so it means a minor release and a new `RELEASE_FLOW_TREE`, and every caller re-pins.
+  Only worth doing when a second consumer hits the same thing.
 
 ## Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)
 
