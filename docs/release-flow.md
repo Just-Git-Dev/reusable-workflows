@@ -296,7 +296,7 @@ Job name `release-pr`; called from a caller job also named `release-pr`, the che
 | `order` | listed repos in publish order, comma-separated |
 | `rehearsal` | `'true'` or `'false'` |
 | `resolved` | JSON `{repo: {ref, version, listed, image, live_ref}}` for every service and `consumers_only` repo. `ref` is a 40-hex sha or `vX.Y.Z`. |
-| `checks` | JSON list for a matrix `include`: `[{consumer, consumer_ref, provider, provider_ref, states}]`; `[]` when no contract involves a listed service |
+| `checks` | JSON list for a matrix `include`: `[{consumer, consumer_ref, provider, provider_ref, states, provider_live_ref, consumer_side}]`. There is one entry per distinct consumer@ref → provider@ref pair across every intermediate state of the publish order. `states` lists the labels of the states that need it (`new a,b; live c`). `provider_live_ref` is the provider's LIVE version even when `provider_ref` is its candidate, so a check can compare a consumer against what production serves. `consumer_side` is `candidate` when the consumer is in the manifest at that state, else `live`. `[]` when no contract involves a listed service. |
 
 Caller permissions: `contents: read`, `pull-requests: read`, `checks: read`, `actions: read`.
 
