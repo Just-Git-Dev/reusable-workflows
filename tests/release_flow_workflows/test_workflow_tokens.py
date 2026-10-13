@@ -86,7 +86,7 @@ class WriteScopeTests(unittest.TestCase):
         job = wf.jobs(wf.load("release-drafts.yml"))["drafts"]
         for sid in ("app", "d"):
             _, st = wf.step_by_id(job, sid)
-            self.assertEqual(st["if"], "${{ needs.verdict.outputs.rehearsal != 'true' }}", sid)
+            self.assertEqual(st["if"], "${{ needs.verdict.outputs.rehearsal == 'false' }}", sid)
         for sid in ("app-ro", "dr"):
             _, st = wf.step_by_id(job, sid)
             self.assertEqual(st["if"], "${{ needs.verdict.outputs.rehearsal == 'true' }}", sid)
@@ -122,7 +122,9 @@ class WriteScopeTests(unittest.TestCase):
             examined += 1
             for st in job["steps"]:
                 uses = str(st.get("uses", ""))
-                self.assertTrue(not uses or uses.startswith((wf.CHECKOUT, wf.MINT)), f"{n}:{jn}: {uses}")
+                # download-artifact: the staged manifest, sha256-checked before any use.
+                self.assertTrue(not uses or uses.startswith((wf.CHECKOUT, wf.MINT, "actions/download-artifact@")),
+                                f"{n}:{jn}: {uses}")
                 self.assertNotRegex(st.get("run", ""), r"pip install|npm |go (get|install|run)|curl |wget ",
                                     f"{n}:{jn}:{st.get('name')}")
         self.assertGreaterEqual(examined, 1 + wf.SLOTS)

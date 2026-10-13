@@ -339,11 +339,22 @@ class ConfigCheckTests(unittest.TestCase):
 
     def test_consumers_only_must_be_read_only(self):
         with tmpdir() as d:
-            for extra in ((), ("--read-only", ""), ("--read-only", "other")):
+            for extra in (("--read-only", ""), ("--read-only", "other")):
                 rc, out, err = self.cc(d, "--allowed", AL, *extra)
                 self.assertEqual(rc, 2, extra)
                 self.assertIn("cli", err)
                 self.assertEqual(out, "")
+
+    def test_absent_read_only_skips_the_rule_given_enforces_it(self):
+        # Only the job that mints a token covering the consumers_only repos (plan) passes
+        # --read-only; every other config-check caller omits it and must not be refused.
+        with tmpdir() as d:
+            rc, out, err = self.cc(d, "--allowed", AL)
+            self.assertEqual(rc, 0, err)
+            self.assertIn('"owner"', out)
+            rc, _, err = self.cc(d, "--allowed", AL, "--read-only", "")
+            self.assertEqual(rc, 2)
+            self.assertIn("cli", err)
 
     def test_no_consumers_only_needs_no_read_only(self):
         with tmpdir() as d:
@@ -507,9 +518,34 @@ class VerdictTests(unittest.TestCase):
         rc, j, out, err = self.v(needs())
         self.assertEqual(rc, 0, err)
         self.assertEqual(j, {"ok": True, "rehearsal": False, "manifest": MANIFEST, "pr": "7",
-                             "order": ["issuer", "api"], "failed_stage": "", "failures": []})
+                             "manifest_sha256": "", "order": ["issuer", "api"],
+                             "failed_stage": "", "failures": []})
         self.assertEqual(out.strip(), json.dumps(j, separators=(",", ":")))
         self.assertEqual(len(out.strip().splitlines()), 1)
+
+    def with_sha(self, sha, **kw):
+        nd = needs(**kw)
+        nd["plan"]["outputs"]["manifest-sha256"] = sha
+        return nd
+
+    def test_manifest_file_is_read_instead_of_the_path_and_its_sha_is_asserted(self):
+        # The artifact the plan stage staged is the only manifest the later stages may read
+        # (a rehearsal's manifest is not on the base branch at all).
+        import hashlib
+        staged = mfile(self.d, ("api", "v0.38.0", SHA_B), ("issuer", "v0.132.0", SHA_A),
+                       name="staged.yaml")
+        sha = hashlib.sha256(Path(staged).read_bytes()).hexdigest()
+        os.remove(self.mpath)
+        rc, j, _, err = self.v(self.with_sha(sha), "--manifest-file", staged)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(j["manifest_sha256"], sha)
+        self.assertEqual(j["order"], ["issuer", "api"])
+        for bad in ("0" * 64, "", "xyz"):
+            rc, j, _, err = self.v(self.with_sha(bad), "--manifest-file", staged)
+            self.assertEqual(rc, 2, bad)
+            self.assertIn("sha256", err)
+        rc, _, _, err = self.v(needs(), "--manifest-file", staged)   # plan gave no sha at all
+        self.assertEqual(rc, 2)
 
     def test_rehearsal_flag(self):
         rc, j, _, _ = self.v(needs(rehearsal="true", pr=""))

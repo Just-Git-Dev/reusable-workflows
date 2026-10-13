@@ -6,7 +6,8 @@ services.json also needs `--allowed issuer,api,ui,website`, a list HARD-CODED in
 workflow, so editing services.json cannot widen what the write token touches; `--config`
 defaults to releases/services.json in the CURRENT DIRECTORY):
 
-  config-check --allowed A [--read-only R]   loads the config; refuses a repo outside A, a
+  config-check --allowed A [--read-only R]   loads the config; refuses a repo outside A, (only
+                                           when --read-only is given, even as "") a
                                            consumers_only repo outside R, an owner other than
                                            GITHUB_REPOSITORY_OWNER; prints one compact JSON line
                                            {owner, release_dir, base_branch}.   no token
@@ -22,9 +23,13 @@ defaults to releases/services.json in the CURRENT DIRECTORY):
                                            .github/workflows/release-pr.yml) concluded
                                            success. Needs GITHUB_REPOSITORY. A direct push fails.
   verdict --stage drafts|publish --needs-file F --contracts-job J [--required a,b] --allowed A
-                                           F = GitHub's toJSON(needs). Prints one compact JSON
-                                           line {ok, rehearsal, manifest, pr, order,
-                                           failed_stage, failures}; exit 0 ok, 1 not ok, 2
+                                           [--manifest-file M]
+                                           F = GitHub's toJSON(needs). M = the manifest the plan
+                                           stage staged (read instead of the repo path; its
+                                           sha256 must equal plan's manifest-sha256 output).
+                                           Prints one compact JSON
+                                           line {ok, rehearsal, manifest, manifest_sha256, pr,
+                                           order, failed_stage, failures}; exit 0 ok, 1 not ok, 2
                                            unreadable input.   no token
   concurrent --workflow W --run-id ID      fail if another run of W in the root repo is
                                            queued/in_progress/waiting/pending.
@@ -96,6 +101,7 @@ network error.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -158,13 +164,14 @@ def build_parser():
     s.add_argument("--workflow-path", default=guard.WORKFLOW_PATH)
     s = sub.add_parser("config-check")
     s.add_argument("--allowed", required=True)
-    s.add_argument("--read-only", default="")
+    s.add_argument("--read-only", default=None)   # absent = rule off; given (even "") = enforced
     s.add_argument("--config", default=str(DEFAULT_CONFIG))
     s = sub.add_parser("verdict")
     s.add_argument("--stage", required=True, choices=["drafts", "publish"])
     s.add_argument("--needs-file", required=True)
     s.add_argument("--contracts-job", required=True)
     s.add_argument("--required", default="")
+    s.add_argument("--manifest-file", default="")
     s.add_argument("--config", default=str(DEFAULT_CONFIG))
     s.add_argument("--allowed", required=True)
     s = sub.add_parser("concurrent")
@@ -238,7 +245,9 @@ def _csv(text):
 def _config_check(args, env):
     cfg = config_mod.load(args.config)
     cfg.restrict(config_mod.parse_allowed(args.allowed))
-    unread = [c for c in cfg.consumers_only if c not in _csv(args.read_only)]
+    # Only the job that mints a token covering these repos passes --read-only; the rest omit it.
+    unread = [] if args.read_only is None else [
+        c for c in cfg.consumers_only if c not in _csv(args.read_only)]
     if unread:
         raise config_mod.ConfigError(
             f"consumers_only repo(s) {unread} must also be in --read-only (the App needs read "
@@ -276,14 +285,21 @@ def _verdict(args):
         res = verdict_mod.unparseable(why)
     res["order"] = []
     if res["ok"]:
+        path = args.manifest_file or res["manifest"]
         try:
-            entries = manifest_mod.load(res["manifest"])
+            if args.manifest_file:
+                got = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                if not re.fullmatch(r"[0-9a-f]{64}", res["manifest_sha256"]) \
+                        or got != res["manifest_sha256"]:
+                    raise Usage(f"the staged manifest {path} has sha256 {got}, but plan "
+                                f"reported {res['manifest_sha256']!r}")
+            entries = manifest_mod.load(path)
         except OSError as ex:
-            raise Usage(f"cannot read the manifest {res['manifest']}: {ex}") from ex
+            raise Usage(f"cannot read the manifest {path}: {ex}") from ex
         manifest_mod.check_allowed(entries, config_mod.parse_allowed(args.allowed))
         res["order"] = publish_mod.order(cfg, entries)
-    out = {k: res[k] for k in ("ok", "rehearsal", "manifest", "pr", "order", "failed_stage",
-                               "failures")}
+    out = {k: res[k] for k in ("ok", "rehearsal", "manifest", "manifest_sha256", "pr", "order",
+                               "failed_stage", "failures")}
     print(json.dumps(out, separators=(",", ":")))
     return 0 if res["ok"] else 1
 

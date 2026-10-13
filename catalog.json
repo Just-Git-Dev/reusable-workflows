@@ -2748,6 +2748,12 @@
           "required": false,
           "type": "string"
         },
+        "manifest-ref": {
+          "default": "",
+          "description": "Rehearsal only: the branch to read the manifest from (fetched as data). Empty = the checked-out branch. Must be empty for a real release.",
+          "required": false,
+          "type": "string"
+        },
         "pr-check-name": {
           "default": "release-pr / release-pr",
           "description": "The check run the merged release PR must carry",
@@ -2806,6 +2812,7 @@
       "outputs": {
         "checks": "JSON list for a matrix include; [] when no contract involves a listed service",
         "manifest": "The manifest path",
+        "manifest-sha256": "sha256 of the manifest file; every later stage checks the staged artifact against it",
         "order": "Listed repos in publish order, comma-separated",
         "pr": "The release PR number ('' in a rehearsal)",
         "rehearsal": "'true' or 'false'",

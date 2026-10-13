@@ -136,11 +136,12 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(required, {"allowed", "app-id"})
         self.assertEqual(set(ins), {"allowed", "read-only-repos", "app-id", "environment", "config",
                                     "release-workflow", "pr-check-name", "pr-check-workflow",
-                                    "rehearsal", "manifest"})
+                                    "rehearsal", "manifest", "manifest-ref"})
         self.assertEqual(ins["environment"]["default"], "release")
         self.assertEqual(ins["pr-check-name"]["default"], "release-pr / release-pr")
         self.assertEqual(ins["rehearsal"]["type"], "boolean")
-        self.assertEqual(set(call["outputs"]), {"manifest", "pr", "order", "rehearsal", "resolved", "checks"})
+        self.assertEqual(set(call["outputs"]), {"manifest", "manifest-sha256", "pr", "order", "rehearsal", "resolved",
+                                           "checks"})
 
     def test_jobs_and_needs(self):
         self.assertEqual(list(self.jobs), ["plan", "resolve", "service-gates"])
@@ -169,14 +170,16 @@ class PlanTests(unittest.TestCase):
         self.assertIn("false) [ -z \"$MANIFEST_IN\" ]", run)   # a real release must not have one
         _, m = wf.step_by_id(self.jobs["plan"], "m")
         body = m["run"]
-        rehearsal_branch, real_branch = body.split("else", 1)
-        self.assertIn('[ -f "$path" ]', rehearsal_branch)
+        rehearsal_branch, real_branch = body.split("\nelse\n", 1)
+        real_branch = real_branch.split("\nfi\n", 1)[0]
+        self.assertIn('path="$MANIFEST_IN"', rehearsal_branch)
+        self.assertIn('[ -f "$path" ]', body)
         self.assertNotIn("check-merge", rehearsal_branch)
         self.assertIn("check-merge", real_branch)
         self.assertIn("find-manifest", real_branch)
         self.assertIn('--base "$BEFORE" --head "$AFTER"', real_branch)
         # The concurrent guard runs for a rehearsal too.
-        self.assertIn("release-flow concurrent", body.split("fi", 1)[1])
+        self.assertIn("release-flow concurrent", body.split("sha256sum", 1)[1])
         self.assertIn('--workflow-path "$PR_CHECK_WORKFLOW"', body)
 
     def test_self_test_fails_on_a_skip_and_on_zero_tests(self):
@@ -197,7 +200,7 @@ class PlanTests(unittest.TestCase):
                  or s.get("id") in ("in", "m")]
         self.assertEqual(order, sorted(order), names)
         ids = [s.get("id") for s in self.jobs["plan"]["steps"] if s.get("id")]
-        self.assertEqual(ids, ["in", "cfg", "m", "o"])
+        self.assertEqual(ids, ["in", "cfg", "m", "o", "up"])
 
     def test_resolve_runs_the_read_checks_with_the_minted_token(self):
         steps = self.jobs["resolve"]["steps"]
@@ -259,11 +262,11 @@ class DraftsTests(unittest.TestCase):
     def test_write_mint_and_step_exclude_rehearsal(self):
         drafts = self.jobs["drafts"]
         _, app = wf.step_by_id(drafts, "app")
-        self.assertIn("!= 'true'", app["if"])
+        self.assertIn("== 'false'", app["if"])
         self.assertEqual(wf.perms(app), {"permission-contents": "write", "permission-actions": "read",
                                          "permission-checks": "read"})
         _, d = wf.step_by_id(drafts, "d")
-        self.assertIn("!= 'true'", d["if"])
+        self.assertIn("== 'false'", d["if"])
         self.assertNotIn("--check-only", d["run"])
         self.assertEqual(d["env"]["RELEASE_FLOW_WRITE_TOKEN"], "${{ steps.app.outputs.token }}")
         # Whatever was created must be reported even when the command fails partway.
@@ -294,7 +297,7 @@ class PublishTests(unittest.TestCase):
         self.assertIn('--required "$REQUIRED_JOBS"', st["run"])
         self.assertIn("rc=$?", st["run"])
         self.assertNotIn("exit", st["run"], "a not-ok verdict must reach the report job, not fail here")
-        self.assertEqual(set(v["outputs"]), {"ok", "rehearsal", "pr", "manifest", "failed_stage", "failures",
+        self.assertEqual(set(v["outputs"]), {"ok", "rehearsal", "pr", "manifest", "manifest_sha256", "failed_stage", "failures",
                                              *[f"repo{i}" for i in range(1, wf.SLOTS + 1)]})
 
     def test_slot_chaining(self):
@@ -350,8 +353,9 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(run.count("gh pr comment"), 1)
         for i in range(1, wf.SLOTS + 1):
             self.assertEqual(st["env"][f"P_{i}"], f"${{{{ needs.publish-{i}.result }}}}:${{{{ needs.publish-{i}.outputs.result }}}}")
-        # A cancelled or failed slot is a failed publish: only success/skipped pass.
-        self.assertIn("success:*|skipped:*) ;;", run)
+        # A cancelled or failed slot is a failed publish: only success passes; skipped only for an empty slot or a rehearsal.
+        self.assertIn("success:*) ;;", run)
+        self.assertIn('skipped:*) if [ -n "$listed" ]', run)
 
 
 if __name__ == "__main__":

@@ -70,7 +70,8 @@ merge ──► plan ──► [caller: contracts, images…] ──► drafts �
      `pr-check-name` check run came from GitHub Actions **and** from the workflow file
      `pr-check-workflow`. A direct push releases nothing. No other run of the release workflow
      may be queued or running. A re-run attempt is refused.
-   - *self-test*: the CLI's own unit tests run first; a red or skipped test stops the release.
+   - *self-test*: the CLI's own unit tests run first (`python3 -P`, so nothing in the caller's
+     checkout can be imported); a red or skipped test stops the release.
    - *plan*: the push changed exactly one manifest and nothing else; the publish order.
    - *validate*: for each listed service, the tag exists, is an annotated tag that peels to the
      listed sha, the sha is on `base_branch`, the version is above every existing Release and
@@ -119,7 +120,10 @@ deploy attempts of 15 minutes each, plus health), so one job walking four servic
 outlive its token halfway through. A matrix cannot promise order or stop at the first failure.
 So `release-publish` has six fixed slots (`publish-1` … `publish-6`). Slot *n* publishes the
 *n*-th listed repo, or is skipped. It runs only if every earlier slot succeeded or was skipped,
-and it mints a fresh token for **that one repo**, so the write scope stays per service.
+and it mints a fresh token for **that one repo**, so the write scope stays per service. The
+report counts a slot whose repo is listed, in an ok non-rehearsal run, as FAILED unless it
+succeeded: a run cancelled after `publish-1` leaves the later slots `skipped`, and that is not a
+publish. Only an empty slot, or a rehearsal, may be skipped.
 
 ### How the workflows load the CLI, and why that is pinned by content
 
@@ -135,8 +139,8 @@ match `git rev-parse HEAD:actions/release-flow`; the release sweep updates it.
 
 ## Rehearsal
 
-`rehearsal: true` (pass the manifest path with `manifest:`) runs the whole flow with **zero
-writes**: guard (minus the merged-PR check, since there is no merge), self-test, validate,
+`rehearsal: true` (pass the manifest path with `manifest:` and the branch that holds it with
+`manifest-ref:`) runs the whole flow with **zero writes**: guard (minus the merged-PR check, since there is no merge), self-test, validate,
 ci-green, resolve, service gates, the caller's contracts and smoke. The drafts stage then only
 runs its read-only pre-checks and mints no write token, and the publish stage publishes
 nothing and writes the report to the run summary only. Use it to prove a new adoption, or a new
@@ -145,6 +149,22 @@ created, so the same tags can then be released for real.
 
 Wire it as a `workflow_dispatch` of the same `release.yml`, so the rehearsal runs exactly the
 file a real release runs.
+
+**The route.** The `release` environment is restricted to the base branch, so a rehearsal must
+run ON the base branch; but merging the manifest there would start a real release. So: open the
+release PR and do not merge it, then dispatch the release workflow on the base branch with
+`manifest` = the manifest's path and `manifest-ref` = the PR's branch. The plan job fetches that
+branch as **data only** (never checked out, never executed) and reads the manifest with
+`git show`. Empty `manifest-ref` reads the manifest from the checked-out base branch;
+`manifest-ref` is refused outside a rehearsal.
+
+**One manifest copy per run.** In every run, real or rehearsal, the plan job uploads the manifest
+file as the artifact `release-manifest` and outputs its `sha256` (`manifest-sha256`). Every later
+job that reads the manifest (resolve, service-gates, drafts, each publish slot) downloads that
+artifact to `release-manifest/manifest.yaml` and refuses to continue unless its sha256 equals
+plan's (the drafts and publish stages get plan's value from `needs` through `verdict`). A real
+release behaves as before (same content); a rehearsal never needs the manifest on the base
+branch.
 
 ## `releases/services.json`
 
@@ -266,10 +286,12 @@ Job name `release-pr`; called from a caller job also named `release-pr`, the che
 | `pr-check-workflow` | no | `.github/workflows/release-pr.yml` | the workflow file that check must come from |
 | `rehearsal` | no | `false` | see Rehearsal |
 | `manifest` | rehearsal only | `''` | the manifest path to rehearse; must be empty for a real release |
+| `manifest-ref` | no | `''` | rehearsal only: the branch to read the manifest from (fetched as data; letters, digits, `._/-`, no `..`). Empty = the checked-out base branch. Must be empty for a real release. |
 
 | output | meaning |
 |---|---|
 | `manifest` | the manifest path |
+| `manifest-sha256` | sha256 of the manifest file; later stages check the staged `release-manifest` artifact against it |
 | `pr` | the release PR number (`''` in a rehearsal) |
 | `order` | listed repos in publish order, comma-separated |
 | `rehearsal` | `'true'` or `'false'` |
@@ -332,6 +354,7 @@ on:
   workflow_dispatch:
     inputs:
       manifest: {description: 'Rehearse this manifest (no writes)', required: true}
+      manifest-ref: {description: 'Branch holding that manifest (the unmerged release PR branch)', required: true}
 permissions: {}
 jobs:
   plan:
@@ -342,6 +365,7 @@ jobs:
       app-id: ${{ vars.RELEASE_APP_ID }}
       rehearsal: ${{ github.event_name == 'workflow_dispatch' }}
       manifest: ${{ inputs.manifest || '' }}
+      manifest-ref: ${{ inputs.manifest-ref || '' }}
     secrets: inherit               # the environment key reaches the mint steps only this way
 
   contracts:                     # the caller's own contract checks
@@ -400,8 +424,9 @@ If the project carries its own copy of these scripts (the origin of this package
 3. The `release-pr` check name changes to `release-pr / release-pr` (a called workflow's checks
    are named `<caller job> / <called job>`); `pr-check-name` exists if yours differs.
 4. Env names changed: `RELEASE_FLOW_READ_TOKEN` / `RELEASE_FLOW_WRITE_TOKEN`.
-5. **Rehearse** (`workflow_dispatch` with an existing manifest whose tags are not yet released):
-   it must reach smoke green with zero writes. Then delete the local copy, and let the next
+5. **Rehearse**: open the release PR for a manifest whose tags are not yet released and do NOT
+   merge it, then run `workflow_dispatch` on the base branch with `manifest` = the manifest path
+   and `manifest-ref` = the PR branch. It must reach smoke green with zero writes. Then delete the local copy, and let the next
    real release go through the shared flow.
 
 ## Where not to adopt it
@@ -418,7 +443,7 @@ directory**. Every manifest-bearing command needs `--allowed`.
 
 | subcommand | does | token |
 |---|---|---|
-| `config-check --allowed A [--read-only R]` | loads config; refuses a repo outside `allowed`, a `consumers_only` repo outside `read-only`, an `owner` other than `GITHUB_REPOSITORY_OWNER`; prints `{owner, release_dir, base_branch}` | none |
+| `config-check --allowed A [--read-only R]` | loads config; refuses a repo outside `allowed`, a `consumers_only` repo outside `read-only` (checked only when `--read-only` is given, even as `""`; only the plan job, whose token covers those repos, passes it), an `owner` other than `GITHUB_REPOSITORY_OWNER`; prints `{owner, release_dir, base_branch}` | none |
 | `find-manifest --base B --head H [--pr]` | the one added manifest; anything else changed fails | none |
 | `check-merge --sha S --check-name N [--workflow-path P]` | the merge guard above; prints the PR number | read |
 | `concurrent --workflow W --run-id ID` | no other run of W active | read |

@@ -34,7 +34,8 @@ def _text(v):
 
 def unparseable(why):
     """The verdict for a needs file that cannot be read as an object: not ok, blame plan."""
-    return {"ok": False, "rehearsal": False, "manifest": "", "pr": "", "order": [],
+    return {"ok": False, "rehearsal": False, "manifest": "", "manifest_sha256": "", "pr": "",
+            "order": [],
             "failed_stage": PLAN, "failures": [f"needs unreadable: {why}"]}
 
 
@@ -79,5 +80,6 @@ def judge(needs, contracts_job, required, release_dir):
     ordered = [j for j in required if j in bad]
     ordered += sorted(bad - set(ordered))
     return {"ok": not bad, "rehearsal": outputs.get("rehearsal") == "true",
-            "manifest": manifest, "pr": _text(outputs.get("pr")),
+            "manifest": manifest, "manifest_sha256": _text(outputs.get("manifest-sha256")),
+            "pr": _text(outputs.get("pr")),
             "failed_stage": ordered[0] if ordered else "", "failures": failures}
