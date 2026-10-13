@@ -349,7 +349,7 @@ name: release-pr
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-    paths: ['releases/**']
+    paths: ['releases/*.yaml']   # manifests only, like release.yml: a config-only PR is not a release PR
 permissions: {}
 jobs:
   release-pr:

@@ -203,6 +203,14 @@ class DocCallerExampleTests(unittest.TestCase):
                     self.assertRegex(body, r"\n    secrets:\n      RELEASE_APP_KEY: \$\{\{ secrets\.RELEASE_APP_KEY \}\}", m.group(1))
         self.assertEqual(examined, 4, "expected one caller example each for pr-check, plan, drafts, publish")
 
+    def test_doc_pr_check_triggers_on_manifests_only_like_the_release(self):
+        # `releases/**` also fires on a config-only PR (services.json, README), which the
+        # exactly-one-new-manifest check then fails. A release PR always adds a manifest, so
+        # narrowing to the release workflow's own trigger loses nothing.
+        doc = (wf.ROOT / "docs" / "release-flow.md").read_text()
+        paths = re.findall(r"^    paths: (\[[^\]]*\])", doc, re.M)
+        self.assertEqual(paths, ["['releases/*.yaml']", "['releases/*.yaml']"])
+
 
 if __name__ == "__main__":
     unittest.main()

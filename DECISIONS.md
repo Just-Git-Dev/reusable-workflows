@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-13` — [`release-flow`: the release-PR check example triggers on manifests only (`releases/*.yaml`)](#2026-10-13--release-flow-the-release-pr-check-example-triggers-on-manifests-only-releasesyaml)
 - `2026-10-13` — [`release-flow`: the App key is a declared secret passed BY NAME — `inherit` passes nothing across orgs](#2026-10-13--release-flow-the-app-key-is-a-declared-secret-passed-by-name--inherit-passes-nothing-across-orgs)
 - `2026-10-13` — [`release-flow`: `app-id` must resolve at the caller — an environment-only variable is empty](#2026-10-13--release-flow-app-id-must-resolve-at-the-caller--an-environment-only-variable-is-empty)
 - `2026-10-13` — [`v3.3.0` released (`release-flow`); the `checks` output schema was under-documented](#2026-10-13--v330-released-release-flow-the-checks-output-schema-was-under-documented)
@@ -106,6 +107,19 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-13 — `release-flow`: the release-PR check example triggers on manifests only (`releases/*.yaml`)
+
+**Context.** The doc's `release-pr.yml` caller example triggered on `paths: ['releases/**']`. A consumer's
+config-only PR (editing `releases/services.json` and `releases/README.md`) therefore ran
+`release-pr-check`, which requires exactly one new manifest and nothing else, and went red although
+nothing was wrong with it.
+
+**Decision (owner-approved).** The example now triggers on `releases/*.yaml`, the same filter as the
+`release.yml` example's push trigger. A release PR always adds a manifest, so it is still checked, and
+a manifest PR that also edits config still fails the check. Only a PR with no manifest at all stops
+triggering it, and such a PR also never starts a release on merge. A test keeps the two examples'
+`paths:` identical. Docs only, no release.
 
 ## 2026-10-13 — `release-flow`: the App key is a declared secret passed BY NAME — `inherit` passes nothing across orgs
 
