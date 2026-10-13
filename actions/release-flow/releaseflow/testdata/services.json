@@ -1,0 +1,39 @@
+{
+  "owner": "consumer-a-org",
+  "gar_registry": "asia-southeast1-docker.pkg.dev/consumer-a-project",
+  "services": [
+    {"repo": "issuer", "kind": "image", "order": 1, "deploy_workflow": "deploy.yml",
+     "health_url": "https://auth.example.test/.well-known/health", "image": "backend/api",
+     "ci": [
+       {"workflow": "tests.yml", "paths_ignore": ["**.md", "docs/**"]},
+       {"workflow": "deploy.yml"},
+       {"workflow": "changelog-hygiene.yml"},
+       {"workflow": "workflow-hygiene.yml"}
+     ]},
+    {"repo": "api", "kind": "image", "order": 2, "deploy_workflow": "deploy.yml",
+     "health_url": "https://api.example.test/.well-known/health", "image": "backend/bff-api",
+     "ci": [
+       {"workflow": "ci.yml"},
+       {"workflow": "deploy.yml"},
+       {"workflow": "changelog-hygiene.yml"}
+     ]},
+    {"repo": "ui", "kind": "pages", "order": 3, "deploy_workflow": "deploy.yml",
+     "ci": [
+       {"workflow": "test.yml"},
+       {"workflow": "changelog-hygiene.yml"},
+       {"workflow": "workflow-hygiene.yml"}
+     ]},
+    {"repo": "website", "kind": "pages", "order": 4, "deploy_workflow": "deploy.yml",
+     "ci": [
+       {"workflow": "changelog-hygiene.yml"},
+       {"workflow": "workflow-hygiene.yml"}
+     ]}
+  ],
+  "consumers_only": ["cli"],
+  "contracts": [
+    {"consumer": "api", "provider": "issuer"},
+    {"consumer": "cli", "provider": "issuer"},
+    {"consumer": "ui", "provider": "api"},
+    {"consumer": "ui", "provider": "issuer"}
+  ]
+}

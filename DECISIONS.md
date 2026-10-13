@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-13` — [`release-flow`: the proven multi-repo release flow, shared — CLI action, four workflows, publish in per-service slots](#2026-10-13--release-flow-the-proven-multi-repo-release-flow-shared--cli-action-four-workflows-publish-in-per-service-slots)
 - `2026-10-12` — [`refresh-api-spec` is a composite action: fetch, compare by meaning, one PR, merge only on the caller's checks](#2026-10-12--refresh-api-spec-is-a-composite-action-fetch-compare-by-meaning-one-pr-merge-only-on-the-callers-checks)
 - `2026-10-09` — [`promote-image` `skip_existing_tag`: a same-digest re-run skips the retag, another digest fails](#2026-10-09--promote-image-skip_existing_tag-a-same-digest-re-run-skips-the-retag-another-digest-fails)
 - `2026-10-08` — [`check-release-gate` is a composite action that only reads: newest GitHub Actions run, never waits](#2026-10-08--check-release-gate-is-a-composite-action-that-only-reads-newest-github-actions-run-never-waits)
@@ -102,6 +103,54 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-13 — `release-flow`: the proven multi-repo release flow, shared — CLI action, four workflows, publish in per-service slots
+
+**Decision.** A project's proven multi-repo release flow moves here as one package: a composite
+action `actions/release-flow/` (the `release-flow` CLI) and four reusable workflows
+(`release-pr-check`, `release-plan`, `release-drafts`, `release-publish`). Every
+project-specific value becomes `releases/services.json` config or a workflow input. A new
+service kind, `download`, proves a desktop download live by the Release's assets. A
+`rehearsal` input runs the whole flow with zero writes. Design: `docs/release-flow.md`; plan:
+`plans/2026-10-13-release-flow.md`.
+
+**Why shared.** The owner ruled on 2026-10-12 that a second project adopts the flow with no copy
+of its own, and widened it on 2026-10-13 to include the workflow. A copy per project drifts on
+exactly the questions that matter here, such as what "live" means and which writes are allowed.
+
+**Why the caller keeps contracts and smoke.** A reusable workflow cannot call a workflow its
+caller names, and each project checks contracts its own way. The shared stages take
+`toJSON(needs)` and refuse to draft or publish unless every upstream job the caller listed
+succeeded. A caller that forgets an `if:` therefore cannot skip a gate.
+
+**Publish runs in six fixed slots, one job per service (this changes the approved plan).** The
+plan said one job would walk the order. But an App installation token lives 60 minutes, and one
+service's publish can take ~50 (the original pins `WORST_CASE_S < 55 min` for this reason).
+One job across four services can therefore outlive its token mid-release. Fixed slots keep
+three properties: a fresh token per service, the write scope limited to that one repo (the
+original's least privilege, which the plan had traded away), and ordered stop-on-first-failure,
+which a matrix does not promise. The cost is repeated YAML and a cap of six services, enforced
+at plan.
+
+**Why the CLI is checked out and pinned by tree hash.** `./actions/x` resolves against the
+caller (2026-09-15). A tag `uses:` fails the SHA-pin gate, and a SHA pin cannot name its own
+release commit. So each workflow checks out this repo at its stamped `WORKFLOW_VERSION` and
+asserts the `actions/release-flow` tree hash equals a `RELEASE_FLOW_TREE` baked into the file.
+A caller that pins the workflow by SHA then runs exactly the reviewed CLI, even if a tag moved.
+
+**Why callers pass `secrets: inherit` (corrected the same day, before any code shipped).** The
+first draft said a called job that declares `environment:` receives that environment's secrets
+with nothing passed. A consumer's own measured run contradicts it. In a called workflow,
+`environment:` resolved the environment's variables, but its secret came through EMPTY ("The
+'private-key' input must be set to a non-empty string"). `secrets: inherit` from the caller
+fixed it, and a later hand-dispatched run proved that. So callers of plan, drafts and publish
+pass `inherit`, and the workflows declare no secret. The key still lives only in the caller's
+environment and is named only as a mint step's `private-key`. Cost: `inherit` also hands over
+any repo and org secrets, so a root repo should hold none that the release does not need.
+
+**Behaviour kept identical:** the 3-call write allowlist, burn-on-failure, annotated-tag peel,
+ci-green, the H7 deploy retry, live-from-successful-deploys, and the re-run refusal. The ported
+tests pass with only renames.
 
 ## 2026-10-12 — `refresh-api-spec` is a composite action: fetch, compare by meaning, one PR, merge only on the caller's checks
 

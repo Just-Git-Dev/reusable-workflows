@@ -26,7 +26,9 @@ failure this script exists to prevent, caught at the only moment it matters.
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -48,6 +50,14 @@ PIN_RE = re.compile(
 )
 VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 STAMP_RE = re.compile(r"^(?P<indent>[ \t]+)WORKFLOW_VERSION:[ \t]*(?P<version>\S+)[ \t]*$", re.M)
+
+# The release-flow workflows also pin the CONTENT of the CLI they check out:
+# `RELEASE_FLOW_TREE` is the git tree hash of actions/release-flow at the release
+# commit (docs/release-flow.md, "How the workflows load the CLI"). The sweep sets it,
+# `--check` fails when it differs from `git rev-parse HEAD:actions/release-flow`.
+TREE_PATH = "actions/release-flow"
+TREE_RE = re.compile(r"^(?P<indent>[ \t]+)RELEASE_FLOW_TREE:[ \t]*\"?(?P<tree>[^\s#\"]+)\"?", re.M)
+TREE_VALUE_RE = re.compile(r"^[0-9a-f]{40}$")
 
 STAMP_COMMENT = (
     "  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches\n"
@@ -113,6 +123,43 @@ def stamp_workflow(text: str, version: str) -> tuple[str, bool]:
     return text[:at] + block + text[at:], True
 
 
+def find_tree(text: str) -> str | None:
+    m = TREE_RE.search(text)
+    return m.group("tree") if m else None
+
+
+def stamp_tree(text: str, tree: str) -> tuple[str, bool]:
+    """Set `RELEASE_FLOW_TREE`, only in a workflow that already carries it."""
+    if not TREE_VALUE_RE.match(tree):
+        raise SystemExit(f"::error::'{tree}' is not a 40-hex git tree hash.")
+    current = find_tree(text)
+    if current is None or current == tree:
+        return text, False
+    # Always quoted: an unquoted all-digit hash would load as a YAML number, not a string.
+    return TREE_RE.sub(lambda m: f'{m.group("indent")}RELEASE_FLOW_TREE: "{tree}"', text, count=1), True
+
+
+def tree_problems(trees: dict[str, str], want: str | None) -> list[str]:
+    """Every workflow carrying RELEASE_FLOW_TREE must equal `want` (the committed tree)."""
+    if not trees:
+        return []
+    if want is None:
+        return [f"cannot read `git rev-parse HEAD:{TREE_PATH}` (not committed?), "
+                f"so RELEASE_FLOW_TREE in {len(trees)} workflow(s) cannot be checked"]
+    return [f"{name}: RELEASE_FLOW_TREE {got}, but HEAD:{TREE_PATH} is {want}"
+            for name, got in sorted(trees.items()) if got != want]
+
+
+def current_tree(root: Path) -> str | None:
+    """The committed tree hash of actions/release-flow, or None when it is not committed."""
+    # Scrub GIT_* so a run inside a git hook still reads THIS repo.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    r = subprocess.run(["git", "-C", str(root), "rev-parse", f"HEAD:{TREE_PATH}"],
+                       capture_output=True, text=True, env=env)
+    out = r.stdout.strip()
+    return out if r.returncode == 0 and TREE_VALUE_RE.match(out) else None
+
+
 # ---------------------------------------------------------------------------
 # repo-wide scan
 
@@ -134,6 +181,7 @@ def doc_files(root: Path) -> list[Path]:
 @dataclass
 class Report:
     stamps: dict[str, str | None] = field(default_factory=dict)
+    trees: dict[str, str] = field(default_factory=dict)
     pins: dict[str, list[str]] = field(default_factory=dict)
     version: str | None = None
     versions: set[str] = field(default_factory=set)
@@ -173,7 +221,11 @@ def reconcile(stamps: dict[str, str | None], pins: dict[str, list[str]]) -> list
 def scan(root: Path) -> Report:
     report = Report()
     for path in reusables():
-        report.stamps[_rel(path, root)] = find_stamp(path.read_text())
+        text = path.read_text()
+        report.stamps[_rel(path, root)] = find_stamp(text)
+        tree = find_tree(text)
+        if tree is not None:
+            report.trees[_rel(path, root)] = tree
     for path in doc_files(root):
         found = find_pins(path.read_text())
         if found:
@@ -201,6 +253,20 @@ def sweep(version: str) -> int:
             path.write_text(new)
             touched += 1
             print(f"  stamped {_rel(path, ROOT)}")
+    tree = current_tree(ROOT)
+    trees = 0
+    for path in reusables():
+        text = path.read_text()
+        if find_tree(text) is None:
+            continue
+        if tree is None:
+            raise SystemExit(f"::error::{_rel(path, ROOT)} carries RELEASE_FLOW_TREE but "
+                             f"`git rev-parse HEAD:{TREE_PATH}` fails: commit {TREE_PATH}/ first.")
+        new, changed = stamp_tree(text, tree)
+        if changed:
+            path.write_text(new)
+            trees += 1
+            print(f"  tree    {_rel(path, ROOT)} -> {tree}")
     pins = 0
     for path in doc_files(ROOT):
         text = path.read_text()
@@ -209,12 +275,13 @@ def sweep(version: str) -> int:
             path.write_text(new)
             pins += n
             print(f"  bumped  {_rel(path, ROOT)} ({n} pin{'s' if n > 1 else ''})")
-    print(f"\nswept to {version}: {touched} workflow stamp(s), {pins} doc pin(s)")
+    print(f"\nswept to {version}: {touched} workflow stamp(s), {trees} tree stamp(s), {pins} doc pin(s)")
     return 0
 
 
 def check(expect: str | None) -> int:
     report = scan(ROOT)
+    report.problems += tree_problems(report.trees, current_tree(ROOT) if report.trees else None)
     if report.problems:
         print(f"::error::version sweep is stale — run: python3 scripts/stamp_version.py {report.version}")
         for p in report.problems:

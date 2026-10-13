@@ -194,7 +194,7 @@ def test_repo_is_internally_consistent():
     # assertion a tautology. Bump it when a reusable is ADDED (28 as of
     # service-alerts, 2026-09-23) — if it fails without one being added,
     # a workflow has silently stopped being stamped, which is the point.
-    check("repo: stamped 28 reusables", len(report.stamps), 28)
+    check("repo: stamped 32 reusables", len(report.stamps), 32)
 
 
 def test_scan_flags_a_stale_pin(tmp_check=True):
@@ -214,6 +214,63 @@ def test_scan_flags_a_missing_stamp():
     check("missing stamp: reported", any("missing.yml" in p for p in problems), True)
 
 
+# --------------------------------------------------------------------------
+# RELEASE_FLOW_TREE: the content pin of actions/release-flow (docs/release-flow.md)
+
+T0 = "0" * 40
+T1 = "1" * 40
+WITH_TREE = """\
+env:
+  WORKFLOW_VERSION: v3.2.0
+  RELEASE_FLOW_TREE: "%s"   # tree of actions/release-flow
+
+jobs:
+  x:
+    runs-on: ubuntu-latest
+""" % T0
+
+
+def test_tree_stamp_sets_only_the_value():
+    check("tree: found", S.find_tree(WITH_TREE), T0)
+    check("tree: absent is None", S.find_tree(UNSTAMPED), None)
+    new, changed = S.stamp_tree(WITH_TREE, T1)
+    check("tree: changed", changed, True)
+    check("tree: new value read back", S.find_tree(new), T1)
+    check("tree: only that line differs", new.replace(T1, T0), WITH_TREE)
+    check("tree: trailing comment kept", "# tree of actions/release-flow" in new, True)
+    again, changed2 = S.stamp_tree(new, T1)
+    check("tree: idempotent", (again, changed2), (new, False))
+    plain, changed3 = S.stamp_tree(UNSTAMPED, T1)
+    check("tree: a workflow without the key is left alone", (plain, changed3), (UNSTAMPED, False))
+
+
+def test_tree_must_be_40_hex():
+    for bad in ("", "abc", "G" * 40, "1" * 39, "1" * 41):
+        try:
+            S.stamp_tree(WITH_TREE, bad)
+            got = "accepted"
+        except SystemExit:
+            got = "refused"
+        check(f"tree: {bad[:8]!r} refused", got, "refused")
+
+
+def test_tree_problems():
+    trees = {"a.yml": T1, "b.yml": T0}
+    problems = S.tree_problems(trees, T1)
+    check("tree check: stale one reported", [p.split(":")[0] for p in problems], ["b.yml"])
+    check("tree check: all agree", S.tree_problems({"a.yml": T1}, T1), [])
+    check("tree check: none carry it, nothing to check", S.tree_problems({}, None), [])
+    unresolved = S.tree_problems(trees, None)
+    check("tree check: unresolvable tree is a problem, not a pass", len(unresolved), 1)
+
+
+def test_scan_collects_trees():
+    report = S.scan(ROOT)
+    check("scan: trees come only from workflows that carry the key",
+          all(S.TREE_RE.search((ROOT / n).read_text()) for n in report.trees), True)
+    check("scan: the four release-flow workflows carry it", len(report.trees), 4)
+
+
 def main():
     for fn in [
         test_stamp_inserts_env_block,
@@ -228,6 +285,10 @@ def main():
         test_repo_is_internally_consistent,
         test_scan_flags_a_stale_pin,
         test_scan_flags_a_missing_stamp,
+        test_tree_stamp_sets_only_the_value,
+        test_tree_must_be_40_hex,
+        test_tree_problems,
+        test_scan_collects_trees,
     ]:
         print(f"{fn.__name__}:")
         fn()

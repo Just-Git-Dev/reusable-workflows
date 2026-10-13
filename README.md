@@ -57,6 +57,11 @@ Composite actions under `actions/`, used as a **step** (`uses: Just-Git-Dev/reus
 | Action | Purpose |
 |---|---|
 | [`check-release-gate`](docs/check-release-gate.md) | **Read-only** root-release gate: for each service, the tag still points at the listed commit and the newest GitHub Actions `release-gate` check on it succeeded. It never waits and reports every service before failing |
+| [`release-flow`](docs/release-flow.md) | The shared **multi-repo release flow**: a `release-flow` CLI action plus four reusable workflows (`release-pr-check`, `release-plan`, `release-drafts`, `release-publish`). A merged manifest is validated read-only, drafted, smoke-tested by the caller, then published one service at a time with each deploy proven live. `rehearsal: true` runs it with zero writes |
+| [`release-pr-check`](docs/release-pr-check.md) | Release flow stage 1: on a release PR, exactly one new manifest, nothing else changed, valid shape. No secret, no App token |
+| [`release-plan`](docs/release-plan.md) | Release flow stage 2: merge guard, CLI self-test, plan, validate, CI-green, resolve, contract states, service gates. Read-only |
+| [`release-drafts`](docs/release-drafts.md) | Release flow stage 3: one draft Release per listed service. The first write; none in a rehearsal |
+| [`release-publish`](docs/release-publish.md) | Release flow stage 4: publish each draft in order (six slots), prove each deploy live, then report |
 
 ### API contracts
 

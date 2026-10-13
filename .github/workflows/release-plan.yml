@@ -1,0 +1,480 @@
+name: Release plan (reusable)
+
+# Stage 2 of the shared release flow (docs/release-flow.md, docs/release-plan.md): everything that
+# can be checked BEFORE the first write. All read-only. Jobs: plan (guard, self-test, the one
+# manifest, publish order), resolve (validate, ci-green, resolve, contract states) and
+# service-gates (each service's own release-gate check on its tagged sha).
+#
+# EVERY EDIT TO THIS FILE IS A SECURITY CHANGE. What bounds it:
+#   - Tokens are minted per job from a GitHub App, READ-ONLY here, for the repos in `allowed` and
+#     `read-only-repos` only. The App key lives in the caller's `environment` (RELEASE_APP_KEY)
+#     and is named ONLY as the `private-key` of a mint step. The caller passes `secrets: inherit` (an environment secret is EMPTY in a called workflow otherwise; docs/release-flow.md); none is declared here.
+#   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
+#   - The plan job holds no App token: it reads with the caller's GITHUB_TOKEN. The CLI it runs is
+#     checked out from this repo and pinned by content (RELEASE_FLOW_TREE), then self-tested.
+#   - A release never re-runs (attempt 1 only), and a direct push releases nothing (the merged PR
+#     must carry the pr-check check run, from GitHub Actions and from `pr-check-workflow`).
+#   - NO concurrency group, deliberately: with cancel-in-progress false GitHub still REPLACES a
+#     pending run when a third arrives, and a release would vanish silently. The CLI's
+#     `concurrent` guard fails loudly instead.
+
+on:
+  workflow_call:
+    inputs:
+      allowed:
+        description: 'Comma list of service repos the App may write. Hard-code it in the caller.'
+        type: string
+        required: true
+      read-only-repos:
+        description: 'Comma list of extra repos the App may only read (the consumers_only repos)'
+        type: string
+        required: false
+        default: ''
+      app-id:
+        description: 'The release GitHub App id (not secret), e.g. vars.RELEASE_APP_ID'
+        type: string
+        required: true
+      environment:
+        description: 'The caller environment holding the RELEASE_APP_KEY secret'
+        type: string
+        required: false
+        default: release
+      config:
+        description: 'Path of the release config in the root repo'
+        type: string
+        required: false
+        default: releases/services.json
+      release-workflow:
+        description: "File name of the caller's release workflow (for the concurrent-run guard)"
+        type: string
+        required: false
+        default: release.yml
+      pr-check-name:
+        description: 'The check run the merged release PR must carry'
+        type: string
+        required: false
+        default: release-pr / release-pr
+      pr-check-workflow:
+        description: 'The workflow file that check run must come from'
+        type: string
+        required: false
+        default: .github/workflows/release-pr.yml
+      rehearsal:
+        description: 'Run the whole flow with zero writes'
+        type: boolean
+        required: false
+        default: false
+      manifest:
+        description: 'Rehearsal only: the manifest path to rehearse. Must be empty for a real release.'
+        type: string
+        required: false
+        default: ''
+      manifest-ref:
+        description: 'Rehearsal only: the branch to read the manifest from (fetched as data). Empty = the checked-out branch. Must be empty for a real release.'
+        type: string
+        required: false
+        default: ''
+    outputs:
+      manifest:
+        description: 'The manifest path'
+        value: ${{ jobs.plan.outputs.manifest }}
+      manifest-sha256:
+        description: 'sha256 of the manifest file; every later stage checks the staged artifact against it'
+        value: ${{ jobs.plan.outputs.manifest_sha256 }}
+      pr:
+        description: "The release PR number ('' in a rehearsal)"
+        value: ${{ jobs.plan.outputs.pr }}
+      order:
+        description: 'Listed repos in publish order, comma-separated'
+        value: ${{ jobs.plan.outputs.order }}
+      rehearsal:
+        description: "'true' or 'false'"
+        value: ${{ jobs.plan.outputs.rehearsal }}
+      resolved:
+        description: 'JSON {repo: {ref, version, listed, image, live_ref}} for every service'
+        value: ${{ jobs.resolve.outputs.resolved }}
+      checks:
+        description: 'JSON list for a matrix include; [] when no contract involves a listed service'
+        value: ${{ jobs.resolve.outputs.checks }}
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.2.0
+  # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
+  RELEASE_FLOW_TREE: "b3e7f6cc14cc300041c2c5aa4266119758ca1fb6"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------- guard + plan
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    outputs:
+      manifest: ${{ steps.m.outputs.path }}
+      manifest_sha256: ${{ steps.m.outputs.sha256 }}
+      pr: ${{ steps.m.outputs.pr }}
+      order: ${{ steps.o.outputs.order }}
+      rehearsal: ${{ steps.in.outputs.rehearsal }}
+      owner: ${{ steps.cfg.outputs.owner }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Validate inputs; refuse a re-run
+        id: in
+        env:
+          ATTEMPT: ${{ github.run_attempt }}
+          ALLOWED: ${{ inputs.allowed }}
+          READ_ONLY: ${{ inputs.read-only-repos }}
+          CONFIG: ${{ inputs.config }}
+          RELEASE_WORKFLOW: ${{ inputs.release-workflow }}
+          PR_CHECK_WORKFLOW: ${{ inputs.pr-check-workflow }}
+          REHEARSAL: ${{ inputs.rehearsal }}
+          MANIFEST_IN: ${{ inputs.manifest }}
+          MANIFEST_REF: ${{ inputs.manifest-ref }}
+        run: |
+          set -euo pipefail
+          [ "$ATTEMPT" = "1" ] || { echo "::error::re-run attempt $ATTEMPT refused: a release never re-runs. Open a new release PR with bumped versions."; exit 1; }
+          list='^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$'
+          [[ "$ALLOWED" =~ $list ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [ -z "$READ_ONLY" ] || [[ "$READ_ONLY" =~ $list ]] || { echo "::error::read-only-repos '$READ_ONLY' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          [[ "$RELEASE_WORKFLOW" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] || { echo "::error::release-workflow '$RELEASE_WORKFLOW' is not a workflow file name"; exit 1; }
+          [[ "$PR_CHECK_WORKFLOW" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::pr-check-workflow '$PR_CHECK_WORKFLOW' is not a path"; exit 1; }
+          case "$REHEARSAL" in
+            true) [ -n "$MANIFEST_IN" ] || { echo "::error::a rehearsal needs the manifest input"; exit 1; } ;;
+            false) [ -z "$MANIFEST_IN" ] || { echo "::error::the manifest input is for a rehearsal only; a real release finds its manifest in the push"; exit 1; }
+                   [ -z "$MANIFEST_REF" ] || { echo "::error::manifest-ref is for a rehearsal only; a real release reads the merged manifest"; exit 1; } ;;
+            *) echo "::error::rehearsal '$REHEARSAL' is neither true nor false"; exit 1 ;;
+          esac
+          [ -z "$MANIFEST_REF" ] || [[ "$MANIFEST_REF" =~ ^[A-Za-z0-9._/-]+$ && "$MANIFEST_REF" != *..* ]] || { echo "::error::manifest-ref '$MANIFEST_REF' is not a plain branch name"; exit 1; }
+          echo "rehearsal=$REHEARSAL" >> "$GITHUB_OUTPUT"
+
+      # Never act on red code: a release must not depend on another workflow having been green.
+      # A skipped test judged nothing, so any skip, and a run of zero tests, fails the release.
+      - name: Self-test the CLI (red, skipped or empty = no release)
+        run: |
+          set -uo pipefail
+          python3 -P -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 -P -m unittest discover -s .release-flow-src/actions/release-flow/releaseflow -p 'test_*.py' >"$RUNNER_TEMP/release-flow-unittest.log" 2>&1; rc=$?
+          tail -15 "$RUNNER_TEMP/release-flow-unittest.log"
+          [ "$rc" -eq 0 ] || { echo "::error::release-flow unit tests failed (rc=$rc)"; exit 1; }
+          grep -qE '^Ran [1-9][0-9]* test' "$RUNNER_TEMP/release-flow-unittest.log" || { echo "::error::release-flow unit tests ran zero tests"; exit 1; }
+          if grep -qE 'skipped=' "$RUNNER_TEMP/release-flow-unittest.log"; then echo "::error::release-flow unit tests skipped some tests (pyyaml missing?); a skip is not a pass"; exit 1; fi
+
+      - name: Config is valid for this allowlist
+        id: cfg
+        env:
+          ALLOWED: ${{ inputs.allowed }}
+          READ_ONLY: ${{ inputs.read-only-repos }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          out=$(release-flow config-check --allowed "$ALLOWED" --read-only "$READ_ONLY" --config "$CONFIG")
+          echo "$out"
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "release_dir=$(jq -r .release_dir <<<"$out")" >> "$GITHUB_OUTPUT"
+
+      - name: Guard and find the manifest (merged PR with a green pr-check, no concurrent run)
+        id: m
+        env:
+          RELEASE_FLOW_READ_TOKEN: ${{ github.token }}
+          REHEARSAL: ${{ inputs.rehearsal }}
+          MANIFEST_IN: ${{ inputs.manifest }}
+          MANIFEST_REF: ${{ inputs.manifest-ref }}
+          GH_TOKEN: ${{ github.token }}
+          CONFIG: ${{ inputs.config }}
+          RELEASE_WORKFLOW: ${{ inputs.release-workflow }}
+          PR_CHECK_NAME: ${{ inputs.pr-check-name }}
+          PR_CHECK_WORKFLOW: ${{ inputs.pr-check-workflow }}
+          RELEASE_DIR: ${{ steps.cfg.outputs.release_dir }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$REHEARSAL" = "true" ]; then
+            pr=""
+            path="$MANIFEST_IN"
+          else
+            pr=$(release-flow check-merge --sha "$AFTER" --check-name "$PR_CHECK_NAME" --workflow-path "$PR_CHECK_WORKFLOW" --config "$CONFIG")
+            [[ "$pr" =~ ^[0-9]+$ ]] || { echo "::error::check-merge returned '$pr', not a PR number"; exit 1; }
+            path=$(release-flow find-manifest --base "$BEFORE" --head "$AFTER" --config "$CONFIG")
+          fi
+          [[ "$path" == "$RELEASE_DIR"/* && "${path#"$RELEASE_DIR"/}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\.yaml$ ]] || { echo "::error::manifest path '$path' is not $RELEASE_DIR/YYYY-MM-DD-<slug>.yaml"; exit 1; }
+          # The ONE copy every later stage reads (uploaded below, sha256-checked on download).
+          mkdir -p release-manifest
+          if [ "$REHEARSAL" = "true" ] && [ -n "$MANIFEST_REF" ]; then
+            # The rehearsal branch is fetched as DATA ONLY: never checked out, never executed.
+            auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            echo "::add-mask::$auth"
+            git -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic $auth" fetch --no-tags origin "+refs/heads/$MANIFEST_REF:refs/remotes/rehearsal/head"
+            git show "refs/remotes/rehearsal/head:$path" > release-manifest/manifest.yaml || { echo "::error::rehearsal manifest '$path' does not exist on branch '$MANIFEST_REF'"; exit 1; }
+          else
+            [ -f "$path" ] || { echo "::error::manifest '$path' does not exist in this checkout"; exit 1; }
+            cp -- "$path" release-manifest/manifest.yaml
+          fi
+          sha=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
+          release-flow concurrent --workflow "$RELEASE_WORKFLOW" --run-id "$GITHUB_RUN_ID"
+          {
+            echo "path=$path"
+            echo "sha256=$sha"
+            echo "pr=$pr"
+          } >> "$GITHUB_OUTPUT"
+
+      # Shape only here (`order` parses strictly): this job holds no cross-repo token. The
+      # cross-repo `validate` is resolve's first step. More than six services is refused (exit 2).
+      - name: Publish order
+        id: o
+        env:
+          MANIFEST: release-manifest/manifest.yaml
+          MANIFEST_PATH: ${{ steps.m.outputs.path }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+          REHEARSAL: ${{ inputs.rehearsal }}
+        run: |
+          set -euo pipefail
+          lines=$(release-flow order "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG")
+          order=$(printf '%s\n' "$lines" | paste -sd, -)
+          [[ "$order" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::bad order '$order'"; exit 1; }
+          echo "order=$order" >> "$GITHUB_OUTPUT"
+          mode=""; [ "$REHEARSAL" != "true" ] || mode=" (rehearsal: no writes)"
+          echo "### Release plan: \`$MANIFEST_PATH\` -> $order$mode" >> "$GITHUB_STEP_SUMMARY"
+
+      # Every later job reads THIS file, never the repo: a rehearsal's manifest is not on the
+      # base branch at all, and a real release's is the same content (sha256-checked).
+      - name: Stage the manifest for the later jobs
+        id: up
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-manifest
+          path: release-manifest/manifest.yaml
+          retention-days: 7
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------- resolve
+  # READ-ONLY. Nothing is written anywhere until the drafts stage. Resolves every service's ref
+  # and image, enumerates the contract states for every intermediate state of the publish order,
+  # and checks each listed commit's own CI is green before any contract work is spent.
+  resolve:
+    name: resolve
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      resolved: ${{ steps.r.outputs.resolved }}
+      checks: ${{ steps.r.outputs.checks }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Download the staged manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-manifest
+          path: release-manifest
+
+      - name: The staged manifest is the one plan hashed
+        env:
+          WANT: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
+
+      - name: Repositories to mint for (validated before the mint)
+        id: repos
+        env:
+          ALLOWED: ${{ inputs.allowed }}
+          READ_ONLY: ${{ inputs.read-only-repos }}
+        run: |
+          set -euo pipefail
+          list='^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$'
+          [[ "$ALLOWED" =~ $list ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          all="$ALLOWED"
+          if [ -n "$READ_ONLY" ]; then
+            [[ "$READ_ONLY" =~ $list ]] || { echo "::error::read-only-repos '$READ_ONLY' is not a comma list of repo names"; exit 1; }
+            all="$ALLOWED,$READ_ONLY"
+          fi
+          echo "list=$all" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (READ-ONLY, allowed + read-only repos)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ needs.plan.outputs.owner }}
+          repositories: ${{ steps.repos.outputs.list }}
+          permission-contents: read
+          permission-actions: read   # live = the last SUCCESSFUL Deploy run; ci-green reads CI runs
+          permission-checks: read    # ci-green
+
+      - name: Validate (tag exists, annotated, peels to the sha; sha on base; changelog; no Release yet)
+        env:
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: release-manifest/manifest.yaml
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: release-flow validate "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG"
+
+      - name: CI-green (every listed commit's own CI, before any contract work)
+        env:
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: release-manifest/manifest.yaml
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: release-flow ci-green "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG"
+
+      - name: Resolve refs, images and contract states
+        id: r
+        env:
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: release-manifest/manifest.yaml
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          out=$(release-flow resolve "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG")
+          jq . <<<"$out"
+          echo "resolved=$(jq -c . <<<"$out")" >> "$GITHUB_OUTPUT"
+          # One contract check per distinct consumer@ref -> provider@ref across every
+          # intermediate state of the publish order.
+          checks=$(release-flow contract-states "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG")
+          jq . <<<"$checks"
+          echo "checks=$(jq -c . <<<"$checks")" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------- service-gates
+  # READ-ONLY. Each listed service's own release-gate check on the tagged sha must be a finished
+  # success. It never waits, starts or re-runs anything.
+  service-gates:
+    name: service-gates
+    needs: [plan, resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Download the staged manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-manifest
+          path: release-manifest
+
+      - name: The staged manifest is the one plan hashed
+        env:
+          WANT: ${{ needs.plan.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
+
+      - name: Listed services as {repo, tag, sha}
+        id: s
+        env:
+          MANIFEST: release-manifest/manifest.yaml
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          services=$(release-flow gate-services "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG")
+          [ "$(jq 'length' <<<"$services")" -ge 1 ] || { echo "::error::no services to gate"; exit 1; }
+          jq . <<<"$services"
+          echo "services=$(jq -c . <<<"$services")" >> "$GITHUB_OUTPUT"
+
+      - name: Repositories to mint for (validated before the mint)
+        id: repos
+        env:
+          ALLOWED: ${{ inputs.allowed }}
+        run: |
+          set -euo pipefail
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          echo "list=$ALLOWED" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (READ-ONLY checks + contents, allowed repos)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ needs.plan.outputs.owner }}
+          repositories: ${{ steps.repos.outputs.list }}
+          permission-checks: read
+          permission-contents: read
+
+      - name: Every listed service's release gate is green on its tagged sha
+        uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@08b6f7260a8e17d8bceff7744c0408bac06001f9 # v3.1.0
+        with:
+          token: ${{ steps.app.outputs.token }}
+          services: ${{ steps.s.outputs.services }}
