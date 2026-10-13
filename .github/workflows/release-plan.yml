@@ -330,7 +330,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Repositories to mint for (validated before the mint)
         id: repos
@@ -438,7 +438,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Listed services as {repo, tag, sha}
         id: s

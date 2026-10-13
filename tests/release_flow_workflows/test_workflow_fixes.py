@@ -156,7 +156,10 @@ class ManifestStagingTests(unittest.TestCase):
                     self.assertEqual(d["with"], {"name": "release-manifest", "path": "release-manifest"})
                     chk = [s for s in steps[dl[0] + 1:i] if "sha256sum" in s.get("run", "")]
                     self.assertEqual(len(chk), 1, f"{n}:{jn}: want one sha256 check between download and use")
-                    self.assertIn('[ "$got" = "$WANT" ]', chk[0]["run"])
+                    # Fail closed: a malformed WANT or any mismatch exits 1 (if-form, not A && B || C,
+                    # which shellcheck SC2015 rejects in CI).
+                    self.assertIn('if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then',
+                                  chk[0]["run"])
                     self.assertRegex(chk[0]["env"]["WANT"], r"manifest_sha256 }}$")
                     self.assertEqual(chk[0]["run"].count("exit 1"), 1)
         # resolve: 3, service-gates: 1, drafts: 2 (rehearsal + real), publish: 6 slots.

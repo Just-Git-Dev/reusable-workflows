@@ -213,7 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Slot 1 - the repo must be in allowed (validated before the mint)
         id: slot
@@ -303,7 +303,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Slot 2 - the repo must be in allowed (validated before the mint)
         id: slot
@@ -393,7 +393,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Slot 3 - the repo must be in allowed (validated before the mint)
         id: slot
@@ -483,7 +483,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Slot 4 - the repo must be in allowed (validated before the mint)
         id: slot
@@ -573,7 +573,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Slot 5 - the repo must be in allowed (validated before the mint)
         id: slot
@@ -663,7 +663,7 @@ jobs:
         run: |
           set -euo pipefail
           got=$(sha256sum release-manifest/manifest.yaml | cut -d' ' -f1)
-          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$WANT" ] || { echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; }
+          if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]] || [ "$got" != "$WANT" ]; then echo "::error::staged manifest sha256 '$got' is not plan's '$WANT'"; exit 1; fi
 
       - name: Slot 6 - the repo must be in allowed (validated before the mint)
         id: slot
