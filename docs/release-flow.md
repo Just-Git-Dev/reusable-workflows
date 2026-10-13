@@ -245,18 +245,23 @@ owner pushes each **annotated** tag before opening the release PR; the flow neve
 
 ## Inputs, outputs, secrets
 
-**Secrets: call `release-plan`, `release-drafts` and `release-publish` with
-`secrets: inherit`.** The jobs that mint a token declare `environment: <environment>`. Inside
-those jobs GitHub resolves that environment's *variables*, but its *secrets* come through empty
-unless the caller passes `secrets: inherit`. This was measured in a consumer's
-release run: the mint failed with "The 'private-key' input must be set to a non-empty string",
-and `inherit` fixed it, proven by a later run. Keep the root repo free of repo-level and org
-secrets the release does not need, because `inherit` hands over all of them. The environment
-must hold a secret named **`RELEASE_APP_KEY`**: the private key of a GitHub App installed on
+**Secrets: pass `RELEASE_APP_KEY` to `release-plan`, `release-drafts` and `release-publish`
+BY NAME** (`secrets: {RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}}`), never with
+`secrets: inherit`. Each of the three declares it as its one required `workflow_call` secret.
+The jobs that mint a token declare `environment: <environment>`. Inside those jobs GitHub
+resolves that environment's *variables*, but an environment *secret* the caller did not pass
+resolves to an empty string, with no error until the mint fails ("The 'private-key' input must
+be set to a non-empty string"). GitHub's docs say a caller "can pass a secret by name even if it
+only exists in the environment". `inherit` is not a substitute. It works only when the caller is
+in the same organization or enterprise as this repo, and a consumer whose root repo is in
+another org measured exactly that empty-key failure with `inherit` in place. (An earlier
+same-repo call had seemed to prove `inherit` worked.) Passing by name also hands over only this
+one secret, where `inherit` hands over all of them. The environment must hold a secret named
+**`RELEASE_APP_KEY`**: the private key of a GitHub App installed on
 every repo in `allowed` and `read-only-repos`, with contents read/write, actions read/write and
 checks read. Restrict the environment to `base_branch`. Inside the shared workflows the key is
-named only as the `private-key` of a mint step. `release-pr-check` takes no secret: do not
-pass `inherit` to it.
+named only as the `private-key` of a mint step. `release-pr-check` takes no secret: pass it
+none.
 
 **`app-id` must resolve in the CALLER, so it cannot live only on the environment.** The shared
 workflows never read `vars.RELEASE_APP_ID` themselves; the mint steps use `inputs.app-id`, and
@@ -376,7 +381,8 @@ jobs:
       rehearsal: ${{ github.event_name == 'workflow_dispatch' }}
       manifest: ${{ inputs.manifest || '' }}
       manifest-ref: ${{ inputs.manifest-ref || '' }}
-    secrets: inherit               # the environment key reaches the mint steps only this way
+    secrets:
+      RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}   # by name; `inherit` is same-org only
 
   contracts:                     # the caller's own contract checks
     needs: plan
@@ -399,7 +405,8 @@ jobs:
       needs: ${{ toJSON(needs) }}
       allowed: backend,webapp,desktop
       app-id: ${{ vars.RELEASE_APP_ID }}
-    secrets: inherit               # the environment key reaches the mint steps only this way
+    secrets:
+      RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
 
   smoke:                         # the caller's own e2e, against the resolved refs
     needs: [plan, drafts]
@@ -418,7 +425,8 @@ jobs:
       required-jobs: plan,drafts,smoke
       allowed: backend,webapp,desktop
       app-id: ${{ vars.RELEASE_APP_ID }}
-    secrets: inherit               # the environment key reaches the mint steps only this way
+    secrets:
+      RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
 ```
 
 ## Moving from a project-local copy

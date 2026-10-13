@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-13` — [`release-flow`: the App key is a declared secret passed BY NAME — `inherit` passes nothing across orgs](#2026-10-13--release-flow-the-app-key-is-a-declared-secret-passed-by-name--inherit-passes-nothing-across-orgs)
 - `2026-10-13` — [`release-flow`: `app-id` must resolve at the caller — an environment-only variable is empty](#2026-10-13--release-flow-app-id-must-resolve-at-the-caller--an-environment-only-variable-is-empty)
 - `2026-10-13` — [`v3.3.0` released (`release-flow`); the `checks` output schema was under-documented](#2026-10-13--v330-released-release-flow-the-checks-output-schema-was-under-documented)
 - `2026-10-13` — [`release-flow`: the proven multi-repo release flow, shared — CLI action, four workflows, publish in per-service slots](#2026-10-13--release-flow-the-proven-multi-repo-release-flow-shared--cli-action-four-workflows-publish-in-per-service-slots)
@@ -106,6 +107,45 @@ archived by age only; nothing is deleted, and both files are greppable.
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-10-13 — `release-flow`: the App key is a declared secret passed BY NAME — `inherit` passes nothing across orgs
+
+**Symptom.** A consumer's second `release-flow` rehearsal on `v3.3.0` (with `app-id` now resolving)
+stopped at the first mint: "The 'private-key' input must be set to a non-empty string". It made zero
+writes. The key existed on the consumer's `release` environment, and its caller passed
+`secrets: inherit` as our doc said to.
+
+**Root cause.** The consumer's root repo is in a different GitHub org from this repo. GitHub's docs:
+"Workflows that call reusable workflows in the same organization or enterprise can use the `inherit`
+keyword", and "If the caller workflow doesn't pass an environment secret, the secret resolves to an
+empty string in the reusable workflow". So across orgs `inherit` passes nothing, and the key is empty.
+Callers could not pass it by name instead, because plan, drafts and publish declared no
+`workflow_call` secret.
+
+**Why it wasn't caught.** The 2026-10-13 "why callers pass `secrets: inherit`" correction rested on a
+consumer's run in which `inherit` did fix the empty key, but that call was same-repo, so same-org. It
+was generalised to every caller without asking what made it work. Two tests then pinned the design
+("declares no secret"). And `README.md` §Conventions already said a cross-org caller cannot use
+`secrets: inherit`; nobody checked the new design against it.
+
+**Fix.** plan, drafts and publish each declare exactly one `workflow_call` secret, `RELEASE_APP_KEY`
+(required). Callers pass it by name: `secrets: {RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}}`.
+GitHub documents that a secret can be passed by name "even if it only exists in the environment".
+This works in the same org and across orgs, and hands over one secret instead of all of them.
+`release-pr-check` still declares none. The doc's caller example and the secrets paragraph now say
+the same. The key-confinement rule otherwise stands: the key is named only as a mint step's
+`private-key`, never in an `env:`, and no job passes it onward. `actions/release-flow` is unchanged,
+so `RELEASE_FLOW_TREE` stays `b3e7f6c`.
+
+**Prevention.** `test_doc_callers_pass_the_key_by_name_never_inherit` fails if the doc's caller
+example uses `inherit`, or if plan, drafts or publish are called without the key by name.
+Key confinement now pins the declared secret set exactly. Unproven until a consumer's rehearsal
+passes the mint: that a by-name environment secret reaches the env-scoped job (GitHub documents it;
+no run here has shown it yet).
+
+**Version.** Adding a required secret changes the contract. No caller is live on `v3.3.0`: the
+first consumer's adoption PR is unmerged and the second is a draft, and both are cross-org, so
+`inherit` never worked for either. Proposed as `v3.4.0`; tag only on the owner's explicit OK.
+
 ## 2026-10-13 — `release-flow`: `app-id` must resolve at the caller — an environment-only variable is empty
 
 **Context.** A consumer's first `release-flow` rehearsal (on `v3.3.0`) stopped at the first App-token
@@ -176,7 +216,9 @@ release commit. So each workflow checks out this repo at its stamped `WORKFLOW_V
 asserts the `actions/release-flow` tree hash equals a `RELEASE_FLOW_TREE` baked into the file.
 A caller that pins the workflow by SHA then runs exactly the reviewed CLI, even if a tag moved.
 
-**Why callers pass `secrets: inherit` (corrected the same day, before any code shipped).** The
+**Why callers pass `secrets: inherit` (corrected the same day, before any code shipped).**
+*Superseded later on 2026-10-13: `inherit` is same-org only; the key is now a declared secret
+passed by name. See "the App key is a declared secret passed BY NAME" above.* The
 first draft said a called job that declares `environment:` receives that environment's secrets
 with nothing passed. A consumer's own measured run contradicts it. In a called workflow,
 `environment:` resolved the environment's variables, but its secret came through EMPTY ("The
