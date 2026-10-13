@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-13` — [`v3.3.0` released (`release-flow`); the `checks` output schema was under-documented](#2026-10-13--v330-released-release-flow-the-checks-output-schema-was-under-documented)
 - `2026-10-13` — [`release-flow`: the proven multi-repo release flow, shared — CLI action, four workflows, publish in per-service slots](#2026-10-13--release-flow-the-proven-multi-repo-release-flow-shared--cli-action-four-workflows-publish-in-per-service-slots)
 - `2026-10-12` — [`refresh-api-spec` is a composite action: fetch, compare by meaning, one PR, merge only on the caller's checks](#2026-10-12--refresh-api-spec-is-a-composite-action-fetch-compare-by-meaning-one-pr-merge-only-on-the-callers-checks)
 - `2026-10-09` — [`promote-image` `skip_existing_tag`: a same-digest re-run skips the retag, another digest fails](#2026-10-09--promote-image-skip_existing_tag-a-same-digest-re-run-skips-the-retag-another-digest-fails)
@@ -103,6 +104,21 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-13 — `v3.3.0` released (`release-flow`); the `checks` output schema was under-documented
+
+**Released.** `v3.3.0` was cut on 2026-10-13 via `release.yml` after the stamp PR (#117). The
+tag object is `b1a17df` and it peels to `be0a4de`, verified by `git ls-remote`. The minor bump
+ships the new `release-flow` action and the four `release-*` workflows (#116); no existing
+input changed. All four tagged workflows carry `WORKFLOW_VERSION: v3.3.0` and a
+`RELEASE_FLOW_TREE` equal to `git rev-parse v3.3.0:actions/release-flow` (`b3e7f6c`), so the
+runtime content pin holds for the tag.
+
+**Doc correction, same day (from the first adopter).** `docs/release-flow.md` documented the
+`checks` output as `{consumer, consumer_ref, provider, provider_ref, states}`. The CLI's
+`contract-states` (`states.py`) has always also emitted `provider_live_ref` and
+`consumer_side`, and the adopter's contract steps depend on both. Only the doc was wrong, so the
+fix is docs only and needs no release.
 
 ## 2026-10-13 — `release-flow`: the proven multi-repo release flow, shared — CLI action, four workflows, publish in per-service slots
 
