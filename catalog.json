@@ -2713,7 +2713,12 @@
         "drafts": "JSON {repo: release_id} ({repo: 'rehearsal'} in a rehearsal)"
       },
       "path": ".github/workflows/release-drafts.yml",
-      "secrets": {},
+      "secrets": {
+        "RELEASE_APP_KEY": {
+          "description": "The release App private key. Pass it BY NAME (inherit is same-org only)",
+          "required": true
+        }
+      },
       "workflow": "release-drafts.yml"
     },
     "release-plan": {
@@ -2819,7 +2824,12 @@
         "resolved": "JSON {repo: {ref, version, listed, image, live_ref}} for every service"
       },
       "path": ".github/workflows/release-plan.yml",
-      "secrets": {},
+      "secrets": {
+        "RELEASE_APP_KEY": {
+          "description": "The release App private key. Pass it BY NAME (inherit is same-org only)",
+          "required": true
+        }
+      },
       "workflow": "release-plan.yml"
     },
     "release-pr-check": {
@@ -2950,7 +2960,12 @@
       "name": "Release publish (reusable)",
       "outputs": {},
       "path": ".github/workflows/release-publish.yml",
-      "secrets": {},
+      "secrets": {
+        "RELEASE_APP_KEY": {
+          "description": "The release App private key. Pass it BY NAME (inherit is same-org only)",
+          "required": true
+        }
+      },
       "workflow": "release-publish.yml"
     },
     "retire-gar-packages": {
