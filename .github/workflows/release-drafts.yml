@@ -1,0 +1,221 @@
+name: Release drafts (reusable)
+
+# Stage 3 of the shared release flow (docs/release-flow.md, docs/release-drafts.md): the FIRST
+# write, and it only creates DRAFT Releases for the owner's existing tags (no tag, no ref).
+#
+# EVERY EDIT TO THIS FILE IS A SECURITY CHANGE. What bounds it:
+#   - The `verdict` job refuses to run the drafts job unless every upstream job in the caller's
+#     `needs` succeeded (the caller's contract job may be skipped only when `checks` is `[]`).
+#     The decision is the CLI's `verdict`, never bash.
+#   - The write token is minted ONLY in the `drafts` job, and only when this is not a rehearsal;
+#     a rehearsal mints a READ-ONLY token and runs `drafts --check-only`. The App key lives in the
+#     caller's `environment` and is named ONLY as the `private-key` of a mint step.
+#   - The App write goes through the CLI's allowlisted client: create a Release with
+#     `draft: true`, and nothing else in this stage.
+#   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
+#   - No job here runs candidate code: the CLI is checked out from this repo, pinned by content.
+
+on:
+  workflow_call:
+    inputs:
+      needs:
+        description: 'toJSON(needs) from the calling job'
+        type: string
+        required: true
+      allowed:
+        description: 'Comma list of the service repos the App may write'
+        type: string
+        required: true
+      app-id:
+        description: 'The release GitHub App id (not secret)'
+        type: string
+        required: true
+      environment:
+        description: 'The caller environment holding the RELEASE_APP_KEY secret'
+        type: string
+        required: false
+        default: release
+      config:
+        description: 'Path of the release config in the root repo'
+        type: string
+        required: false
+        default: releases/services.json
+      contracts-job:
+        description: "The caller's contract job id; it may be skipped only when checks is []"
+        type: string
+        required: false
+        default: contracts
+    outputs:
+      drafts:
+        description: "JSON {repo: release_id} ({repo: 'rehearsal'} in a rehearsal)"
+        value: ${{ jobs.drafts.outputs.drafts }}
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.2.0
+  # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
+  RELEASE_FLOW_TREE: "0000000000000000000000000000000000000000"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # --------------------------------------------------------------------- verdict
+  verdict:
+    name: verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      rehearsal: ${{ steps.v.outputs.rehearsal }}
+      manifest: ${{ steps.v.outputs.manifest }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Upstream verdict (every upstream job succeeded)
+        id: v
+        env:
+          NEEDS: ${{ inputs.needs }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+          CONTRACTS_JOB: ${{ inputs.contracts-job }}
+        run: |
+          set -uo pipefail
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          [[ "$CONTRACTS_JOB" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::contracts-job '$CONTRACTS_JOB' is not a job id"; exit 1; }
+          printf '%s' "$NEEDS" > "$RUNNER_TEMP/needs.json"
+          out=$(release-flow verdict --stage drafts --needs-file "$RUNNER_TEMP/needs.json" --contracts-job "$CONTRACTS_JOB" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then echo "::error::drafts refused: an upstream stage did not succeed (verdict rc=$rc)"; exit 1; fi
+          echo "rehearsal=$(jq -r .rehearsal <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "manifest=$(jq -r .manifest <<<"$out")" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------- drafts
+  drafts:
+    name: drafts
+    needs: verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      drafts: ${{ steps.d.outputs.drafts || steps.dr.outputs.drafts }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Config is valid; repositories to mint for (validated before the mint)
+        id: cfg
+        env:
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          out=$(release-flow config-check --allowed "$ALLOWED" --config "$CONFIG")
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "list=$ALLOWED" >> "$GITHUB_OUTPUT"
+
+      # A rehearsal writes nothing, so it never gets a write token.
+      - name: Mint App token (READ-ONLY, rehearsal)
+        id: app-ro
+        if: ${{ needs.verdict.outputs.rehearsal == 'true' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.cfg.outputs.owner }}
+          repositories: ${{ steps.cfg.outputs.list }}
+          permission-contents: read
+          permission-actions: read
+          permission-checks: read
+
+      - name: Mint App token (draft Releases on the allowed repos only)
+        id: app
+        if: ${{ needs.verdict.outputs.rehearsal != 'true' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.cfg.outputs.owner }}
+          repositories: ${{ steps.cfg.outputs.list }}
+          permission-contents: write
+          permission-actions: read   # drafts re-runs ci-green in its pre-check
+          permission-checks: read
+
+      - name: Rehearsal - every pre-check, no write
+        id: dr
+        if: ${{ needs.verdict.outputs.rehearsal == 'true' }}
+        env:
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app-ro.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          out=$(release-flow drafts "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG" --check-only); rc=$?
+          echo "$out"
+          echo "drafts=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Create draft Releases (all repos pre-checked, tags re-asserted, before the first write)
+        id: d
+        if: ${{ needs.verdict.outputs.rehearsal != 'true' }}
+        env:
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          # Always publish whatever was created, even on a failure partway: the report must list
+          # the drafts (burned versions) that now exist.
+          out=$(release-flow drafts "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          echo "drafts=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"

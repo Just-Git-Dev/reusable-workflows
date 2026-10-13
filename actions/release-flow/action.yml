@@ -1,0 +1,20 @@
+name: Release flow CLI
+description: >-
+  Puts the `release-flow` CLI on PATH for the rest of the job, and checks that the runner has
+  Python 3.9 or newer. The CLI is stdlib-only Python (PyYAML for `spec-compat` and `ops-subset`
+  inputs only). Takes no inputs and no token. See docs/release-flow.md.
+
+# A composite action, so a caller's own contract and smoke jobs can run `release-flow spec-compat`
+# and friends. The four shared release workflows do not use `uses:` on this action (a `./` path
+# resolves against the CALLER's checkout); they check this repo out and pin its tree hash instead.
+
+runs:
+  using: composite
+  steps:
+    - name: Put release-flow on PATH
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' || { echo "::error::release-flow needs Python 3.9 or newer, found $(python3 --version)"; exit 1; }
+        python3 --version
+        echo "$GITHUB_ACTION_PATH" >> "$GITHUB_PATH"

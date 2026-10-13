@@ -225,11 +225,18 @@ owner pushes each **annotated** tag before opening the release PR; the flow neve
 
 ## Inputs, outputs, secrets
 
-**Secrets.** None are passed. The jobs that mint a token declare `environment: <environment>`,
-so GitHub gives them that environment's secrets from the **caller's** repo. The environment must
-hold a secret named **`RELEASE_APP_KEY`**: the private key of a GitHub App installed on every
-repo in `allowed` and `read-only-repos`, with contents read/write, actions read/write and
-checks read. Restrict the environment to `base_branch`.
+**Secrets: call `release-plan`, `release-drafts` and `release-publish` with
+`secrets: inherit`.** The jobs that mint a token declare `environment: <environment>`. GitHub
+then resolves that environment's *variables* in the called workflow, but its *secrets* come
+through empty unless the caller passes `secrets: inherit`. This was measured in a consumer's
+release run: the mint failed with "The 'private-key' input must be set to a non-empty string",
+and `inherit` fixed it, proven by a later run. Keep the root repo free of repo-level and org
+secrets the release does not need, because `inherit` hands over all of them. The environment
+must hold a secret named **`RELEASE_APP_KEY`**: the private key of a GitHub App installed on
+every repo in `allowed` and `read-only-repos`, with contents read/write, actions read/write and
+checks read. Restrict the environment to `base_branch`. Inside the shared workflows the key is
+named only as the `private-key` of a mint step. `release-pr-check` takes no secret: do not
+pass `inherit` to it.
 
 **The caller's `GITHUB_TOKEN`** is used only for reads of the root repo and the PR comment. A
 called workflow's token can never have more than the calling job grants, so grant what each
@@ -335,6 +342,7 @@ jobs:
       app-id: ${{ vars.RELEASE_APP_ID }}
       rehearsal: ${{ github.event_name == 'workflow_dispatch' }}
       manifest: ${{ inputs.manifest || '' }}
+    secrets: inherit               # the environment key reaches the mint steps only this way
 
   contracts:                     # the caller's own contract checks
     needs: plan
@@ -357,6 +365,7 @@ jobs:
       needs: ${{ toJSON(needs) }}
       allowed: backend,webapp,desktop
       app-id: ${{ vars.RELEASE_APP_ID }}
+    secrets: inherit               # the environment key reaches the mint steps only this way
 
   smoke:                         # the caller's own e2e, against the resolved refs
     needs: [plan, drafts]
@@ -375,6 +384,7 @@ jobs:
       required-jobs: plan,drafts,smoke
       allowed: backend,webapp,desktop
       app-id: ${{ vars.RELEASE_APP_ID }}
+    secrets: inherit               # the environment key reaches the mint steps only this way
 ```
 
 ## Moving from a project-local copy

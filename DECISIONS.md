@@ -138,11 +138,15 @@ release commit. So each workflow checks out this repo at its stamped `WORKFLOW_V
 asserts the `actions/release-flow` tree hash equals a `RELEASE_FLOW_TREE` baked into the file.
 A caller that pins the workflow by SHA then runs exactly the reviewed CLI, even if a tag moved.
 
-**Why secrets are not passed.** A job in a called workflow that declares `environment:` receives
-that environment's secrets from the caller's repo (GitHub docs, "Reusing workflows"). This is
-not yet proven live here; the first rehearsal's mint step is the positive control. So the App
-key stays in the caller's environment and is named only as a mint step's `private-key`, as
-before.
+**Why callers pass `secrets: inherit` (corrected the same day, before any code shipped).** The
+first draft said a called job that declares `environment:` receives that environment's secrets
+with nothing passed. A consumer's own measured run contradicts it. In a called workflow,
+`environment:` resolved the environment's variables, but its secret came through EMPTY ("The
+'private-key' input must be set to a non-empty string"). `secrets: inherit` from the caller
+fixed it, and a later hand-dispatched run proved that. So callers of plan, drafts and publish
+pass `inherit`, and the workflows declare no secret. The key still lives only in the caller's
+environment and is named only as a mint step's `private-key`. Cost: `inherit` also hands over
+any repo and org secrets, so a root repo should hold none that the release does not need.
 
 **Behaviour kept identical:** the 3-call write allowlist, burn-on-failure, annotated-tag peel,
 ci-green, the H7 deploy retry, live-from-successful-deploys, and the re-run refusal. The ported

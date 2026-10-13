@@ -1,0 +1,707 @@
+name: Release publish (reusable)
+
+# Stage 4 of the shared release flow (docs/release-flow.md, docs/release-publish.md): publish each
+# draft in order, wait for its Deploy, prove it live, then report. Jobs: verdict (the upstream
+# decision, by the CLI), publish-1 ... publish-6 (one fixed slot per service, each with its OWN
+# token for that one repo: an installation token lasts 1h and one publish can take ~50 min), and
+# report (always).
+#
+# EVERY EDIT TO THIS FILE IS A SECURITY CHANGE. What bounds it:
+#   - Write tokens are minted ONLY in publish-N, one per slot, for that slot's single repo, which
+#     must be in `allowed`. A slot runs only if the verdict is ok, this is not a rehearsal, its
+#     repo is listed, and every earlier slot succeeded or was skipped. `!cancelled()`, not
+#     `always()`, so a cancelled run never publishes.
+#   - The App key lives in the caller's `environment` and is named ONLY as the `private-key` of a
+#     mint step. The caller passes `secrets: inherit` (an environment secret is EMPTY in a called workflow otherwise; docs/release-flow.md); none is declared here.
+#   - Every App write goes through the CLI's allowlisted client: create a draft Release, PATCH a
+#     release with exactly {"draft": false}, and re-run the failed jobs of that release's own
+#     Deploy run. No tag, no ref, no delete.
+#   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
+#   - The report job holds only the caller's GITHUB_TOKEN (pull-requests: write for the comment).
+#   - A failure never fails the verdict job: the report job must still say what happened.
+
+on:
+  workflow_call:
+    inputs:
+      needs:
+        description: 'toJSON(needs) from the calling job; must include plan and drafts'
+        type: string
+        required: true
+      allowed:
+        description: 'Comma list of the service repos the App may write'
+        type: string
+        required: true
+      app-id:
+        description: 'The release GitHub App id (not secret)'
+        type: string
+        required: true
+      environment:
+        description: 'The caller environment holding the RELEASE_APP_KEY secret'
+        type: string
+        required: false
+        default: release
+      config:
+        description: 'Path of the release config in the root repo'
+        type: string
+        required: false
+        default: releases/services.json
+      contracts-job:
+        description: "The caller's contract job id; it may be skipped only when checks is []"
+        type: string
+        required: false
+        default: contracts
+      required-jobs:
+        description: 'Comma list of job ids that must be present (and succeeded) in needs'
+        type: string
+        required: false
+        default: plan,drafts
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.2.0
+  # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
+  RELEASE_FLOW_TREE: "0000000000000000000000000000000000000000"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # --------------------------------------------------------------------- verdict
+  # Never fails on a not-ok verdict: the report job needs its outputs to say what happened.
+  verdict:
+    name: verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.v.outputs.ok }}
+      rehearsal: ${{ steps.v.outputs.rehearsal }}
+      pr: ${{ steps.v.outputs.pr }}
+      manifest: ${{ steps.v.outputs.manifest }}
+      failed_stage: ${{ steps.v.outputs.failed_stage }}
+      failures: ${{ steps.v.outputs.failures }}
+      repo1: ${{ steps.v.outputs.repo1 }}
+      repo2: ${{ steps.v.outputs.repo2 }}
+      repo3: ${{ steps.v.outputs.repo3 }}
+      repo4: ${{ steps.v.outputs.repo4 }}
+      repo5: ${{ steps.v.outputs.repo5 }}
+      repo6: ${{ steps.v.outputs.repo6 }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Upstream verdict (plan, drafts and the caller's jobs all succeeded)
+        id: v
+        env:
+          NEEDS: ${{ inputs.needs }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+          CONTRACTS_JOB: ${{ inputs.contracts-job }}
+          REQUIRED_JOBS: ${{ inputs.required-jobs }}
+        run: |
+          set -uo pipefail
+          printf '%s' "$NEEDS" > "$RUNNER_TEMP/needs.json"
+          ok=false; rehearsal=""; pr=""; manifest=""; failed_stage="verdict"; failures=""
+          if ! [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ && "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* && "$CONTRACTS_JOB" =~ ^[A-Za-z0-9_-]+$ && "$REQUIRED_JOBS" =~ ^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$ ]]; then
+            failures="a publish input is malformed"
+            repos=("" "" "" "" "" "")
+          else
+            out=$(release-flow verdict --stage publish --needs-file "$RUNNER_TEMP/needs.json" --contracts-job "$CONTRACTS_JOB" --required "$REQUIRED_JOBS" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+            echo "verdict rc=$rc"
+            echo "$out"
+            repos=("" "" "" "" "" "")
+            if jq -e . >/dev/null 2>&1 <<<"$out"; then
+              [ "$rc" -ne 0 ] || [ "$(jq -r .ok <<<"$out")" != "true" ] || ok=true
+              rehearsal=$(jq -r 'if .rehearsal == null then "" else (.rehearsal | tostring) end' <<<"$out")
+              pr=$(jq -r '.pr // empty | tostring' <<<"$out")
+              manifest=$(jq -r '.manifest // empty' <<<"$out")
+              failed_stage=$(jq -r '.failed_stage // empty' <<<"$out")
+              failures=$(jq -r '(.failures // []) | map(tostring) | join("; ")' <<<"$out")
+              for i in 0 1 2 3 4 5; do repos[i]=$(jq -r --argjson i "$i" '.order[$i] // empty' <<<"$out"); done
+            else
+              failures="verdict printed no JSON (rc=$rc)"
+            fi
+          fi
+          if [ "$ok" != true ]; then
+            for i in 0 1 2 3 4 5; do repos[i]=""; done
+          fi
+          {
+            echo "ok=$ok"
+            echo "rehearsal=$rehearsal"
+            echo "pr=$pr"
+            echo "manifest=$manifest"
+            echo "failed_stage=$failed_stage"
+            echo "failures=$failures"
+            for i in 0 1 2 3 4 5; do echo "repo$((i + 1))=${repos[i]}"; done
+          } >> "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------- publish-1
+  publish-1:
+    name: publish-1
+    needs: [verdict]
+    if: ${{ !cancelled() && needs.verdict.outputs.ok == 'true' && needs.verdict.outputs.rehearsal == 'false' && needs.verdict.outputs.repo1 != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55   # an App token lives 60 min from the mint
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.p.outputs.result }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Slot 1 - the repo must be in allowed (validated before the mint)
+        id: slot
+        env:
+          REPO: ${{ needs.verdict.outputs.repo1 }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          [[ "$REPO" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "::error::slot 1 repo '$REPO' is not a repo name"; exit 1; }
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          case ",$ALLOWED," in *",$REPO,"*) ;; *) echo "::error::slot 1 repo '$REPO' is not in allowed"; exit 1 ;; esac
+          out=$(release-flow config-check --allowed "$ALLOWED" --config "$CONFIG")
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (write, THIS slot's repo only)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.slot.outputs.owner }}
+          repositories: ${{ steps.slot.outputs.repo }}
+          permission-contents: write
+          permission-actions: write  # retry: ONLY rerun-failed-jobs on this release's own Deploy run
+
+      - name: Publish the draft, wait for the Deploy, prove it live
+        id: p
+        env:
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          REPO: ${{ steps.slot.outputs.repo }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          out=$(release-flow publish "$MANIFEST" --repo "$REPO" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          echo "result=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # ------------------------------------------------------------------- publish-2
+  publish-2:
+    name: publish-2
+    needs: [verdict, publish-1]
+    if: ${{ !cancelled() && needs.verdict.outputs.ok == 'true' && needs.verdict.outputs.rehearsal == 'false' && needs.verdict.outputs.repo2 != '' && (needs.publish-1.result == 'success' || needs.publish-1.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55   # an App token lives 60 min from the mint
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.p.outputs.result }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Slot 2 - the repo must be in allowed (validated before the mint)
+        id: slot
+        env:
+          REPO: ${{ needs.verdict.outputs.repo2 }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          [[ "$REPO" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "::error::slot 2 repo '$REPO' is not a repo name"; exit 1; }
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          case ",$ALLOWED," in *",$REPO,"*) ;; *) echo "::error::slot 2 repo '$REPO' is not in allowed"; exit 1 ;; esac
+          out=$(release-flow config-check --allowed "$ALLOWED" --config "$CONFIG")
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (write, THIS slot's repo only)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.slot.outputs.owner }}
+          repositories: ${{ steps.slot.outputs.repo }}
+          permission-contents: write
+          permission-actions: write  # retry: ONLY rerun-failed-jobs on this release's own Deploy run
+
+      - name: Publish the draft, wait for the Deploy, prove it live
+        id: p
+        env:
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          REPO: ${{ steps.slot.outputs.repo }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          out=$(release-flow publish "$MANIFEST" --repo "$REPO" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          echo "result=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # ------------------------------------------------------------------- publish-3
+  publish-3:
+    name: publish-3
+    needs: [verdict, publish-1, publish-2]
+    if: ${{ !cancelled() && needs.verdict.outputs.ok == 'true' && needs.verdict.outputs.rehearsal == 'false' && needs.verdict.outputs.repo3 != '' && (needs.publish-1.result == 'success' || needs.publish-1.result == 'skipped') && (needs.publish-2.result == 'success' || needs.publish-2.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55   # an App token lives 60 min from the mint
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.p.outputs.result }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Slot 3 - the repo must be in allowed (validated before the mint)
+        id: slot
+        env:
+          REPO: ${{ needs.verdict.outputs.repo3 }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          [[ "$REPO" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "::error::slot 3 repo '$REPO' is not a repo name"; exit 1; }
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          case ",$ALLOWED," in *",$REPO,"*) ;; *) echo "::error::slot 3 repo '$REPO' is not in allowed"; exit 1 ;; esac
+          out=$(release-flow config-check --allowed "$ALLOWED" --config "$CONFIG")
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (write, THIS slot's repo only)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.slot.outputs.owner }}
+          repositories: ${{ steps.slot.outputs.repo }}
+          permission-contents: write
+          permission-actions: write  # retry: ONLY rerun-failed-jobs on this release's own Deploy run
+
+      - name: Publish the draft, wait for the Deploy, prove it live
+        id: p
+        env:
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          REPO: ${{ steps.slot.outputs.repo }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          out=$(release-flow publish "$MANIFEST" --repo "$REPO" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          echo "result=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # ------------------------------------------------------------------- publish-4
+  publish-4:
+    name: publish-4
+    needs: [verdict, publish-1, publish-2, publish-3]
+    if: ${{ !cancelled() && needs.verdict.outputs.ok == 'true' && needs.verdict.outputs.rehearsal == 'false' && needs.verdict.outputs.repo4 != '' && (needs.publish-1.result == 'success' || needs.publish-1.result == 'skipped') && (needs.publish-2.result == 'success' || needs.publish-2.result == 'skipped') && (needs.publish-3.result == 'success' || needs.publish-3.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55   # an App token lives 60 min from the mint
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.p.outputs.result }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Slot 4 - the repo must be in allowed (validated before the mint)
+        id: slot
+        env:
+          REPO: ${{ needs.verdict.outputs.repo4 }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          [[ "$REPO" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "::error::slot 4 repo '$REPO' is not a repo name"; exit 1; }
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          case ",$ALLOWED," in *",$REPO,"*) ;; *) echo "::error::slot 4 repo '$REPO' is not in allowed"; exit 1 ;; esac
+          out=$(release-flow config-check --allowed "$ALLOWED" --config "$CONFIG")
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (write, THIS slot's repo only)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.slot.outputs.owner }}
+          repositories: ${{ steps.slot.outputs.repo }}
+          permission-contents: write
+          permission-actions: write  # retry: ONLY rerun-failed-jobs on this release's own Deploy run
+
+      - name: Publish the draft, wait for the Deploy, prove it live
+        id: p
+        env:
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          REPO: ${{ steps.slot.outputs.repo }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          out=$(release-flow publish "$MANIFEST" --repo "$REPO" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          echo "result=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # ------------------------------------------------------------------- publish-5
+  publish-5:
+    name: publish-5
+    needs: [verdict, publish-1, publish-2, publish-3, publish-4]
+    if: ${{ !cancelled() && needs.verdict.outputs.ok == 'true' && needs.verdict.outputs.rehearsal == 'false' && needs.verdict.outputs.repo5 != '' && (needs.publish-1.result == 'success' || needs.publish-1.result == 'skipped') && (needs.publish-2.result == 'success' || needs.publish-2.result == 'skipped') && (needs.publish-3.result == 'success' || needs.publish-3.result == 'skipped') && (needs.publish-4.result == 'success' || needs.publish-4.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55   # an App token lives 60 min from the mint
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.p.outputs.result }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Slot 5 - the repo must be in allowed (validated before the mint)
+        id: slot
+        env:
+          REPO: ${{ needs.verdict.outputs.repo5 }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          [[ "$REPO" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "::error::slot 5 repo '$REPO' is not a repo name"; exit 1; }
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          case ",$ALLOWED," in *",$REPO,"*) ;; *) echo "::error::slot 5 repo '$REPO' is not in allowed"; exit 1 ;; esac
+          out=$(release-flow config-check --allowed "$ALLOWED" --config "$CONFIG")
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (write, THIS slot's repo only)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.slot.outputs.owner }}
+          repositories: ${{ steps.slot.outputs.repo }}
+          permission-contents: write
+          permission-actions: write  # retry: ONLY rerun-failed-jobs on this release's own Deploy run
+
+      - name: Publish the draft, wait for the Deploy, prove it live
+        id: p
+        env:
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          REPO: ${{ steps.slot.outputs.repo }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          out=$(release-flow publish "$MANIFEST" --repo "$REPO" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          echo "result=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # ------------------------------------------------------------------- publish-6
+  publish-6:
+    name: publish-6
+    needs: [verdict, publish-1, publish-2, publish-3, publish-4, publish-5]
+    if: ${{ !cancelled() && needs.verdict.outputs.ok == 'true' && needs.verdict.outputs.rehearsal == 'false' && needs.verdict.outputs.repo6 != '' && (needs.publish-1.result == 'success' || needs.publish-1.result == 'skipped') && (needs.publish-2.result == 'success' || needs.publish-2.result == 'skipped') && (needs.publish-3.result == 'success' || needs.publish-3.result == 'skipped') && (needs.publish-4.result == 'success' || needs.publish-4.result == 'skipped') && (needs.publish-5.result == 'success' || needs.publish-5.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55   # an App token lives 60 min from the mint
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.p.outputs.result }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Slot 6 - the repo must be in allowed (validated before the mint)
+        id: slot
+        env:
+          REPO: ${{ needs.verdict.outputs.repo6 }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          [[ "$REPO" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "::error::slot 6 repo '$REPO' is not a repo name"; exit 1; }
+          [[ "$ALLOWED" =~ ^[a-z0-9][a-z0-9._-]*(,[a-z0-9][a-z0-9._-]*)*$ ]] || { echo "::error::allowed '$ALLOWED' is not a comma list of repo names"; exit 1; }
+          [[ "$CONFIG" =~ ^[A-Za-z0-9._/-]+$ && "$CONFIG" != *..* && "$CONFIG" != /* ]] || { echo "::error::config '$CONFIG' is not a plain relative path"; exit 1; }
+          case ",$ALLOWED," in *",$REPO,"*) ;; *) echo "::error::slot 6 repo '$REPO' is not in allowed"; exit 1 ;; esac
+          out=$(release-flow config-check --allowed "$ALLOWED" --config "$CONFIG")
+          echo "owner=$(jq -r .owner <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (write, THIS slot's repo only)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+          owner: ${{ steps.slot.outputs.owner }}
+          repositories: ${{ steps.slot.outputs.repo }}
+          permission-contents: write
+          permission-actions: write  # retry: ONLY rerun-failed-jobs on this release's own Deploy run
+
+      - name: Publish the draft, wait for the Deploy, prove it live
+        id: p
+        env:
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          MANIFEST: ${{ needs.verdict.outputs.manifest }}
+          REPO: ${{ steps.slot.outputs.repo }}
+          ALLOWED: ${{ inputs.allowed }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -uo pipefail
+          out=$(release-flow publish "$MANIFEST" --repo "$REPO" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          echo "$out"
+          echo "result=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # -------------------------------------------------------------------- report
+  report:
+    name: report
+    needs: [verdict, publish-1, publish-2, publish-3, publish-4, publish-5, publish-6]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the release-flow CLI at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .release-flow-src
+          persist-credentials: false
+
+      - name: Pin the CLI by content and put it on PATH
+        run: |
+          set -euo pipefail
+          got=$(git -C .release-flow-src rev-parse HEAD:actions/release-flow)
+          [ "$got" = "$RELEASE_FLOW_TREE" ] || { echo "::error::actions/release-flow at $WORKFLOW_VERSION is tree $got, but this workflow pins $RELEASE_FLOW_TREE"; exit 1; }
+          echo "$GITHUB_WORKSPACE/.release-flow-src/actions/release-flow" >> "$GITHUB_PATH"
+
+      - name: Summarise, and comment on the release PR (never in a rehearsal)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ inputs.needs }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          V_RESULT: ${{ needs.verdict.result }}
+          V_OK: ${{ needs.verdict.outputs.ok }}
+          V_REHEARSAL: ${{ needs.verdict.outputs.rehearsal }}
+          V_PR: ${{ needs.verdict.outputs.pr }}
+          V_STAGE: ${{ needs.verdict.outputs.failed_stage }}
+          V_FAILURES: ${{ needs.verdict.outputs.failures }}
+          REPO_1: ${{ needs.verdict.outputs.repo1 }}
+          P_1: ${{ needs.publish-1.result }}:${{ needs.publish-1.outputs.result }}
+          REPO_2: ${{ needs.verdict.outputs.repo2 }}
+          P_2: ${{ needs.publish-2.result }}:${{ needs.publish-2.outputs.result }}
+          REPO_3: ${{ needs.verdict.outputs.repo3 }}
+          P_3: ${{ needs.publish-3.result }}:${{ needs.publish-3.outputs.result }}
+          REPO_4: ${{ needs.verdict.outputs.repo4 }}
+          P_4: ${{ needs.publish-4.result }}:${{ needs.publish-4.outputs.result }}
+          REPO_5: ${{ needs.verdict.outputs.repo5 }}
+          P_5: ${{ needs.publish-5.result }}:${{ needs.publish-5.outputs.result }}
+          REPO_6: ${{ needs.verdict.outputs.repo6 }}
+          P_6: ${{ needs.publish-6.result }}:${{ needs.publish-6.outputs.result }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$NEEDS" > "$RUNNER_TEMP/needs.json"
+          d=$(jq -r '.drafts.outputs.drafts // ""' "$RUNNER_TEMP/needs.json" 2>/dev/null || true)
+          [ -n "$d" ] || d="{}"
+          printf '%s' "$d" > "$RUNNER_TEMP/drafts.json"
+          pr="$V_PR"
+          [ -n "$pr" ] || pr=$(jq -r '.plan.outputs.pr // ""' "$RUNNER_TEMP/needs.json" 2>/dev/null || true)
+          rehearsal="$V_REHEARSAL"
+          [ -n "$rehearsal" ] || rehearsal=$(jq -r '.plan.outputs.rehearsal // ""' "$RUNNER_TEMP/needs.json" 2>/dev/null || true)
+          stage="all stages"; result=success; detail=""
+          if [ "$V_OK" != "true" ]; then
+            stage="${V_STAGE:-verdict}"; result=failure
+            detail+="verdict: $V_RESULT, not ok${V_FAILURES:+ ($V_FAILURES)}"$'\n'
+          fi
+          for i in 1 2 3 4 5 6; do
+            repo_var="REPO_$i"; p_var="P_$i"
+            repo="${!repo_var}"; p="${!p_var}"
+            [ -n "$repo" ] || repo="slot $i"
+            detail+="$repo: $p"$'\n'
+            # Anything but success/skipped (failure, cancelled, ...) is a failed publish.
+            case "$p" in
+              success:*|skipped:*) ;;
+              *) if [ "$result" = success ]; then stage="publish $repo"; result=failure; fi ;;
+            esac
+          done
+          if [ "$rehearsal" = "true" ]; then
+            detail+="rehearsal: no writes"$'\n'
+            if [ "$result" = success ]; then stage="rehearsal"; fi
+          fi
+          body=$(release-flow report --stage "$stage" --result "$result" --detail "$detail" --drafts "$RUNNER_TEMP/drafts.json")
+          body+=$'\n\n'"Run: $RUN_URL"
+          printf '%s\n' "$body" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$pr" ] && [ "$rehearsal" != "true" ]; then
+            [[ "$pr" =~ ^[0-9]+$ ]] || { echo "::error::pr '$pr' is not a PR number"; exit 1; }
+            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "$body"
+          fi

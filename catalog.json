@@ -79,6 +79,14 @@
       },
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/refresh-api-spec"
+    },
+    "release-flow": {
+      "action": "actions/release-flow",
+      "inputs": {},
+      "name": "Release flow CLI",
+      "outputs": {},
+      "runs": "composite",
+      "uses": "Just-Git-Dev/reusable-workflows/actions/release-flow"
     }
   },
   "workflows": {
@@ -2646,6 +2654,297 @@
         }
       },
       "workflow": "promote-image.yml"
+    },
+    "release-drafts": {
+      "inputs": {
+        "allowed": {
+          "default": null,
+          "description": "Comma list of the service repos the App may write",
+          "required": true,
+          "type": "string"
+        },
+        "app-id": {
+          "default": null,
+          "description": "The release GitHub App id (not secret)",
+          "required": true,
+          "type": "string"
+        },
+        "config": {
+          "default": "releases/services.json",
+          "description": "Path of the release config in the root repo",
+          "required": false,
+          "type": "string"
+        },
+        "contracts-job": {
+          "default": "contracts",
+          "description": "The caller's contract job id; it may be skipped only when checks is []",
+          "required": false,
+          "type": "string"
+        },
+        "environment": {
+          "default": "release",
+          "description": "The caller environment holding the RELEASE_APP_KEY secret",
+          "required": false,
+          "type": "string"
+        },
+        "needs": {
+          "default": null,
+          "description": "toJSON(needs) from the calling job",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "drafts": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "verdict": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Release drafts (reusable)",
+      "outputs": {
+        "drafts": "JSON {repo: release_id} ({repo: 'rehearsal'} in a rehearsal)"
+      },
+      "path": ".github/workflows/release-drafts.yml",
+      "secrets": {},
+      "workflow": "release-drafts.yml"
+    },
+    "release-plan": {
+      "inputs": {
+        "allowed": {
+          "default": null,
+          "description": "Comma list of service repos the App may write. Hard-code it in the caller.",
+          "required": true,
+          "type": "string"
+        },
+        "app-id": {
+          "default": null,
+          "description": "The release GitHub App id (not secret), e.g. vars.RELEASE_APP_ID",
+          "required": true,
+          "type": "string"
+        },
+        "config": {
+          "default": "releases/services.json",
+          "description": "Path of the release config in the root repo",
+          "required": false,
+          "type": "string"
+        },
+        "environment": {
+          "default": "release",
+          "description": "The caller environment holding the RELEASE_APP_KEY secret",
+          "required": false,
+          "type": "string"
+        },
+        "manifest": {
+          "default": "",
+          "description": "Rehearsal only: the manifest path to rehearse. Must be empty for a real release.",
+          "required": false,
+          "type": "string"
+        },
+        "pr-check-name": {
+          "default": "release-pr / release-pr",
+          "description": "The check run the merged release PR must carry",
+          "required": false,
+          "type": "string"
+        },
+        "pr-check-workflow": {
+          "default": ".github/workflows/release-pr.yml",
+          "description": "The workflow file that check run must come from",
+          "required": false,
+          "type": "string"
+        },
+        "read-only-repos": {
+          "default": "",
+          "description": "Comma list of extra repos the App may only read (the consumers_only repos)",
+          "required": false,
+          "type": "string"
+        },
+        "rehearsal": {
+          "default": false,
+          "description": "Run the whole flow with zero writes",
+          "required": false,
+          "type": "boolean"
+        },
+        "release-workflow": {
+          "default": "release.yml",
+          "description": "File name of the caller's release workflow (for the concurrent-run guard)",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "plan": {
+          "conditional": false,
+          "declared_permissions": {
+            "actions": "read",
+            "checks": "read",
+            "contents": "read",
+            "pull-requests": "read"
+          }
+        },
+        "resolve": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "service-gates": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Release plan (reusable)",
+      "outputs": {
+        "checks": "JSON list for a matrix include; [] when no contract involves a listed service",
+        "manifest": "The manifest path",
+        "order": "Listed repos in publish order, comma-separated",
+        "pr": "The release PR number ('' in a rehearsal)",
+        "rehearsal": "'true' or 'false'",
+        "resolved": "JSON {repo: {ref, version, listed, image, live_ref}} for every service"
+      },
+      "path": ".github/workflows/release-plan.yml",
+      "secrets": {},
+      "workflow": "release-plan.yml"
+    },
+    "release-pr-check": {
+      "inputs": {
+        "allowed": {
+          "default": null,
+          "description": "Comma list of service repos a manifest may name",
+          "required": true,
+          "type": "string"
+        },
+        "config": {
+          "default": "releases/services.json",
+          "description": "Path of the release config in the root repo",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "release-pr": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Release PR check (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/release-pr-check.yml",
+      "secrets": {},
+      "workflow": "release-pr-check.yml"
+    },
+    "release-publish": {
+      "inputs": {
+        "allowed": {
+          "default": null,
+          "description": "Comma list of the service repos the App may write",
+          "required": true,
+          "type": "string"
+        },
+        "app-id": {
+          "default": null,
+          "description": "The release GitHub App id (not secret)",
+          "required": true,
+          "type": "string"
+        },
+        "config": {
+          "default": "releases/services.json",
+          "description": "Path of the release config in the root repo",
+          "required": false,
+          "type": "string"
+        },
+        "contracts-job": {
+          "default": "contracts",
+          "description": "The caller's contract job id; it may be skipped only when checks is []",
+          "required": false,
+          "type": "string"
+        },
+        "environment": {
+          "default": "release",
+          "description": "The caller environment holding the RELEASE_APP_KEY secret",
+          "required": false,
+          "type": "string"
+        },
+        "needs": {
+          "default": null,
+          "description": "toJSON(needs) from the calling job; must include plan and drafts",
+          "required": true,
+          "type": "string"
+        },
+        "required-jobs": {
+          "default": "plan,drafts",
+          "description": "Comma list of job ids that must be present (and succeeded) in needs",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "publish-1": {
+          "conditional": true,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "publish-2": {
+          "conditional": true,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "publish-3": {
+          "conditional": true,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "publish-4": {
+          "conditional": true,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "publish-5": {
+          "conditional": true,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "publish-6": {
+          "conditional": true,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        },
+        "report": {
+          "conditional": true,
+          "declared_permissions": {
+            "contents": "read",
+            "pull-requests": "write"
+          }
+        },
+        "verdict": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Release publish (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/release-publish.yml",
+      "secrets": {},
+      "workflow": "release-publish.yml"
     },
     "retire-gar-packages": {
       "inputs": {

@@ -1,0 +1,1123 @@
+{
+ "components": {
+  "schemas": {
+   "Error": {
+    "description": "Standard error envelope. **Wire shape note (applies to every\nerror response in this spec):** GoFr nests the handler's error\nobject under a top-level `\"error\"` key, and the human-readable\ntext travels in a field named `\"error\"` \u2014 NOT `\"message\"`\n(`apiErr.Response()` in `internal/httpapi/types.go`). The actual\nbytes on the wire are:\n\n    {\"error\": {\"code\": \"<slug>\", \"error\": \"<human text>\"}}\n\nThe `message` property below is the *logical* hint field; read it\nfrom `error.error` when consuming raw HTTP. Extra sibling fields\n(e.g. the 412 precondition envelopes' `mfa_challenge_token`,\n`revocation_token`, `active_sessions`, `tenant_id`) are nested\nunder the same top-level `\"error\"` object.\n\n`code` is a stable machine-readable\nslug; `message` is a human-readable hint. Common 401 codes\nemitted by the auth surface:\n\n- `invalid_credentials` \u2014 bad password / token / OTP.\n- `invalid_audience` \u2014 id-token `aud` not registered (ADR-046).\n- `invalid_token` \u2014 malformed / expired bearer.\n- `wrong_scope` \u2014 bearer present but wrong class\n  (e.g. user JWT where platform is required).\n- `bff_bearer_required` \u2014 every zone requires the BFF escort (ADR-088)\n  and the inbound platform bearer is missing. Emitted on\n  `POST /auth/token` + `POST /auth/logout`. NOTE: `POST /auth/login`\n  requires a platform bearer **unconditionally** (ADR-047 \u00a72 \u2014 it\n  gates via the platform-token check, which runs *before* the BFF\n  gate), so a **bearerless `/auth/login` returns `401 unauthorized`\n  (\"missing bearer\"), never `bff_bearer_required`**. The\n  `bff_bearer_required` code is only reachable on\n  `/auth/token` / `/auth/logout`.\n- `key_class_mismatch` \u2014 declared `grant_type` on\n  `/auth/login` (`api_key` vs `platform_api_key`) doesn't\n  match the api-key's class (ADR-051).\n- `user_not_invited` \u2014 known user but not a member of any\n  tenant in the resolved zone. (Returned as **403**, not 401 \u2014\n  listed here for discoverability.)\n- `escort_suspended` \u2014 **403**, not 401 (listed here for\n  discoverability): the `/auth/*` escort (the platform bearer the\n  partner's BFF presents) is refused because the account it was\n  minted for is suspended or deactivated (ADR-104 R-d). Distinct from\n  `user_suspended`, which names the END USER's row; this one means\n  the partner's own escort credential has to be replaced.\n- `refresh_invalid` \u2014 on `POST /auth/token` only: the presented\n  refresh token is expired, revoked, or reuse-detected. Terminal\n  for the caller \u2014 re-authentication is required (no retry helps).\n",
+    "properties": {
+     "code": {
+      "example": "user_not_invited",
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "LoginRequest": {
+    "description": "ADR-051 (v0.7.0): `/auth/login` is the single\ncredential-exchange endpoint. The body's `grant_type`\ndiscriminates which credentials are presented and which\nsubject class the issued tokens carry.\n\nInbound bearer rules (the handler dispatches on `grant_type`\nbefore applying any bearer gate):\n\n- `provider_token`, `password`, `otp` \u2014 **user\n  grants**. Require `Authorization: Bearer <platform access\n  token>` (the zone's BFF / partner-backend gate, ADR-041 +\n  ADR-047). Zone is resolved from the bearer's `zone_id`\n  claim; body `zone_id` is ignored.\n- `api_key`, `platform_api_key` \u2014 **api-key grants**.\n  Unauthenticated; the raw API key travels in the body. Any\n  inbound bearer is rejected. The api-key's class must match\n  the declared `grant_type`; mismatch \u2192 401\n  `key_class_mismatch`.\n\nThe legacy `method` selector (pre-ADR-051) is **removed** at\nits announced `Sunset: 2026-08-01`. A body carrying only\n`method` now 400s `missing_grant_type`; send `grant_type`\n(+ `provider` for `provider_token`). `grant_type=password` is\n**IMPLEMENTED as of ADR-104** \u2014 it filled the ADR-042 slot and no\nlonger 400s `unknown_method`.\n\nADR-046 (still applies under `provider_token`/`google`):\n`tenant_id` is required on tenant-scoped origins so the\nverifier can pick the tenant's per-tenant `client_id`s (plus\nthe platform-default list) to validate `aud`. On zone-root\norigins (e.g. `example.test` or a platform's admin\nconsole apex) discovery returns `tenant_id: null` and the\nfield is OPTIONAL \u2014 zone-scoped `identity_providers`\nclient_ids gate the sign-in instead (issuer v0.27.2).\n",
+    "discriminator": {
+     "mapping": {
+      "api_key": "#/components/schemas/LoginRequestAPIKey",
+      "otp": "#/components/schemas/LoginRequestOTP",
+      "password": "#/components/schemas/LoginRequestPassword",
+      "platform_api_key": "#/components/schemas/LoginRequestPlatformAPIKey",
+      "provider_token": "#/components/schemas/LoginRequestProviderToken",
+      "urn:ietf:params:oauth:grant-type:token-exchange": "#/components/schemas/LoginRequestTokenExchange",
+      "user_api_key": "#/components/schemas/LoginRequestUserAPIKey"
+     },
+     "propertyName": "grant_type"
+    },
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/LoginRequestProviderToken"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestPassword"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestOTP"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestAPIKey"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestPlatformAPIKey"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestTokenExchange"
+     }
+    ],
+    "properties": {
+     "custom_claims": {
+      "additionalProperties": true,
+      "description": "Optional partner-supplied claims, gated by\n`zones.config.access_token_custom_claim_keys`\n(SDK SPEC \u00a74.2). Only meaningful on user grants when an\naccess token is minted on the first call (single-tenant,\nno MFA). Otherwise pass on `POST /auth/token`.\n",
+      "type": "object"
+     },
+     "grant_type": {
+      "enum": [
+       "provider_token",
+       "password",
+       "otp",
+       "api_key",
+       "platform_api_key",
+       "user_api_key",
+       "urn:ietf:params:oauth:grant-type:token-exchange"
+      ],
+      "type": "string"
+     },
+     "role_permissions": {
+      "description": "**ADR-100 D16 \u2014 the narrowing operand for a user-API-key token.**\nThe permissions the holder's ROLE confers, in YOUR vocabulary, used\nto narrow that token's `permissions_cap` claim to THIS org.\n\nSupply it from your own role -> permission map. ZoneID stores no\npartner catalog and will not resolve it for you (D17): the strings\nare opaque here, and the issuer does not fall back to\n`zone_roles.permissions` even for `aud=zoneid`, so the claim stays\na pure function of the request.\n\n**Caller-ASSERTED and unverified**, audited as such \u2014 the convention\n`source_org_id` already uses. That is safe for a stated reason, not\nby assumption: the claim minted is\n`stored_cap INTERSECT role_permissions`, and `A INTERSECT B` is a\nsubset of `A` for every `B`, so a wrong or hostile list can only\nNARROW, never widen past the stored cap. Worst case is exactly the\npre-ADR-100 behaviour.\n\n**OPTIONAL. Omitted / `null` = not supplied** \u2014 the stored cap\ntravels unnarrowed (D6), which keeps every existing caller working.\n**An empty array is NOT the same thing**: it says \"this role confers\nnothing here\" and produces a `403` (below).\n\n**Ignored for an UNCAPPED key** (D7), whose claim stays absent\nwhatever you send \u2014 uncapped is delivered by omission and that\nmechanism does not change. Ignored, too, for any token that is not\nkey-derived: there is no cap to intersect with.\n\n\u26a0\ufe0f **An empty INTERSECTION is `403 no_permissions_in_org`, never an\nempty claim** (D8). The two are indistinguishable to a reader of the\ntoken, and `[]` on the claim side already means \"capped to nothing\",\nwhich the issuer must never emit. The narrowing is **per-org**, so a\nmulti-org key mints in one org and is refused in another \u2014 the error\nnames the org, or it reads as \"the key is broken\".\n",
+      "items": {
+       "type": "string"
+      },
+      "nullable": true,
+      "type": "array"
+     }
+    },
+    "required": [
+     "grant_type"
+    ],
+    "type": "object"
+   },
+   "LoginRequestAPIKey": {
+    "description": "Service api-key exchange. **No inbound bearer** \u2014 the raw\nAPI key travels in `api_key`. The key must have been issued\nas a service key; if it was issued as a platform key the\nserver returns 401 `key_class_mismatch`.\n",
+    "example": {
+     "api_key": "rk_svc_live_AbCdEf012345",
+     "grant_type": "api_key"
+    },
+    "properties": {
+     "api_key": {
+      "description": "The raw service API key (e.g. `rk_svc_...`).",
+      "type": "string"
+     },
+     "grant_type": {
+      "enum": [
+       "api_key"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "api_key"
+    ],
+    "type": "object"
+   },
+   "LoginRequestOTP": {
+    "description": "OTP login (ADR-071; direct cutover from the former\n`otp` grant). Under ADR-071 this authenticates a\n**service account** (`users.kind=service`) via a `view_bff` OTP\nan owner/admin minted for it (`POST /auth/otp/issue`\n`purpose=login`). The `kind \u00d7 mode` gate rejects a `kind=human`\nsubject here (humans elevate via TOTP, never an owner-minted OTP)\n\u2014 failure collapses to `invalid_credentials` (no enumeration).\nGated by `zones.config.otp_login_enabled`. Inbound bearer:\nplatform access JWT.\n",
+    "example": {
+     "grant_type": "otp",
+     "identifier": "sync-bot@dealer-a.example",
+     "presented": "038412"
+    },
+    "properties": {
+     "grant_type": {
+      "enum": [
+       "otp"
+      ],
+      "type": "string"
+     },
+     "identifier": {
+      "description": "The service account's login handle (email/phone). Resolved\nagainst the zone's user lookup. Failure \u2192 `invalid_credentials`\n(no enumeration).\n",
+      "type": "string"
+     },
+     "presented": {
+      "description": "The OTP value minted for the service account.",
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Optional tenant pin (same semantics as `password`).",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "identifier",
+     "presented"
+    ],
+    "type": "object"
+   },
+   "LoginRequestPassword": {
+    "description": "**ADR-104 \u2014 native username/password, tenant-scoped.** Fills the\nADR-042 u/p slot, which was reserved on the wire and unimplemented\nuntil this release. Inbound bearer: platform access JWT.\n\nCredentials are Argon2id (issuer-side; no SDK ever hashes a password).\nA `kind=service` account may NOT hold one \u2014 its lane is `api_key` and\n`otp`/`view_bff` (ADR-071); a service account with a human-chosen\nsecret is a shared password by another name.\n\nEvery existing gate applies and none is added: MFA floors\n(ADR-059/075), Kind x Method and App x Method eligibility (ADR-072),\n`login_attempts` rate limiting, session classes, ADR-004's tenant lock.\n",
+    "example": {
+     "grant_type": "password",
+     "identifier": "alice",
+     "presented": "correct-horse-battery-staple",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+    },
+    "properties": {
+     "custom_claims": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "grant_type": {
+      "enum": [
+       "password"
+      ],
+      "type": "string"
+     },
+     "identifier": {
+      "description": "Identifier the user logs in with \u2014 email, E.164 phone, or\n**username** (ADR-104). Resolution failure surfaces as\n`invalid_credentials` (no enumeration).\n\nThe identifier is CLASSIFIED ONCE, never tried as several kinds in\nturn: contains `@` -> email; matches E.164 -> phone; matches the\nusername grammar -> username; otherwise the login fails having\nqueried nothing. A fallthrough would make a string that is a valid\nusername AND a valid something-else resolve differently depending\non which store answered first \u2014 a nondeterministic identity.\n\n**Username grammar** (case-FOLDED, 3-32 chars):\n`^[a-z0-9]([a-z0-9._-]{1,30})[a-z0-9]$`. No `@`, no `+`, not\nall-digits \u2014 the three classes are disjoint by construction. There\nis no per-zone username policy knob.\n",
+      "type": "string"
+     },
+     "new_password": {
+      "description": "**Change at sign-in (ADR-104 \u00a7 Amendment 2026-10-09, R14-R21; spec\n`0.53.0`).** Send it ONLY after a login answered\n`403 password_must_change` \u2014 the credential was set by an\nadministrator and must be replaced before it authenticates. One\ncall then replaces the password and signs in.\n\n- Validated as input before anything else, and never counted by the\n  per-identifier throttle: `400 password_too_short` (< 12 bytes),\n  `400 password_too_long` (> 1024), `400 password_unchanged` (equal\n  to `presented`). An empty string is treated as absent.\n- `presented` wrong: `401 invalid_credentials`, as without this\n  field; nothing is stored.\n- Sent when the credential is NOT must-change:\n  `400 password_change_not_required`, decided only after\n  `presented` verifies. Nothing changes and no session is created;\n  change a self-chosen password with `PUT /me/password`.\n- Identifier throttled: `429 login_throttled`; nothing changes.\n- Success: the new password is stored, the obligation is cleared,\n  EVERY other session of this membership is revoked, the holder is\n  notified (ADR-079, no link, no code), and the response is an\n  ordinary `200` login \u2014 MFA gates apply unchanged, so\n  `tenants[].mfa_required` may still withhold the access token.\n- A `5xx` after the password was stored leaves the NEW password in\n  force: retry with `presented=<new>` and no `new_password`.\n\nIgnored (with a `Warning: 299`) on every other `grant_type`.\n",
+      "format": "password",
+      "type": "string"
+     },
+     "presented": {
+      "description": "The presented password. Minimum **12** bytes, maximum **1024**\n(a KDF-cost bound, not a policy opinion). No composition rules.\nWhen `new_password` is sent, this is the CURRENT password.\n",
+      "format": "password",
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Optional for email/phone \u2014 when set and the user is a member, the\nresponse is single-tenant and an access token is minted on the\nfirst call.\n\n**Load-bearing for a USERNAME login.** Usernames are unique per\nTENANT, not per zone (`alice` in two orgs is routinely two\npeople), so a username alone does not identify a principal. The\ntenant is resolved as: this field if present, else the tenant\nderived from the request's subdomain / `Origin`. **Explicit wins**,\nincluding when the two disagree \u2014 a partner BFF is server-side and\nits Origin is its own, not the end user's org, so an Origin-wins\nrule would make BFF-fronted username login unimplementable without\none host per org.\n\nThis is a hint about WHERE TO LOOK, never about who the caller is:\nthe resolved user's own `tenant_id` governs everything downstream,\nand the password still has to be right in that namespace.\n\nNeither source yielding a tenant on a username login is\n`400 tenant_required` \u2014 a NAMED code, not a generic credential\nfailure, because it is a caller-integration mistake rather than a\nwrong password and the two must not look alike in your logs. It\nleaks nothing: it is answerable before any identifier lookup runs.\n",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "identifier",
+     "presented"
+    ],
+    "type": "object"
+   },
+   "LoginRequestPlatformAPIKey": {
+    "description": "Platform api-key exchange (ADR-041 \u00a71, \u00a73). **No inbound\nbearer** \u2014 the raw API key travels in `api_key`. The key\nmust have been issued as a platform key; if it was issued\nas a service key the server returns 401\n`key_class_mismatch`. The platform access token returned\nhere is what callers present as the inbound bearer for\nthe user-facing grants (`provider_token`, `password`,\n`otp`).\n",
+    "example": {
+     "api_key": "rk_plat_live_AbCdEf012345",
+     "grant_type": "platform_api_key"
+    },
+    "properties": {
+     "api_key": {
+      "description": "The raw platform API key (e.g. `rk_plat_...`).",
+      "type": "string"
+     },
+     "grant_type": {
+      "enum": [
+       "platform_api_key"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "api_key"
+    ],
+    "type": "object"
+   },
+   "LoginRequestProviderToken": {
+    "description": "Exchange a third-party id-token (Google, Firebase phone\nauth, etc.) for a ZoneID refresh token. Inbound bearer:\nplatform access JWT.\n",
+    "example": {
+     "grant_type": "provider_token",
+     "provider": "google",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00",
+     "token": "eyJhbGciOiJSUzI1NiIs..."
+    },
+    "properties": {
+     "custom_claims": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "grant_type": {
+      "enum": [
+       "provider_token"
+      ],
+      "type": "string"
+     },
+     "provider": {
+      "description": "`google`, `firebase`, `microsoft`, `apple`, and `facebook`\nhave working direct OIDC verifiers. `firebase_phone` is a\nlegacy alias for the Firebase verifier. `facebook` accepts\nonly the OIDC ID-token (\"Limited Login\") flavor \u2014 the classic\naccess token is not supported (it needs an app secret ZoneID\ndoes not store). `github` is post-v1 and listed so the schema\ndocuments the forward roadmap. The accepted `aud` (client_id;\nfor `apple` the Services ID, for `facebook` the app id) is\nresolved per zone/tenant from identity_providers; for\n`firebase` the configured value is the Firebase project id.\n`tenant_id` is optional for every provider on a zone-root\norigin (e.g. example.test or a partner admin console),\nwhere zone-scoped client_ids gate sign-in with no tenant pin.\n",
+      "enum": [
+       "google",
+       "firebase",
+       "firebase_phone",
+       "microsoft",
+       "apple",
+       "facebook",
+       "github"
+      ],
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Optional. Pins membership resolution to one tenant; required\nonly when a partner end-user origin resolves to a specific\ntenant and the response must be single-tenant. On a zone-root\norigin it is absent \u2014 zone-scoped client_ids gate sign-in\n(v0.27.2; ADR-046). When set, the response is single-tenant and\nan access token is minted on the first call.\n",
+      "format": "uuid",
+      "type": "string"
+     },
+     "token": {
+      "description": "The provider-issued id-token to exchange.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "provider",
+     "token"
+    ],
+    "type": "object"
+   },
+   "LoginRequestTokenExchange": {
+    "description": "Workload identity federation exchange (ADR-057). **No inbound\nbearer** \u2014 the partner workload's ambient OIDC token (GCP\nmetadata server or GitHub Actions) travels in `subject_token`.\nThe issuer validates it against the RI-pinned JWKS for its\nissuer, enforces `aud` (the global RI audience) + `iat`-freshness\n+ one-time-use, then selects the unique `federation_binding`\nwhose `match_claims` all hold and mints the **same**\n`class=\"platform\"` session the `platform_api_key` grant returns \u2014\nincluding ADR-089's shape: an access token with **no**\n`refresh_token`. Re-mint by exchanging a fresh assertion.\n401 on: unknown issuer, invalid/stale/replayed assertion, audience\nmismatch, or no matching binding.\n",
+    "example": {
+     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+     "subject_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIn0.sig",
+     "subject_token_type": "urn:ietf:params:oauth:token-type:jwt"
+    },
+    "properties": {
+     "grant_type": {
+      "enum": [
+       "urn:ietf:params:oauth:grant-type:token-exchange"
+      ],
+      "type": "string"
+     },
+     "subject_token": {
+      "description": "The workload OIDC JWT (Google ID token or GitHub Actions OIDC token).",
+      "type": "string"
+     },
+     "subject_token_type": {
+      "description": "Optional; defaults to the JWT token-type URN when omitted.",
+      "enum": [
+       "urn:ietf:params:oauth:token-type:jwt"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "subject_token"
+    ],
+    "type": "object"
+   },
+   "LoginResponse": {
+    "description": "`/auth/login` response. Three success shapes. The shape is\nselected by `subject_type` and, for users, by tenant\ncardinality + MFA state:\n\n1. **User, fully resolved** (`subject_type:\"user\"`,\n   single-tenant, no MFA pending): refresh + access +\n   tenant_id + role + expires_in + tenants[] + user.\n2. **User, multi-tenant OR MFA pending**\n   (`subject_type:\"user\"`): refresh + tenants[] + user;\n   caller picks a tenant via `POST /auth/token`. No\n   access_token / tenant_id / role / expires_in.\n3. **Api-key grants** (`subject_type:\"service\"` |\n   `\"platform\"` via `grant_type=api_key` /\n   `platform_api_key`) and the token-exchange grant:\n   access + expires_in + `\"tenants\": []` (present but always\n   empty). **No `refresh_token`** \u2014 ADR-089: the credential\n   itself is re-presentable, so a refresh token would be a\n   weaker duplicate of one the caller already holds, and the\n   field is omitted entirely. Re-mint by calling this\n   endpoint again. No tenant_id, no role \u2014 the session is\n   pinned to the api-key's bot user / admin tenant.\n   NOTE: a **service-account OTP login**\n   (`grant_type=otp` resolving a `kind=service` user,\n   ADR-071) is *user-shaped*: it returns\n   `subject_type:\"service\"` **with** tenants[] / tenant_id /\n   role / user \u2014 shapes 1/2 with `subject_type:\"service\"`.\n\n**MFA is NOT signalled here.** There is no\n`status:\"mfa_required\"` login shape \u2014 every successful\ncredential exchange returns `status:\"ok\"` **including a\nrefresh token** even when MFA is still pending. An\nMFA-requiring membership is flagged per-tenant via\n`tenants[].mfa_required` (which suppresses the shape-1\naccess-token fast path), and the `412 mfa_required`\nprecondition (`PreconditionMFA`) is raised later, on the\n`POST /auth/token` tenant mint.\n",
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/LoginResponseUserResolved"
+     },
+     {
+      "$ref": "#/components/schemas/LoginResponseUserMultiTenant"
+     },
+     {
+      "$ref": "#/components/schemas/LoginResponseM2M"
+     }
+    ]
+   },
+   "LoginResponseM2M": {
+    "description": "Api-key (M2M) login \u2014 pinned to the api-key's bot user + admin\ntenant. `tenants` is present but **always `[]`** on this shape;\n`tenant_id` / `role` / `user` are omitted (those are user\nconcepts). Emitted by `grant_type=api_key` / `platform_api_key`\nonly \u2014 a service-account **OTP** login is user-shaped (see\n`LoginResponse` shape 3 note).\n",
+    "example": {
+     "access_token": "eyJhbGciOi...",
+     "expires_in": 300,
+     "refresh_exp": 1782043200,
+     "refresh_token": "rt_...",
+     "status": "ok",
+     "subject_type": "platform",
+     "tenants": []
+    },
+    "properties": {
+     "access_token": {
+      "type": "string"
+     },
+     "expires_in": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "idle_ttl": {
+      "description": "Zone idle-timeout duration (seconds); see LoginResponseUserResolved.idle_ttl. Absent / 0 = disabled. Optional.\n",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_exp": {
+      "description": "Absolute refresh-token expiry (unix seconds); see LoginResponseUserResolved.refresh_exp. Optional.\n",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_token": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "service",
+       "platform"
+      ],
+      "type": "string"
+     },
+     "tenants": {
+      "description": "Always the empty array on api-key grants.",
+      "items": {
+       "$ref": "#/components/schemas/TenantMembership"
+      },
+      "maxItems": 0,
+      "type": "array"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "refresh_token",
+     "access_token",
+     "expires_in",
+     "tenants"
+    ],
+    "type": "object"
+   },
+   "LoginResponseUserMultiTenant": {
+    "description": "Multi-tenant user \u2014 or a single-tenant user whose membership has\n`mfa_required:true` (the access-token fast path is suppressed).\nCaller must pick a tenant and call `/auth/token` with the\nrefresh + `tenant_id` (which raises `412 mfa_required` when MFA\nis still unsatisfied for that tenant).\n",
+    "example": {
+     "refresh_token": "rt_...",
+     "status": "ok",
+     "subject_type": "user",
+     "tenants": [
+      {
+       "display_name": "Acme Inc",
+       "mfa_required": false,
+       "role": "owner",
+       "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+      },
+      {
+       "display_name": "Beta Co",
+       "mfa_required": true,
+       "role": "member",
+       "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f01"
+      }
+     ]
+    },
+    "properties": {
+     "refresh_token": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "user",
+       "service"
+      ],
+      "type": "string"
+     },
+     "tenants": {
+      "items": {
+       "$ref": "#/components/schemas/TenantMembership"
+      },
+      "type": "array"
+     },
+     "user": {
+      "description": "The resolved subject's user id (see LoginResponseUserResolved.user).",
+      "properties": {
+       "id": {
+        "format": "uuid",
+        "type": "string"
+       }
+      },
+      "required": [
+       "id"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "refresh_token",
+     "tenants"
+    ],
+    "type": "object"
+   },
+   "LoginResponseUserResolved": {
+    "description": "Single-tenant user, no MFA pending \u2014 fully resolved on the first\ncall. `subject_type` is `service` (not `user`) when the resolved\nsubject is a `kind=service` account (`grant_type=otp`, ADR-071).\n\n`revoked_sids` (ADR-104 R-e) is present ONLY when this sign-in changed a\n`must_change` password (R15): exactly the session ids that change ended\nacross the person's whole identity in the zone (`[]` when none; only\nwhat was actually ended on `anchor_only`). The new session is not listed.\n",
+    "example": {
+     "access_token": "eyJhbGciOi...",
+     "expires_in": 900,
+     "idle_ttl": 1800,
+     "refresh_exp": 1782043200,
+     "refresh_token": "rt_...",
+     "role": "owner",
+     "status": "ok",
+     "subject_type": "user",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00",
+     "tenants": [
+      {
+       "display_name": "Acme Inc",
+       "mfa_required": false,
+       "role": "owner",
+       "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+      }
+     ],
+     "user": {
+      "id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f99"
+     }
+    },
+    "properties": {
+     "access_token": {
+      "type": "string"
+     },
+     "expires_in": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "idle_ttl": {
+      "description": "Zone-configured idle (inactivity) session timeout, in seconds \u2014 a sliding-window DURATION (resets on each request), NOT an absolute expiry (ADR-070). The BFF force-logs-out a session idle for longer than this; the issuer only reports the value. Absent / 0 = idle timeout disabled for this zone (the default). Sourced straight from `zones.config.idle_ttl_seconds` with no min-of-three compute.\n",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_exp": {
+      "description": "Absolute wall-clock expiry (unix seconds) of the refresh token \u2014 the min of the rolling refresh TTL, the ADR-054 scheduled cutoff, and the ADR-058 absolute session cap. Distinct from `expires_in` (the access-token lifetime, in seconds). Optional and forward-compatible: absent on pre-refresh_exp issuers, so a consumer sizing a session from it must fall back to its own ceiling when absent/zero.\n",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_token": {
+      "type": "string"
+     },
+     "revoked_sids": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "role": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "user",
+       "service"
+      ],
+      "type": "string"
+     },
+     "tenant_choice_required": {
+      "description": "ADR-092 D5. The caller holds two or more ACTIVE memberships in a zone whose `single_tenant_membership` is on, and must settle the picker via POST /me/tenant-choice. Optional; omitted when false.\nThis login SUCCEEDED \u2014 an access token is still issued, and the field is a reconciliation prompt, not an authentication failure. Treating it as an auth error would strand exactly the users the drain exists to resolve, leaving them no credential to answer with.\n",
+      "type": "boolean"
+     },
+     "tenant_choices": {
+      "description": "ADR-092 D5. The memberships the picker may choose between; present only alongside `tenant_choice_required`. The chosen membership is KEPT and the others are suspended (recoverable) with their sessions revoked.\n",
+      "items": {
+       "properties": {
+        "display_name": {
+         "type": "string"
+        },
+        "is_owner": {
+         "description": "This membership CANNOT be given up \u2014 `tenants.owner_user_id` is NOT NULL, so revoking it would leave the tenant ownerless. The server refuses such a choice with 409 `owner_cannot_be_revoked`; clients should not offer it, and must still handle the refusal since the client is not the authority.\n",
+         "type": "boolean"
+        },
+        "tenant_id": {
+         "format": "uuid",
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "tenants": {
+      "items": {
+       "$ref": "#/components/schemas/TenantMembership"
+      },
+      "type": "array"
+     },
+     "user": {
+      "description": "The resolved subject's user id. Present on every user-grant\nlogin (even when no access token is minted) so a BFF can\nresolve the user without decoding the JWT `sub`. Omitted on\napi-key (M2M) grants.\n",
+      "properties": {
+       "id": {
+        "format": "uuid",
+        "type": "string"
+       }
+      },
+      "required": [
+       "id"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "refresh_token",
+     "access_token",
+     "tenant_id",
+     "role",
+     "expires_in",
+     "tenants"
+    ],
+    "type": "object"
+   },
+   "LogoutRequest": {
+    "properties": {
+     "all": {
+      "default": false,
+      "description": "`true` revokes EVERY session of the identity in the zone, including\nsessions anchored on a sibling org's membership (the same scope as\n`DELETE /auth/sessions`; ADR-109 D11 amendment, 2026-10-02), and\nthe response's `revoked_sids` names exactly those sessions. If the\nidentity's memberships cannot be resolved the call fails and\nnothing is revoked.\n",
+      "type": "boolean"
+     },
+     "refresh_token": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "LogoutResponse": {
+    "properties": {
+     "revoked_sids": {
+      "description": "ADR-109 D11 (Q5). Present only when the request had `all: true`:\nevery session id revoked by the call, the presenting session\nincluded.\n",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "sid": {
+      "description": "ADR-109 D11 (from Issuer A; DESIGNED, NOT BUILT). The revoked\nsession's id (`sessions.jti`), equal to the `sid` claim of its\naccess tokens. Absent from an issuer older than Issuer A; a client\nthen falls back to a non-expired access token's `sid`/`jti`.\n",
+      "example": "0199a6c2-5f1e-7c3a-9b0e-1f2d3c4b5a69",
+      "type": "string"
+     },
+     "status": {
+      "example": "ok",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PreconditionFirstLoginPending": {
+    "description": "412 response when the first login on a recently-vacated contact\nslot (slot_recycled_until > now; ADR-042 P2) is held for tenant-\nowner approval. The IdP proof is stashed as a pending\ncontact_verification (verification_id); login returns no session.\nThe owner approves/rejects via\nPOST /tenants/{id}/contact-verifications/{cvId}/approve|reject,\nafter which the user re-logs in.\n",
+    "properties": {
+     "code": {
+      "enum": [
+       "first_login_pending_approval"
+      ],
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "user_id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "verification_id": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message",
+     "tenant_id",
+     "user_id",
+     "verification_id"
+    ],
+    "type": "object"
+   },
+   "PreconditionMFA": {
+    "description": "412 response when target tenant requires MFA.",
+    "properties": {
+     "code": {
+      "enum": [
+       "mfa_required",
+       "mfa_registration_required"
+      ],
+      "type": "string"
+     },
+     "mfa_challenge_token": {
+      "type": "string"
+     },
+     "missing": {
+      "example": [
+       "mfa"
+      ],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "mfa_challenge_token",
+     "tenant_id"
+    ],
+    "type": "object"
+   },
+   "PreconditionSessionLimit": {
+    "description": "412 response when concurrent session cap is hit at login.\nExtends the base {code, message} error envelope with the\nshort-lived revocation_token (scope: session:list + session:revoke,\nTTL = zone challenge TTL) and the list of active sessions the UI\nshows in the Session-Limit modal. See TEST_INVENTORY \u00a72.6.\n",
+    "properties": {
+     "active_sessions": {
+      "items": {
+       "$ref": "#/components/schemas/SessionSummary"
+      },
+      "type": "array"
+     },
+     "code": {
+      "enum": [
+       "session_limit_reached"
+      ],
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     },
+     "revocation_token": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message",
+     "revocation_token",
+     "active_sessions"
+    ],
+    "type": "object"
+   },
+   "SessionSummary": {
+    "properties": {
+     "created_at": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "device_name": {
+      "description": "Human-readable label for the device that created this session (e.g. a CLI hostname), supplied at login via the `X-Device-Name` header. Omitted when the session carries no label. Lets a user tell sessions apart when revoking (ADR-062).\n",
+      "type": "string"
+     },
+     "id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "last_seen_at": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "origin": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "created_at"
+    ],
+    "type": "object"
+   },
+   "TenantMembership": {
+    "properties": {
+     "display_name": {
+      "type": "string"
+     },
+     "mfa_methods": {
+      "description": "The MFA methods this membership must satisfy (union of the\nuser's enrollment and the role/zone requirements \u2014\n`computeMFAMethods`, ADR-059/075). Empty/omitted when no\nmethod-specific requirement applies.\n",
+      "items": {
+       "enum": [
+        "totp",
+        "otp"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "mfa_required": {
+      "type": "boolean"
+     },
+     "role": {
+      "description": "The user's role in this tenant. Any name from the zone's\nrole catalog (`GET /platforms/{id}/roles`): the system roles\n`owner` / `admin` / `member` / `viewer` / `platform_api`, or\na platform-defined custom role (ADR-040). Not a closed enum.\n",
+      "type": "string"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "tenant_id",
+     "display_name",
+     "role",
+     "mfa_required"
+    ],
+    "type": "object"
+   },
+   "TokenRequest": {
+    "description": "Refresh-token rotation. The body's `tenant_id` is **required\nonly** when selecting a tenant for a multi-tenant user\n(response shape #2 from `/auth/login`). For service /\nplatform refresh tokens, `tenant_id` is **ignored** \u2014 those\nsessions are pinned to the api-key's admin tenant.\n",
+    "properties": {
+     "custom_claims": {
+      "additionalProperties": true,
+      "description": "Optional partner-supplied claims, gated by\n`zones.config.access_token_custom_claim_keys`\n(SDK SPEC \u00a74.2).\n\nA key that collides with a reserved JWT claim name is now\n**refused** with 400 `reserved_claim_key`, not dropped\n(ADR-097 D3). A dropped claim is indistinguishable, from your\nside, from an honoured one \u2014 and once `scope` carries granted\nauthority, that difference is a gate that never fires.\n",
+      "type": "object"
+     },
+     "product_roles": {
+      "description": "**ADR-102 \u2014 the PARTNER's role NAME, carried and never read.**\n\n`scope` carries *authority*; this carries the *name of the role*\nthe bearer holds in YOUR system, for display (\"Signed in as:\nDispatch\"), routing, report defaults and your own audit trail.\nThe two ride the same token and answer different questions.\n\n\u26a0\ufe0f **Do not branch AUTHORIZATION on this claim.** A name is a\nlabel, a scope is a grant. Keying authorization off the name\nre-creates exactly the coupling ADR-101 spent four migrations\nremoving \u2014 add a role and every service needs editing. Use\n`scope`.\n\n**Distinct from `role`**, which is ZoneID's OWN vocabulary and is\na trusted authorization lookup key on the direct-bearer lane. The\ntwo claims are never merged and this one reaches no ZoneID gate;\na test asserts the claim name appears nowhere in the issuer's\nauthorization surface.\n\n**Validated for SHAPE ONLY**, then written onto the token\nverbatim. Nothing is stored, compared against a catalog, or\nintersected. An ARRAY, not a space-delimited string: partner role\nnames are not constrained to the RFC 6749 \u00a73.3 scope charset, and\na legitimate `\"Regional Manager\"` must survive.\n\n**Bounds are CONSTANTS, not zone config**: at most **16**\nelements of at most **64 bytes** each \u2014 `too_many_product_roles`\n/ `product_role_too_long`. Each element must be non-empty, valid\nUTF-8 and free of control characters (`invalid_product_role`).\nDeliberately NOT the `user_api_keys.max_permission_strings` knobs,\nwhich already govern two unrelated things.\n\n**Re-resolved on every mint, never stored on the session.** Send\nit each time. Omitting it mints no `product_roles` at all \u2014 an\nabsent claim and an empty array mean the same thing, which is why\nan empty array mints nothing rather than `[]`.\n\n**Reserved**: it cannot be forged through `custom_claims`\n(`reserved_claim_key`).\n\n**`/auth/token` only** \u2014 `POST /auth/login` does not accept it, so\nthe token login returns carries no `product_roles`. The ZoneID\nSDKs close that gap for you: `Login` follows the login with a\n`/auth/token` mint once the tenant is settled (ADR-102 D10).\n",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "refresh_token": {
+      "description": "Optional \u2014 refresh may also arrive via Authorization header.",
+      "type": "string"
+     },
+     "role_permissions": {
+      "description": "**ADR-100 D16 \u2014 the narrowing operand for a user-API-key token.**\nThe permissions the holder's ROLE confers, in YOUR vocabulary, used\nto narrow that token's `permissions_cap` claim to THIS org \u2014 on REFRESH as well as login (D18).\n\nSupply it on EVERY mint. A user-API-key session IS refreshable \u2014\nthe key row is re-read here too \u2014 so a refresh that omitted this\nwould hand back a token WIDER than the one it replaced, silently and\non a schedule.\n\nSupply it from your own role -> permission map. ZoneID stores no\npartner catalog and will not resolve it for you (D17): the strings\nare opaque here, and the issuer does not fall back to\n`zone_roles.permissions` even for `aud=zoneid`, so the claim stays\na pure function of the request.\n\n**Caller-ASSERTED and unverified**, audited as such \u2014 the convention\n`source_org_id` already uses. That is safe for a stated reason, not\nby assumption: the claim minted is\n`stored_cap INTERSECT role_permissions`, and `A INTERSECT B` is a\nsubset of `A` for every `B`, so a wrong or hostile list can only\nNARROW, never widen past the stored cap. Worst case is exactly the\npre-ADR-100 behaviour.\n\n**OPTIONAL. Omitted / `null` = not supplied** \u2014 the stored cap\ntravels unnarrowed (D6), which keeps every existing caller working.\n**An empty array is NOT the same thing**: it says \"this role confers\nnothing here\" and produces a `403` (below).\n\n**Ignored for an UNCAPPED key** (D7), whose claim stays absent\nwhatever you send \u2014 uncapped is delivered by omission and that\nmechanism does not change. Ignored, too, for any token that is not\nkey-derived: there is no cap to intersect with.\n\n\u26a0\ufe0f **An empty INTERSECTION is `403 no_permissions_in_org`, never an\nempty claim** (D8). The two are indistinguishable to a reader of the\ntoken, and `[]` on the claim side already means \"capped to nothing\",\nwhich the issuer must never emit. The narrowing is **per-org**, so a\nmulti-org key mints in one org and is refused in another \u2014 the error\nnames the org, or it reads as \"the key is broken\".\n",
+      "items": {
+       "type": "string"
+      },
+      "nullable": true,
+      "type": "array"
+     },
+     "scope": {
+      "description": "**ADR-097 \u00a7A \u2014 granted authority, space-delimited.**\n\nRFC 9068 \u00a72.2.3, which defines the claim by reference to RFC\n8693 \u00a74.2 (\"a JSON string containing a space-separated list of\nscopes\") in RFC 6749 \u00a73.3 format. A STRING, not an array.\n\nThese are **your** scope strings. ZoneID stores no partner\ncatalog: the values are never parsed, validated against a\nvocabulary, persisted, or interpreted. Your repo owns the\nroute -> scope and role -> scope maps; the ZoneID SDK is the\ngate that evaluates them.\n\n**Charset (RFC 6749 \u00a73.3):** `%x21 / %x23-5B / %x5D-7E` \u2014\nprintable ASCII minus SPACE, `\"` and `\\`. Case-SENSITIVE, no\nnormalization. A space inside a value would split one scope into\ntwo, so a malformed entry is refused at mint (`invalid_scope`)\nrather than silently reshaped.\n\n**Bounded** by the zone's `user_api_keys.max_permission_strings`\nand `max_permission_string_len` (defaults 32 / 128) \u2014\n`too_many_scopes` / `scope_too_long`. The same knobs, not a\nsecond vocabulary for the same kind of string.\n\n**Intersected server-side.** When the session came from a user\nAPI key, the minted claim is `scope` INTERSECTED with the key's\nlive `permissions_cap` \u2014 exact string match, no wildcards, no\nhierarchy. ZoneID does this so that a caller who bypasses the\nSDK still receives a narrowed token.\n\n**Re-resolved on every call.** The claim is never stored on the\nsession: send it each time. Omitting it mints no `scope` at all.\n\n**Revocation lag.** A token-carried scope is only as fresh as\nthe token: revoking a grant takes effect within\n`access_ttl_seconds`. Where a stale grant is unacceptable \u2014\nmoney movement, permission administration, data export \u2014 use the\nSDK's `CapAllows`, which reads live and has zero lag.\n\nNot accepted on a service-class refresh (`scope_not_supported`).\n",
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Required for multi-tenant user pick. Ignored when the\nrefresh token's `subject_type` is `service` or\n`platform`.\n",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "TokenResponse": {
+    "description": "Access + rotated-refresh response. `tenant_id` and `role`\nare present only when `subject_type=user`; absent for\n`service` refresh. ADR-089: a credential-bootstrapped\nsession (api key / WIF) has NO refresh token, so this\nendpoint serves only users and ADR-071 service accounts.\n`refresh_token` is rotated unconditionally for users; for\na service account only when the zone has opted in via\n`service_refresh_rotates` (otherwise the same refresh is\nechoed back unchanged).\n",
+    "example": {
+     "access_token": "eyJhbGciOi...",
+     "expires_in": 900,
+     "idle_ttl": 1800,
+     "refresh_exp": 1782043200,
+     "refresh_token": "rt_...",
+     "role": "owner",
+     "status": "ok",
+     "subject_type": "user",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+    },
+    "properties": {
+     "access_token": {
+      "type": "string"
+     },
+     "expires_in": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "idle_ttl": {
+      "description": "Zone idle-timeout duration (seconds); see LoginResponseUserResolved.idle_ttl. Absent / 0 = disabled. Optional.\n",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_exp": {
+      "description": "Absolute expiry (unix seconds) of the rotated refresh token (or, when rotation is off for a service/platform refresh, of the unchanged echoed token); see LoginResponseUserResolved.refresh_exp. Optional.\n",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_token": {
+      "type": "string"
+     },
+     "role": {
+      "description": "User refresh only.",
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "user",
+       "service",
+       "platform"
+      ],
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "User refresh only.",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "access_token",
+     "refresh_token",
+     "expires_in"
+    ],
+    "type": "object"
+   }
+  }
+ },
+ "info": {
+  "title": "reduced",
+  "version": "0"
+ },
+ "openapi": "3.0.3",
+ "paths": {
+  "/auth/login": {
+   "post": {
+    "description": "ADR-051 (v0.7.0). Single credential-exchange endpoint. The\nbody's `grant_type` selects the credential exchange and the\nsubject class of the issued tokens. See `LoginRequest` for\nthe per-grant fields and inbound bearer rules. The legacy\n`method` alias is removed (sunset 2026-08-01) \u2014 a body without\n`grant_type` 400s `missing_grant_type`.\n\nInbound bearer:\n- **User grants** (`provider_token`, `password`,\n  `otp`) require `Authorization: Bearer <platform\n  access token>`. `password` is implemented (ADR-104) and\n  answers `400 unknown_method` only when the deployment has no\n  credential store or the zone's `password_login_enabled` is off.\n  (This line said \"reserved, not implemented\" until spec `0.53.0`;\n  that was stale since ADR-104 shipped.) The zone is resolved from the bearer's\n  `zone_id` claim; body `zone_id` is ignored. ADR-046\n  `aud` validation still applies on `provider_token` /\n  `google`.\n- **Api-key grants** (`api_key`, `platform_api_key`) carry\n  the raw key in the body and reject any inbound bearer.\n\nADR-051 hard cut: `POST /auth/service-token` and\n`POST /auth/platform-token` are deleted in v0.7.0; both URLs\nreturn 404. Migrate to this endpoint with\n`grant_type: api_key` / `grant_type: platform_api_key`.\n",
+    "parameters": [
+     {
+      "description": "Optional human-readable device label persisted on the created session and surfaced in GET /auth/sessions (ADR-062). Control characters are stripped and the value is capped at 120 chars. Only the user grants record it.\n",
+      "in": "header",
+      "name": "X-Device-Name",
+      "required": false,
+      "schema": {
+       "maxLength": 120,
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LoginRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LoginResponse"
+        }
+       }
+      },
+      "description": "OK \u2014 every successful credential exchange returns\n`status:\"ok\"` **including a refresh token even when MFA is\nstill pending** (MFA is flagged per-tenant via\n`tenants[].mfa_required`; the `412 mfa_required`\nprecondition is raised later, on `POST /auth/token`).\n"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "bad_json (malformed body)\n| missing_grant_type (no `grant_type`; the legacy `method`\nalias was removed at its 2026-08-01 sunset)\n| bad_grant_type (unrecognised `grant_type`)\n| missing_provider (`grant_type=provider_token` without\n`provider`)\n| unknown_method (provider/method not enabled for the zone;\nfor `grant_type=password`: no credential store, or the zone's\n`password_login_enabled` is off)\n| tenant_required (`grant_type=password` with a username and no\ntenant from `tenant_id` or the request's host; ADR-104 D2)\n| password_too_short | password_too_long | password_unchanged\n(`new_password` failed input validation; ADR-104 R14)\n| password_change_not_required (`new_password` sent for a\ncredential that is not must-change; ADR-104 R17)\n| bad_tenant_id (`tenant_id` not in the resolved zone)\n| missing_api_key (api-key grants without `api_key`)\n| missing_subject_token | bad_subject_token_type\n(token-exchange grant, ADR-057).\n"
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "unauthorized (missing or invalid platform token; user\ngrants only)\n| wrong_scope (bearer is not `token_class=platform`; the\nerror CODE is unchanged, only the claim it reads)\n| invalid_audience (id-token `aud` not registered;\n`provider_token` / `google`)\n| invalid_credentials (bad password / OTP / api-key)\n| key_class_mismatch (declared `grant_type` doesn't\nmatch the api-key's class \u2014 `api_key` vs\n`platform_api_key`; ADR-051)\n| revoked_api_key (api-key grants; key soft-revoked)\n| keyless_api_key (api-key not bound to a bot user).\n"
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "user_not_invited (known user, no membership in the resolved\nzone) | signup_domain_not_allowed | user_suspended |\nno_permissions_in_org | password_must_change.\n\n`password_must_change` is ADR-104 D7: the password was CORRECT but\nan administrator set it. Resend the same body with `new_password`\n(see `LoginRequestPassword`) to replace it and sign in in one call.\n\n`no_permissions_in_org` is ADR-100 D8: on `grant_type=user_api_key`,\nthe key's `permissions_cap` and the supplied `role_permissions` have\nnothing in common IN THIS ORG, so there is no authority to mint. It\nis a refusal rather than a token with an empty claim, because the\ntwo are indistinguishable to a reader of the token. The message\nNAMES the org \u2014 the narrowing is per-org, so the identical request\nsucceeds against a different `tenant_id`.\n(A `zone_mismatch` 403 was previously documented here but\nis not emitted by this handler.)\n"
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "zone_not_found (bearer's zone does not resolve)"
+     },
+     "410": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "zone_suspended"
+     },
+     "412": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "oneOf": [
+          {
+           "$ref": "#/components/schemas/PreconditionSessionLimit"
+          },
+          {
+           "$ref": "#/components/schemas/PreconditionFirstLoginPending"
+          }
+         ]
+        }
+       }
+      },
+      "description": "session_limit_reached (concurrent session cap hit) |\nfirst_login_pending_approval (first login on a recently-\nvacated contact slot awaits tenant-owner approval; ADR-042 P2).\nNOTE: `mfa_required` is NOT raised here \u2014 see the 200\ndescription and `POST /auth/token`.\n"
+     },
+     "429": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "login_throttled \u2014 `grant_type=password` only: the per-identifier\nfail counter (keyed on zone + identifier as supplied, consulted\nbefore any lookup) is locked. A correct password, and a valid\n`new_password`, are refused alike and nothing changes.\n"
+     },
+     "501": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "federation_disabled (token-exchange grant while workload\nidentity federation is not enabled; ADR-057)\n"
+     }
+    },
+    "security": [
+     {
+      "BearerPlatformToken": []
+     },
+     {}
+    ],
+    "summary": "Exchange credentials for a refresh (+ access if resolved)",
+    "tags": [
+     "Auth"
+    ]
+   }
+  },
+  "/auth/logout": {
+   "post": {
+    "description": "Resolves the session from the refresh token (body `refresh_token`, or\nthe bearer when the body has none) and revokes it; with `all: true`,\nevery session of that session's user. An unknown or already-spent\nrefresh token is `401`.\n\nFrom ADR-109 Issuer A (DESIGNED, NOT BUILT) the `200` body also carries\n`sid`: the id of the session the presented refresh token belonged to,\nthe same value as the `sid` claim on that session's access tokens. An\nSDK revokes that `sid` in its own session store, so logout is keyed by\nthe refresh-token holder rather than by any access token. With\n`all: true` it is still only the presenting session's id.\n",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LogoutRequest"
+       }
+      }
+     },
+     "required": false
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LogoutResponse"
+        }
+       }
+      },
+      "description": "OK \u2014 the session is revoked"
+     }
+    },
+    "security": [
+     {
+      "BearerRefresh": []
+     }
+    ],
+    "summary": "Revoke the current session (or all sessions)",
+    "tags": [
+     "Auth"
+    ]
+   }
+  },
+  "/auth/token": {
+   "post": {
+    "description": "Accepts a refresh token (Bearer header or body) and returns\na fresh access token plus a (possibly rotated) refresh token.\nWorks for all three subject classes \u2014 the response carries\n`subject_type \u2208 {user, service, platform}`.\n\nBody `tenant_id` is required only when the refresh token's\nsubject is a multi-tenant **user** (response shape #2 from\n`/auth/login`). For service / platform refresh tokens\n`tenant_id` is **ignored** \u2014 those sessions are pinned to\nthe api-key's bot user / admin tenant.\n\nRotation policy (ADR-051): user refresh tokens always\nrotate (ADR-031 reuse-detection). An ADR-071 service-account\nrefresh token rotates only when the zone has opted in via\n`service_refresh_rotates`; otherwise the same refresh is\nechoed back unchanged. ADR-089: a credential-bootstrapped\nsession (`grant_type` \u2208 {`api_key`, `platform_api_key`,\ntoken-exchange}) has no refresh token \u2014 presenting one\nreturns `401 m2m_refresh_withdrawn`; re-mint via\n`POST /auth/login` instead.\n\n**BFF gate (ADR-041).** When the refresh-bound session's zone\nis not the base zone, this endpoint requires a partner\nplatform bearer in `Authorization` and the refresh token MUST be\nsupplied in the **body** (the header is the platform JWT, not the\nrefresh). The zone is resolved from the refresh-bound session, so\nthe gate applies to **every** refresh class \u2014 user, service, and\nplatform \u2014 not just tenant-scoped user refreshes. A missing/invalid\nplatform bearer returns `401 bff_bearer_required`.\n\nReturns 412 if the tenant's MFA policy requires a challenge\nthe caller has not completed.\n",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TokenRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TokenResponse"
+        }
+       }
+      },
+      "description": "OK"
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "missing_tenant_id (refresh subject is a multi-tenant user and\nthe body carries no `tenant_id`) | bad_request (a\n`custom_claims` key is not in the zone's\n`access_token_custom_claim_keys` allowlist)\n| reserved_claim_key (a `custom_claims` key is a reserved JWT\nclaim name \u2014 ADR-097 D3; previously dropped silently)\n| invalid_scope (a `scope` entry is not an RFC 6749 \u00a73.3\nscope-token)\n| too_many_scopes / scope_too_long (`scope` exceeds the zone's\n`user_api_keys.max_permission_strings` /\n`max_permission_string_len`)\n| scope_not_supported (this session class mints no `scope`)\n| bad_json.\n"
+     },
+     "401": {
+      "$ref": "#/components/responses/Unauthorized"
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "not_a_member | user_suspended | no_permissions_in_org. The last is\nADR-100 D8, identical to `/auth/login`'s: it exists on BOTH routes\nor the narrowing is only enforced at login, since a session\nbootstrapped from a user API key is refreshable and a token that\ncould not be minted at login could otherwise be obtained by\nrefreshing an older one.\n\nNOTE: a **deactivated** user\nalso returns `user_suspended` \u2014 the previously-documented\nseparate `deactivated` code is collapsed into\n`user_suspended` (suspended and deactivated map to the same\nerror in `authsvc`).\n"
+     },
+     "412": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PreconditionMFA"
+        }
+       }
+      },
+      "description": "MFA required (or registration required)"
+     }
+    },
+    "security": [
+     {
+      "BearerRefresh": []
+     }
+    ],
+    "summary": "Rotate a refresh token into a new refresh + access pair",
+    "tags": [
+     "Auth"
+    ]
+   }
+  }
+ }
+}

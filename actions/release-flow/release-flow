@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Entry point: puts the sibling releaseflow/ directory on sys.path and runs the CLI."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "releaseflow"))
+import release_flow  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(release_flow.main())
