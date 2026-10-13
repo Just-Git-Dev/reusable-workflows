@@ -12,12 +12,13 @@ import wf
 
 
 class EveryWorkflowTests(unittest.TestCase):
-    def test_four_workflows_are_reusable_and_declare_no_secrets(self):
+    def test_four_workflows_are_reusable_and_declare_only_the_app_key(self):
+        # The exact secret set is pinned in test_workflow_tokens (key confinement).
         for n in wf.NAMES:
             w = wf.load(n)
             call = wf.on_block(w).get("workflow_call")
             self.assertIsNotNone(call, f"{n}: not a workflow_call")
-            self.assertNotIn("secrets", call, f"{n}: declares secrets; none are passed")
+            self.assertLessEqual(set(call.get("secrets") or {}), {"RELEASE_APP_KEY"}, n)
             self.assertEqual(set(wf.on_block(w)), {"workflow_call"}, n)
 
     def test_every_run_is_bash_via_default_or_explicit_shell(self):

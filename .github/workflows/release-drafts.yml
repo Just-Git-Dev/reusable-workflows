@@ -10,7 +10,8 @@ name: Release drafts (reusable)
 #   - The write token is minted ONLY in the `drafts` job, and only when rehearsal == 'false'
 #     (never `!= 'true'`: an unknown value must not mint);
 #     a rehearsal mints a READ-ONLY token and runs `drafts --check-only`. The App key lives in the
-#     caller's `environment` and is named ONLY as the `private-key` of a mint step.
+#     caller's `environment`, is the one declared secret (passed BY NAME), and is named ONLY as
+#     the `private-key` of a mint step.
 #   - The App write goes through the CLI's allowlisted client: create a Release with
 #     `draft: true`, and nothing else in this stage.
 #   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
@@ -46,6 +47,10 @@ on:
         type: string
         required: false
         default: contracts
+    secrets:
+      RELEASE_APP_KEY:
+        description: 'The release App private key. Pass it BY NAME (inherit is same-org only)'
+        required: true
     outputs:
       drafts:
         description: "JSON {repo: release_id} ({repo: 'rehearsal'} in a rehearsal)"

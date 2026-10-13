@@ -8,7 +8,7 @@ name: Release plan (reusable)
 # EVERY EDIT TO THIS FILE IS A SECURITY CHANGE. What bounds it:
 #   - Tokens are minted per job from a GitHub App, READ-ONLY here, for the repos in `allowed` and
 #     `read-only-repos` only. The App key lives in the caller's `environment` (RELEASE_APP_KEY)
-#     and is named ONLY as the `private-key` of a mint step. The caller passes `secrets: inherit` (an environment secret is EMPTY in a called workflow otherwise; docs/release-flow.md); none is declared here.
+#     and is named ONLY as the `private-key` of a mint step. It is the one declared secret, and the caller passes it BY NAME (`inherit` passes nothing across orgs; an unpassed environment secret is EMPTY here; docs/release-flow.md).
 #   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
 #   - The plan job holds no App token: it reads with the caller's GITHUB_TOKEN. The CLI it runs is
 #     checked out from this repo and pinned by content (RELEASE_FLOW_TREE), then self-tested.
@@ -74,6 +74,10 @@ on:
         type: string
         required: false
         default: ''
+    secrets:
+      RELEASE_APP_KEY:
+        description: 'The release App private key. Pass it BY NAME (inherit is same-org only)'
+        required: true
     outputs:
       manifest:
         description: 'The manifest path'

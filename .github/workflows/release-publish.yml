@@ -12,7 +12,7 @@ name: Release publish (reusable)
 #     repo is listed, and every earlier slot succeeded or was skipped. `!cancelled()`, not
 #     `always()`, so a cancelled run never publishes.
 #   - The App key lives in the caller's `environment` and is named ONLY as the `private-key` of a
-#     mint step. No secret is passed to this workflow.
+#     mint step. It is the one declared secret, and the caller passes it BY NAME.
 #   - Every App write goes through the CLI's allowlisted client: create a draft Release, PATCH a
 #     release with exactly {"draft": false}, and re-run the failed jobs of that release's own
 #     Deploy run. No tag, no ref, no delete.
@@ -55,6 +55,10 @@ on:
         type: string
         required: false
         default: plan,drafts
+    secrets:
+      RELEASE_APP_KEY:
+        description: 'The release App private key. Pass it BY NAME (inherit is same-org only)'
+        required: true
 
 permissions:
   contents: read

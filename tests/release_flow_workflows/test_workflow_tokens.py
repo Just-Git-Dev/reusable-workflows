@@ -4,7 +4,11 @@ ONE GitHub App serves every cross-repo read and every release write. Its key can
 token that publishes a release, and publishing deploys. So the key is confined:
 
   - it appears ONLY as `with.private-key` of an `actions/create-github-app-token` step, never in
-    an `env:` (workflow, job or step), never passed to a workflow, never declared as a secret;
+    an `env:` (workflow, job or step), never passed onward by a job;
+  - plan, drafts and publish declare exactly ONE workflow_call secret, `RELEASE_APP_KEY`
+    (required), and callers pass it BY NAME: `secrets: inherit` passes nothing when the caller is
+    in another org (GitHub: inherit works only within one organization or enterprise), and an
+    environment secret the caller does not pass resolves to an empty string;
   - every job that mints runs under `environment: ${{ inputs.environment }}`;
   - only the `drafts` job (non-rehearsal mint) and the six `publish-N` jobs mint a write
     permission; every other mint is read-only; a rehearsal never gets a write token;
@@ -28,7 +32,11 @@ class KeyConfinementTests(unittest.TestCase):
             w = wf.load(n)
             self.assertNotIn(KEY, str(w.get("env", "")), f"{n}: workflow env")
             call = wf.on_block(w)["workflow_call"]
-            self.assertNotIn("secrets", call, f"{n}: declares a secret")
+            if n == "release-pr-check.yml":
+                self.assertNotIn("secrets", call, f"{n}: declares a secret")
+            else:
+                self.assertEqual(list(call.get("secrets") or {}), [KEY], f"{n}: declared secrets")
+                self.assertIs(call["secrets"][KEY].get("required"), True, f"{n}: {KEY} not required")
             self.assertFalse([k for k in call["inputs"] if "key" in k.lower()], f"{n}: an input carries a key")
             for jn, job in wf.jobs(w).items():
                 self.assertNotIn(KEY, str(job.get("env", "")), f"{n}:{jn}: job env")
@@ -175,6 +183,25 @@ class PrCheckCheckoutTests(unittest.TestCase):
                 examined += 1
                 self.assertIs(st["with"].get("persist-credentials"), False, f"{n}:{jn}")
         self.assertEqual(examined, 2 * (1 + 3 + 2 + 8))
+
+
+class DocCallerExampleTests(unittest.TestCase):
+    """The doc's caller example is what consumers copy, so it must pass the key the way that works
+    across orgs. `inherit` passed nothing to a consumer whose root repo is in another org."""
+
+    def test_doc_callers_pass_the_key_by_name_never_inherit(self):
+        doc = (wf.ROOT / "docs" / "release-flow.md").read_text()
+        examined = 0
+        for block in re.findall(r"```yaml\n(.*?)```", doc, re.S):
+            self.assertNotIn("secrets: inherit", block)
+            for m in re.finditer(r"\n    uses: \S+/(release-(?:plan|drafts|publish|pr-check))\.yml@\S+\n((?:      .*\n|    [a-z].*\n)*)", block):
+                examined += 1
+                body = m.group(2)
+                if m.group(1) == "release-pr-check":
+                    self.assertNotIn("secrets", body, m.group(1))
+                else:
+                    self.assertRegex(body, r"\n    secrets:\n      RELEASE_APP_KEY: \$\{\{ secrets\.RELEASE_APP_KEY \}\}", m.group(1))
+        self.assertEqual(examined, 4, "expected one caller example each for pr-check, plan, drafts, publish")
 
 
 if __name__ == "__main__":
