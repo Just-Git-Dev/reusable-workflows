@@ -1,13 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-44 open across 14 live sections. 8 closed items archived.
+45 open across 14 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 1 open
+- **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
 - **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
 - **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
 - **ACTIVE** — [Third-party images vanish from public registries — MinIO (opened 2026-09-24)](#third-party-images-vanish-from-public-registries--minio-opened-2026-09-24) — 3 open
@@ -35,6 +35,17 @@ no release was needed.
   id can sit beside `RELEASE_APP_KEY` on the environment. This is an additive input-contract
   change, so it means a minor release and a new `RELEASE_FLOW_TREE`, and every caller re-pins.
   Only worth doing when a second consumer hits the same thing.
+- [ ] `docs/release-flow.md` §Contract checks/Smoke (L46) — say which ref the smoke SPECS come
+  from. "Against the resolved refs and images" is silent on it, and a consumer whose e2e specs
+  track its umbrella `main` failed an api-only rehearsal on 2026-10-13: the UI resolved to its
+  LIVE tag, while `main`'s specs already tested unreleased UI screens (23 failures, 0 writes).
+  State the rule: the specs must match the refs under test, and name the caller-side options
+  (specs gated by the minimum UI version they need, with the skip count printed; or specs taken
+  at the commit matching the resolved UI ref). Doc-only; no input-contract change. Update
+  2026-10-14: that consumer chose the minimum-UI-version option. No rw code change is needed,
+  because a caller already passes `fromJSON(needs.plan.outputs.resolved).<ui>.ref` into its own
+  smoke workflow, as the caller example does for `backend_ref`. The doc should show that wiring
+  for the UI ref.
 
 ## Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)
 
