@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [`v3.5.0` released (`release-flow` breaking-approved waiver)](#2026-10-15--v350-released-release-flow-breaking-approved-waiver)
 - `2026-10-15` — [Release flow: a `breaking-approved` label waives an exact list of breaking changes (supersedes the no-approval ruling)](#2026-10-15--release-flow-a-breaking-approved-label-waives-an-exact-list-of-breaking-changes-supersedes-the-no-approval-ruling)
 - `2026-10-15` — [Root release checks contracts between services only — no removal-approval list (2026-10-15)](#2026-10-15--root-release-checks-contracts-between-services-only--no-removal-approval-list-2026-10-15)
 - `2026-10-13` — [`release-flow`: the release-PR check example triggers on manifests only (`releases/*.yaml`)](#2026-10-13--release-flow-the-release-pr-check-example-triggers-on-manifests-only-releasesyaml)
@@ -109,6 +110,21 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-15 — `v3.5.0` released (`release-flow` breaking-approved waiver)
+
+**What.** `v3.5.0` carries the `breaking-approved` waiver for release-flow `spec-compat` (PR #124,
+see the entry below). It is a minor release: the input contract only gains things (the
+`release-plan` output `breaking`, the `spec-compat` flags `--pair` / `--consumer-side`, the env var
+`RELEASE_BREAKING`, three new CLI subcommands). The release-flow CLI tree changed to `edded69`, so
+callers move their pin to `v3.5.0` to get it.
+
+**Caller changes to adopt it.** On `release-pr.yml`, add `labeled` and `unlabeled` to the
+`pull_request` types. On the contracts step, add `--pair "$PAIR" --consumer-side "$SIDE"` with
+`SIDE: ${{ matrix.consumer_side }}` and `RELEASE_BREAKING: ${{ needs.plan.outputs.breaking }}`.
+No new secret and no new permission. A caller that does not adopt it behaves as before.
+
+**Owner ask.** Released on the owner's explicit "release" (2026-10-15).
 
 ## 2026-10-15 — Release flow: a `breaking-approved` label waives an exact list of breaking changes (supersedes the no-approval ruling)
 
