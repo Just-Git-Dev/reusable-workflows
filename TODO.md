@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-45 open across 14 live sections. 8 closed items archived.
+48 open across 15 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 3 open
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
 - **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
 - **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
@@ -21,6 +22,56 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)
+
+Reported by consumer C's session for the owner's triage. `release-flow spec-compat BASELINE
+CANDIDATE` fails on ANY removal from a service's OpenAPI spec: an operation, a request
+parameter, or a body property. The CLI's only option is `--label`
+(`actions/release-flow/releaseflow/spec_compat.py`, `main()`; checked 2026-10-15). Cost to
+consumer C: two patch versions were burned before publish. The spec had dropped a login request
+field the server already ignored, and a role value the server already refuses. The only way
+through was to restore both in the spec, marked deprecated/refused, and cut the next patch. That
+delayed a security fix by about a day.
+
+Cause (checked 2026-10-15 in consumer C's caller `release.yml`): the root release runs
+`spec-compat` twice per provider. Check A uses the live consumer's PINNED copy of the provider
+spec as the baseline. Check B uses the LIVE PROVIDER's own spec as the baseline. Check B can
+never pass a removal, even after a full deprecation cycle, because the live provider always
+still lists the thing being removed.
+
+Rulings (owner, 2026-10-15):
+- Each service is responsible for its own release. The root repo only coordinates the overall
+  release, so the root release checks contracts BETWEEN services and nothing else.
+- Q1: There is NO approval list for removals: no manifest field and no new `spec-compat`
+  option. (This replaces an earlier same-day ruling that put an approval option in the shared
+  tool; the owner reversed it once the scope rule above was stated.) Check A stays in the root
+  release. Check B ("does the provider drop anything its own last release had") is the
+  service's own release policy. It moves into that service's own CI, where the service decides
+  how it handles a deliberate removal.
+- A removal that another service depends on therefore takes two releases. First the consumer
+  stops using the item and drops it from its pinned copy of the provider spec. Then the
+  provider removes it, and check A passes because the consumer's baseline no longer lists it.
+  This rests on the CLI's docstring, which says the check fails only for things the baseline
+  lists; the comparison loop itself was not traced.
+- Q2-Q4 (how wide an approval reaches, which checks may be approved, who reviews one) are moot:
+  there is no approval.
+
+- [ ] `docs/release-flow.md` §What the caller keeps / §Contract checks — state the rule: the root
+  release's contract checks run only between services (a live consumer's pinned spec against
+  the candidate provider spec). A provider-against-its-own-live-spec check belongs in the
+  service's own CI, not the root release. Document the two-release removal sequence above as the
+  way to remove something another service depends on. Doc-only; no input-contract change.
+- [ ] Consumer C — move check B out of the root `release.yml` into the provider service's own
+  CI. That is the consumer's change, made by its own session; this repo only verifies it.
+- [ ] `actions/release-flow/releaseflow/release_flow.py` L70-72 (the `ops-subset` usage text) and
+  `spec_compat.py` L5 (module docstring) — replace consumer C's real file paths
+  (`ui/web/src/mocks/vendor/bff-swagger.yaml`, `.../issuer-openapi.yaml`,
+  `contract/issuer-openapi.yaml`) with placeholders. This repo is public and names no consumer.
+  Wider, for the owner to judge (found 2026-10-15 by a `git ls-files` sweep): the whole
+  release-flow package and its tests/testdata use consumer C's service names (`issuer`, `api`,
+  `ui`, `cli`) and testdata files like `g5-issuer134-reduced.json`. These words are generic, but
+  together they describe one consumer's topology.
 
 ## Release flow — app-id from the environment (opened 2026-10-13)
 
