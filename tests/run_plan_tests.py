@@ -35,6 +35,7 @@ DEFAULT_ENV = {
     "GRACE_PERIOD_DAYS": "0",
     "KEEP_TAGS": "latest,buildcache",
     "KEEP_TAG_PREFIXES": "hotfix-,rc-,debug-",
+    "ALLOW_INERT_IMAGES": "",
 }
 
 
@@ -173,6 +174,23 @@ def main():
                         % (name, want_blocked, got_blocked)
                     )
                     continue
+
+            # Inert images: zero release-tagged images. The compared value is the last
+            # path segment, so the check reads the same for a bare fixture package and
+            # a real full-path one.
+            inert_bad = None
+            for key, field in (("expect_inert", "inert"),
+                               ("expect_inert_allowed", "inert_allowed")):
+                if key in fixture:
+                    got_i = sorted(p.rsplit("/", 1)[-1] for p in plan.get(field, []))
+                    want_i = sorted(fixture[key])
+                    if got_i != want_i:
+                        inert_bad = "%s: %s mismatch\n    want: %s\n    got:  %s" % (
+                            name, field, want_i, got_i)
+                        break
+            if inert_bad:
+                failures.append(inert_bad)
+                continue
 
             # Structural invariants, checked on EVERY fixture. Both are monotonicity
             # claims the policy makes, and a fixture that violates either has found a

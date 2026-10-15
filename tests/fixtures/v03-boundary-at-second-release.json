@@ -45,5 +45,6 @@
   ],
   "expect_delete": [
     "api@sha256:build-old"
-  ]
+  ],
+  "expect_inert": []
 }

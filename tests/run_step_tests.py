@@ -297,6 +297,35 @@ exit 0
                 "calls": calls.read_text()}
 
 
+def run_inert_step(body: str, *, flag="true", inert=(), inert_allowed=(), plan=True,
+                   pattern=r"^v\d+\.\d+\.\d+$"):
+    """Execute the 'Fail on inert images' body against a synthetic plan file.
+
+    flag:           the fail_on_inert input as the step's env sees it
+    inert:          full package paths the plan reports as inert (not allow-listed)
+    inert_allowed:  allow-listed inert packages
+    plan:           False = the plan step never produced a file
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        plan_path = tmp / "delete-plan.json"
+        if plan:
+            plan_path.write_text(json.dumps(
+                {"inert": list(inert), "inert_allowed": list(inert_allowed)}))
+        summary = tmp / "gh_summary"
+        summary.write_text("")
+        env = dict(os.environ)
+        env.update(FAIL_ON_INERT=flag, RELEASE_TAG_PATTERN=pattern,
+                   GITHUB_STEP_SUMMARY=str(summary))
+        body = body.replace("/tmp/delete-plan.json", str(plan_path))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "summary": summary.read_text()}
+
+
 def run_exec_step(body: str, *, degraded="false", delete_err=None, describe_err=None):
     """Execute the deletion body against a stubbed gcloud, with a 2-tagged /
     2-untagged plan. Returns which images gcloud was actually asked to delete.
@@ -2092,6 +2121,48 @@ def main():
     check("retire · a delete failure still fails the run", r["rc"] == 1, r["out"])
     check("retire · an immutability failure is named as such",
           "immutab" in r["out"].lower(), r["out"])
+
+    # ---- cleanup-gar-images · Fail on inert images ----
+    inert_step = extract_step(GAR, "cleanup", "Fail on inert images")
+    print("\ncleanup-gar-images · Fail on inert images")
+    IMG = "r-docker.pkg.dev/p/repo/legacy"
+    PAT = r"^v\d+\.\d+\.\d+$"
+
+    r = run_inert_step(inert_step, flag="false", inert=[IMG])
+    check("flag off + inert exits 0", r["rc"] == 0, r["out"])
+
+    r = run_inert_step(inert_step, flag="true", inert=[IMG])
+    check("flag on + inert exits 1", r["rc"] == 1, r["out"])
+    check("flag on + inert emits ::error::", "::error::" in r["out"], r["out"])
+    check("error names the image", IMG in r["out"], r["out"])
+    check("error names the release pattern", PAT in r["out"], r["out"])
+    check("error says how to fix it",
+          "release_tag_pattern" in r["out"] and "allow_inert_images" in r["out"], r["out"])
+    check("flag on + inert lists the image in the summary", IMG in r["summary"], r["summary"])
+
+    r = run_inert_step(inert_step, flag="true", inert=[IMG, IMG + "2"])
+    check("one ::error:: per inert image", r["out"].count("::error::") >= 2
+          and IMG + "2" in r["out"], r["out"])
+
+    r = run_inert_step(inert_step, flag="true", inert=[])
+    check("flag on + nothing inert exits 0", r["rc"] == 0, r["out"])
+
+    r = run_inert_step(inert_step, flag="true", inert=[], inert_allowed=[IMG])
+    check("flag on + only allow-listed inert exits 0", r["rc"] == 0, r["out"])
+    check("allow-listed inert raises no ::error::", "::error::" not in r["out"], r["out"])
+
+    r = run_inert_step(inert_step, flag="true", inert=[IMG], plan=False)
+    check("flag on + no plan file exits 0 (the plan step already failed the run)",
+          r["rc"] == 0, r["out"])
+
+    gar_job = yaml.safe_load(GAR.read_text())["jobs"]["cleanup"]["steps"]
+    inert_defn = next(s for s in gar_job if s.get("name") == "Fail on inert images")
+    cond = str(inert_defn.get("if", ""))
+    check("inert step is gated on the flag and not-cancelled, not on dry_run",
+          "fail_on_inert" in cond and "!cancelled()" in cond and "dry_run" not in cond, cond)
+    check("inert step is the LAST step", gar_job[-1] is inert_defn or
+          gar_job[-1].get("name") == "Fail on inert images",
+          [s.get("name") for s in gar_job][-2:])
 
     # ---- cleanup-gar-images · stranded :latest cleanup ----
     #
