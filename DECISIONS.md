@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [`v3.5.2` released (neutral service names, older `ops-subset` alias removed)](#2026-10-15--v352-released-neutral-service-names-older-ops-subset-alias-removed)
 - `2026-10-15` — [Public repo names no consumer service — neutral role names, older `ops-subset` alias removed](#2026-10-15--public-repo-names-no-consumer-service--neutral-role-names-older-ops-subset-alias-removed)
 - `2026-10-15` — [`v3.5.1` released (`release-flow` YAML 1.2 booleans)](#2026-10-15--v351-released-release-flow-yaml-12-booleans)
 - `2026-10-15` — [`release-flow`: YAML specs read with YAML 1.2 booleans — `off` is not `false`](#2026-10-15--release-flow-yaml-specs-read-with-yaml-12-booleans--off-is-not-false)
@@ -113,6 +114,14 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-15 — `v3.5.2` released (neutral service names, older `ops-subset` alias removed)
+
+**What.** `v3.5.2` carries the 2026-10-15 change "Public repo names no consumer service" (PR #129). It is a patch release: the workflow input contract is unchanged. The release-flow CLI drops the older second name for `ops-subset`, which no current caller uses (checked read-only before removal). The rest is neutral names in tests, fixtures and docs. The release-flow tree changed, so callers that want it move their pin to `v3.5.2`.
+
+**Caller changes to adopt it.** Only the pin, as long as the caller already calls `ops-subset` (every known caller does).
+
+**Owner ask.** Released on the owner's explicit "merge it and cut v3.5.2" (2026-10-15).
 
 ## 2026-10-15 — Public repo names no consumer service — neutral role names, older `ops-subset` alias removed
 
