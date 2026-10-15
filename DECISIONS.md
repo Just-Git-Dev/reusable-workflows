@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [`release-flow`: YAML specs read with YAML 1.2 booleans — `off` is not `false`](#2026-10-15--release-flow-yaml-specs-read-with-yaml-12-booleans--off-is-not-false)
 - `2026-10-15` — [`v3.5.0` released (`release-flow` breaking-approved waiver)](#2026-10-15--v350-released-release-flow-breaking-approved-waiver)
 - `2026-10-15` — [Release flow: a `breaking-approved` label waives an exact list of breaking changes (supersedes the no-approval ruling)](#2026-10-15--release-flow-a-breaking-approved-label-waives-an-exact-list-of-breaking-changes-supersedes-the-no-approval-ruling)
 - `2026-10-15` — [Root release checks contracts between services only — no removal-approval list (2026-10-15)](#2026-10-15--root-release-checks-contracts-between-services-only--no-removal-approval-list-2026-10-15)
@@ -110,6 +111,37 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-15 — `release-flow`: YAML specs read with YAML 1.2 booleans — `off` is not `false`
+
+**Context.** Consumer C reported on 2026-10-15 that `release-flow spec-compat` showed 2 false
+"enum narrowed" findings when it compared a served `openapi.json` with a raw `swagger.yaml`. The
+enum values in question were an unquoted `off`.
+
+**RCA.**
+- *Symptom:* a JSON spec compared with a YAML spec of the same API reported request enums as
+  narrowed.
+- *Root cause:* `cli_ops_check.load()` (shared by `spec-compat` and `ops-subset`) read YAML with
+  `yaml.safe_load`, which follows YAML 1.1. In YAML 1.1 an unquoted `on`/`off`/`yes`/`no`, in any
+  case, is a boolean. JSON keeps `"off"` as a string, so the enum `["off", …]` turned into
+  `[False, …]` on the YAML side, and the subset test saw `"off"` disappear.
+- *Why it wasn't caught:* every test and every real caller compared two specs of the same
+  format. When both sides are YAML they are misread the same way, so the bug never showed. The
+  mixed-format case was never exercised.
+- *Fix:* YAML is now read with a `SafeLoader` subclass whose boolean resolver accepts only
+  `true`/`false` (any case), as YAML 1.2 does. Everything else in the safe loader is unchanged,
+  and the global `SafeLoader` is not modified.
+- *Prevention:* `test_spec_load.py` loads one spec as YAML and as JSON and asserts the two are
+  equal. It also runs `spec-compat` in both directions and requires rc 0, and asserts that real
+  booleans still parse. It was red before the fix (false "enum narrowed") and is green after.
+  `docs/release-flow.md` §Contract checks now states that the two inputs may be in different
+  formats.
+
+**Rejected.** Telling callers to render YAML to JSON first. Consumer C already does this as a
+workaround, but every new caller would rediscover the problem. Moving to a YAML 1.2 library
+(`ruamel.yaml`) would add a dependency for a fix that needs one resolver. Other YAML 1.1
+quirks, such as sexagesimal `1:20` read as an int, are not fixed: no spec has hit one, and the
+fix is kept to the reported class.
 
 ## 2026-10-15 — `v3.5.0` released (`release-flow` breaking-approved waiver)
 

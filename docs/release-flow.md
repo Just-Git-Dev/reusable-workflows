@@ -64,6 +64,12 @@ construct it cannot compare. Additive changes pass. The full list is in the CLI 
 `examined N operation(s)`. Exit 1 = incompatible **or zero operations examined**; exit 2 = usage
 or an unreadable file.
 
+Both `spec-compat` and `ops-subset` take JSON or YAML, and the two sides may differ in format.
+YAML is read with YAML 1.2 booleans: only `true`/`false` are booleans, so an unquoted `off`,
+`on`, `yes` or `no` stays a string, exactly as it would in the JSON rendering of the same spec.
+(Plain PyYAML follows YAML 1.1 and reads `off` as `false`. Up to v3.5.0, a JSON spec compared
+with a raw YAML spec therefore reported a false "enum narrowed".)
+
 ### Breaking changes and the `breaking-approved` label
 
 A removal that breaks a **live** consumer is a breaking change. It ships in one of two ways:
