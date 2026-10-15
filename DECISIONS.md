@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [`v3.5.1` released (`release-flow` YAML 1.2 booleans)](#2026-10-15--v351-released-release-flow-yaml-12-booleans)
 - `2026-10-15` — [`release-flow`: YAML specs read with YAML 1.2 booleans — `off` is not `false`](#2026-10-15--release-flow-yaml-specs-read-with-yaml-12-booleans--off-is-not-false)
 - `2026-10-15` — [`v3.5.0` released (`release-flow` breaking-approved waiver)](#2026-10-15--v350-released-release-flow-breaking-approved-waiver)
 - `2026-10-15` — [Release flow: a `breaking-approved` label waives an exact list of breaking changes (supersedes the no-approval ruling)](#2026-10-15--release-flow-a-breaking-approved-label-waives-an-exact-list-of-breaking-changes-supersedes-the-no-approval-ruling)
@@ -111,6 +112,18 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-15 — `v3.5.1` released (`release-flow` YAML 1.2 booleans)
+
+**What.** `v3.5.1` carries the YAML 1.2 boolean fix for the release-flow spec loader (PR #127, see
+the entry "`release-flow`: YAML specs read with YAML 1.2 booleans"). It is a patch release: the
+input contract is unchanged. A JSON spec compared with a YAML spec no longer reports a false
+"enum narrowed" for an unquoted `off`/`on`/`yes`/`no`. The release-flow CLI tree is now
+`6a57e27`, so callers move their pin to `v3.5.1` to get the fix.
+
+**Caller changes to adopt it.** Only the pin. No new input, secret or permission.
+
+**Owner ask.** Released on the owner's explicit "merge it and cut v3.5.1" (2026-10-15).
 
 ## 2026-10-15 — `release-flow`: YAML specs read with YAML 1.2 booleans — `off` is not `false`
 
