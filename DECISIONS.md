@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [Root release checks contracts between services only — no removal-approval list (2026-10-15)](#2026-10-15--root-release-checks-contracts-between-services-only--no-removal-approval-list-2026-10-15)
 - `2026-10-13` — [`release-flow`: the release-PR check example triggers on manifests only (`releases/*.yaml`)](#2026-10-13--release-flow-the-release-pr-check-example-triggers-on-manifests-only-releasesyaml)
 - `2026-10-13` — [`release-flow`: the App key is a declared secret passed BY NAME — `inherit` passes nothing across orgs](#2026-10-13--release-flow-the-app-key-is-a-declared-secret-passed-by-name--inherit-passes-nothing-across-orgs)
 - `2026-10-13` — [`release-flow`: `app-id` must resolve at the caller — an environment-only variable is empty](#2026-10-13--release-flow-app-id-must-resolve-at-the-caller--an-environment-only-variable-is-empty)
@@ -107,6 +108,34 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-15 — Root release checks contracts between services only — no removal-approval list (2026-10-15)
+
+**Context.** A consumer's root release refused a deliberate removal from a provider's OpenAPI
+spec, and two patch versions were burned before publish. The caller ran `spec-compat` twice per
+provider: check A against the live consumer's pinned copy of the provider spec, and check B
+against the live provider's own spec. Check B can never pass a removal, even after a full
+deprecation cycle, because the live provider always still lists what is being removed. The
+consumer's session proposed a per-release approval list in the release manifest.
+
+**Decision (owner).** Each service is responsible for its own release; the root repo only
+coordinates the overall release. So the root release checks contracts BETWEEN services (check A)
+and nothing else. Check B is the service's own release policy and moves into that service's own
+CI. There is no approval list: no manifest field, and no new `spec-compat` option.
+
+**Why.** An approval list would make the root release more complicated, and it would put a
+per-service decision (may this service drop a field?) into the coordinating repo. With check B
+gone, a removal that another service depends on goes through in two releases. First the consumer
+drops the item from its pinned copy. Then the provider removes it, and check A passes. The
+grounds for that are the CLI's docstring (it fails only for what the baseline lists); the loop
+itself was not traced.
+
+**Reversal.** Earlier the same day the owner had ruled for an approval option in the shared tool.
+They replaced it once the scope rule above was stated.
+
+**Follow-ups.** TODO.md §"Release flow — `spec-compat` has no way to acknowledge": document the
+rule and the two-release sequence in `docs/release-flow.md`. The consumer's session moves check B
+out of its root `release.yml`.
 
 ## 2026-10-13 — `release-flow`: the release-PR check example triggers on manifests only (`releases/*.yaml`)
 
