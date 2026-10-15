@@ -41,6 +41,8 @@ class Repo:
         self.live_runs = None   # deploy-workflow runs for status=success queries (None = none)
         self.pulls = {}          # commit sha -> [PR dicts]   (root repo)
         self.check_runs = {}     # head sha -> [check-run dicts]
+        self.pr_objects = {}     # PR number -> PR dict (pulls/{n}; open ones also by head ref)
+        self.issue_events = {}   # PR number -> [issue events] (issues/{n}/events)
         self.wf_runs = []        # workflow runs of the root repo (release.yml)
         self.after_patch = None  # callable(repo, release) to mutate state post-PATCH
         self.base_branch = "main"          # the branch compare/<base>...<sha> is answered for
@@ -168,6 +170,20 @@ class FakeGitHub:
             m = re.match(r"^commits/([0-9a-f]+)/pulls$", rest)
             if m:
                 return 200, repo.pulls.get(m.group(1), [])
+            m = re.match(r"^pulls/(\d+)$", rest)
+            if m:
+                pr = repo.pr_objects.get(int(m.group(1)))
+                return (200, pr) if pr else nf
+            if rest == "pulls" and q.get("head"):
+                return 200, [pr for pr in repo.pr_objects.values()
+                             if pr.get("state") == q.get("state", "open")
+                             and f"{OWNER}:{(pr.get('head') or {}).get('ref')}" == q["head"]]
+            m = re.match(r"^issues/(\d+)/events$", rest)
+            if m:
+                size = min(int(q.get("per_page", 30)), self.page_size)
+                page = int(q.get("page", 1))
+                evs = repo.issue_events.get(int(m.group(1)), [])
+                return 200, evs[(page - 1) * size: page * size]
             m = re.match(r"^commits/([0-9a-f]+)/check-runs$", rest)
             if m:
                 return 200, {"check_runs": repo.check_runs.get(m.group(1), [])}

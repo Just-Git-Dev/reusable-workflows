@@ -7,7 +7,7 @@ Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 3 open
+- **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 3 open, 2 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
 - **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
 - **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
@@ -43,32 +43,27 @@ still lists the thing being removed.
 Rulings (owner, 2026-10-15):
 - Each service is responsible for its own release. The root repo only coordinates the overall
   release, so the root release checks contracts BETWEEN services and nothing else.
-- Q1: There is NO approval list for removals: no manifest field and no new `spec-compat`
-  option. (This replaces an earlier same-day ruling that put an approval option in the shared
-  tool; the owner reversed it once the scope rule above was stated.) Check A stays in the root
-  release. Check B ("does the provider drop anything its own last release had") is the
-  service's own release policy. It moves into that service's own CI, where the service decides
-  how it handles a deliberate removal.
-- A removal that another service depends on therefore takes two releases. First the consumer
-  stops using the item and drops it from its pinned copy of the provider spec. Then the
-  provider removes it, and check A passes because the consumer's baseline no longer lists it.
-  This rests on the CLI's docstring, which says the check fails only for things the baseline
-  lists; the comparison loop itself was not traced.
-- Q2-Q4 (how wide an approval reaches, which checks may be approved, who reviews one) are moot:
-  there is no approval.
+- Check A stays in the root release. Check B ("does the provider drop anything its own last
+  release had") is the service's own release policy and moves into that service's own CI.
+- Q1, REVERSED the same day (owner, confirmed in the devops session after the consumer relayed a
+  fuller ruling): a removal that breaks a live consumer is a breaking change. It ships in ONE
+  release when the owner labels the root release PR `breaking-approved` and the PR body lists
+  every break exactly; without the label it takes two releases (consumer first, then provider).
+  Built on branch `feat/breaking-approved-waiver`; rules R1-R6 in `docs/release-flow.md`
+  §Contract checks; DECISIONS 2026-10-15 "a `breaking-approved` label waives an exact list".
 
-- [ ] `docs/release-flow.md` §What the caller keeps / §Contract checks — state the rule: the root
-  release's contract checks run only between services (a live consumer's pinned spec against
-  the candidate provider spec). A provider-against-its-own-live-spec check belongs in the
-  service's own CI, not the root release. Document the two-release removal sequence above as the
-  way to remove something another service depends on. Doc-only; no input-contract change.
+- [x] `docs/release-flow.md` §Contract checks — between-services-only rule, the two-release
+  route, and the `breaking-approved` waiver (2026-10-15, `feat/breaking-approved-waiver`).
+- [ ] Ship rw `v3.5.0` (only on the owner's explicit ask), then send consumer C the tag, SHA,
+  `RELEASE_FLOW_TREE` and the caller changes (release-pr trigger types; `--pair`,
+  `--consumer-side`, `RELEASE_BREAKING` on its spec-compat line). Verify read-only: a rehearsal
+  on a real breaking PR goes red without the label, green with it, red with one line edited.
 - [ ] Consumer C — move check B out of the root `release.yml` into the provider service's own
   CI. That is the consumer's change, made by its own session; this repo only verifies it.
-- [ ] `actions/release-flow/releaseflow/release_flow.py` L70-72 (the `ops-subset` usage text) and
-  `spec_compat.py` L5 (module docstring) — replace consumer C's real file paths
-  (`ui/web/src/mocks/vendor/bff-swagger.yaml`, `.../issuer-openapi.yaml`,
-  `contract/issuer-openapi.yaml`) with placeholders. This repo is public and names no consumer.
-  Wider, for the owner to judge (found 2026-10-15 by a `git ls-files` sweep): the whole
+- [x] `release_flow.py` (the `ops-subset` / `spec-compat` usage text) and `spec_compat.py`
+  (module docstring) — consumer C's real file paths replaced with generic wording
+  (2026-10-15, `feat/breaking-approved-waiver`).
+- [ ] Wider, for the owner to judge (found 2026-10-15 by a `git ls-files` sweep): the whole
   release-flow package and its tests/testdata use consumer C's service names (`issuer`, `api`,
   `ui`, `cli`) and testdata files like `g5-issuer134-reduced.json`. These words are generic, but
   together they describe one consumer's topology.

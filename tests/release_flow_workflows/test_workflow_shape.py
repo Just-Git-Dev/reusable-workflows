@@ -141,7 +141,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(ins["environment"]["default"], "release")
         self.assertEqual(ins["pr-check-name"]["default"], "release-pr / release-pr")
         self.assertEqual(ins["rehearsal"]["type"], "boolean")
-        self.assertEqual(set(call["outputs"]), {"manifest", "manifest-sha256", "pr", "order", "rehearsal", "resolved",
+        self.assertEqual(set(call["outputs"]), {"manifest", "manifest-sha256", "pr", "order", "rehearsal", "resolved", "breaking",
                                            "checks"})
 
     def test_jobs_and_needs(self):
@@ -201,7 +201,7 @@ class PlanTests(unittest.TestCase):
                  or s.get("id") in ("in", "m")]
         self.assertEqual(order, sorted(order), names)
         ids = [s.get("id") for s in self.jobs["plan"]["steps"] if s.get("id")]
-        self.assertEqual(ids, ["in", "cfg", "m", "o", "up"])
+        self.assertEqual(ids, ["in", "cfg", "m", "brk", "o", "up"])
 
     def test_resolve_runs_the_read_checks_with_the_minted_token(self):
         steps = self.jobs["resolve"]["steps"]
