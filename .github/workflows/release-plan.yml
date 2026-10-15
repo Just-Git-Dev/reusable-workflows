@@ -110,7 +110,7 @@ permissions:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v3.5.0
+  WORKFLOW_VERSION: v3.5.1
   # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
   RELEASE_FLOW_TREE: "6a57e27961a405c8a5019f1889fe03e1870f3cb8"
 

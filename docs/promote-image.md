@@ -106,7 +106,7 @@ permissions:
 
 jobs:
   promote:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/promote-image.yml@v3.5.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/promote-image.yml@v3.5.1
     with:
       gcp_region: asia-south1
       gar_project: zs-products
@@ -161,7 +161,7 @@ jobs:
         include:
           - { svc: api,             type: deployment }
           - { svc: payment-enquiry, type: cron }
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/promote-image.yml@v3.5.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/promote-image.yml@v3.5.1
     with:
       gcp_region: ${{ vars.CLUSTER_REGION }}
       image_registry: ${{ vars.IMAGE_REGISTRY }}   # exact host stage pushed to
