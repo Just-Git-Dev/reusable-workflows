@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [`v3.6.0` released (`cleanup-gar-images` opt-in `fail_on_inert`)](#2026-10-15--v360-released-cleanup-gar-images-opt-in-fail_on_inert)
 - `2026-10-15` — [`cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run](#2026-10-15--cleanup-gar-images-opt-in-fail_on_inert-makes-an-inert-sweep-fail-the-run)
 - `2026-10-15` — [`v3.5.2` released (neutral service names, older `ops-subset` alias removed)](#2026-10-15--v352-released-neutral-service-names-older-ops-subset-alias-removed)
 - `2026-10-15` — [Public repo names no consumer service — neutral role names, older `ops-subset` alias removed](#2026-10-15--public-repo-names-no-consumer-service--neutral-role-names-older-ops-subset-alias-removed)
@@ -115,6 +116,12 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-15 — `v3.6.0` released (`cleanup-gar-images` opt-in `fail_on_inert`)
+
+**What.** `v3.6.0` carries the 2026-10-15 change "`cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run" (PR #131). It is a minor release: two new optional inputs (`fail_on_inert`, `allow_inert_images`), default behaviour unchanged. `cleanup-gar-images.yml` is otherwise unchanged since `v2.8.0` apart from version stamps and one comment (checked with `git diff v2.8.0 v3.5.2`), so a caller still on `v2.8.0` can move that one workflow to `v3.6.0` without other changes.
+
+**Why now.** The owner approved releasing on merge (2026-10-15), so callers can opt in straight away: bump the pin to `@v3.6.0` and set `fail_on_inert: true`.
 
 ## 2026-10-15 — `cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run
 
