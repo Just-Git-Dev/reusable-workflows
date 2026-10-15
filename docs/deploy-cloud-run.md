@@ -126,8 +126,8 @@ jobs:
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_RELEASER_SA }}
       gar_repo: backend
-      image_name: bff-api      # image path differs from the service name
-      service: api
+      image_name: gateway      # image path differs from the service name
+      service: gateway-prod
       image_tag: ${{ github.event.inputs.tag }}   # empty on tag-push ⇒ ref name
 ```
 

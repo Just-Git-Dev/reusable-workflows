@@ -82,7 +82,7 @@ A removal that breaks a **live** consumer is a breaking change. It ships in one 
 
    ````
    ```breaking
-   webapp -> backend | POST /login: body/custom_claims: property removed in candidate
+   webapp -> backend | POST /login: body/extra_fields: property removed in candidate
    ```
    ````
 
@@ -277,7 +277,7 @@ takes `allowed`, and a config naming a repo outside it is refused.
   "deploy_run_name": "Deploy {tag}",
   "services": [
     {"repo": "backend", "kind": "image", "order": 1, "deploy_workflow": "deploy.yml",
-     "image": "backend/api", "health_url": "https://api.example.test/.well-known/health",
+     "image": "backend/core", "health_url": "https://gateway.example.test/.well-known/health",
      "health": {"path": "data.status", "expect": "UP"},
      "ci": [{"workflow": "ci.yml", "paths_ignore": ["**.md", "docs/**"]}]},
     {"repo": "webapp", "kind": "pages", "order": 2, "deploy_workflow": "deploy.yml",
@@ -285,7 +285,7 @@ takes `allowed`, and a config naming a repo outside it is refused.
     {"repo": "desktop", "kind": "download", "order": 3, "deploy_workflow": "release.yml",
      "assets": ["Setup.msi", "app.exe"], "ci": [{"workflow": "release-gate.yml"}]}
   ],
-  "consumers_only": ["cli"],
+  "consumers_only": ["tool"],
   "contracts": [{"consumer": "webapp", "provider": "backend"}]
 }
 ```

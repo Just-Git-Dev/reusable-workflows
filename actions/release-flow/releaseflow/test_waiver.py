@@ -9,8 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import waiver  # noqa: E402
 
-CONTRACTS = {("api", "issuer"), ("ui", "api")}
-F1 = "POST /login: body/custom_claims: property removed in candidate"
+CONTRACTS = {("gateway", "core"), ("web", "gateway")}
+F1 = "POST /login: body/extra_fields: property removed in candidate"
 F2 = "GET /me: 200/role: enum narrowed"
 
 
@@ -26,28 +26,28 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(waiver.parse_block("```yaml\na: b\n```"))
 
     def test_one_line_per_break_pair_first(self):
-        got = waiver.parse_block(body(f"api -> issuer | {F1}", f"ui -> api | {F2}"))
-        self.assertEqual(got, [waiver.Entry("api", "issuer", F1), waiver.Entry("ui", "api", F2)])
-        self.assertEqual(got[0].pair, "api -> issuer")
-        self.assertEqual(got[0].line, f"api -> issuer | {F1}")
+        got = waiver.parse_block(body(f"gateway -> core | {F1}", f"web -> gateway | {F2}"))
+        self.assertEqual(got, [waiver.Entry("gateway", "core", F1), waiver.Entry("web", "gateway", F2)])
+        self.assertEqual(got[0].pair, "gateway -> core")
+        self.assertEqual(got[0].line, f"gateway -> core | {F1}")
 
     def test_crlf_and_blank_lines_and_outer_whitespace(self):
-        got = waiver.parse_block(body("", f"  api -> issuer | {F1}  ", "").replace("\n", "\r\n"))
-        self.assertEqual(got, [waiver.Entry("api", "issuer", F1)])
+        got = waiver.parse_block(body("", f"  gateway -> core | {F1}  ", "").replace("\n", "\r\n"))
+        self.assertEqual(got, [waiver.Entry("gateway", "core", F1)])
 
     def test_finding_may_contain_pipes_and_arrows(self):
         f = "GET /x: 200/a: type changed 'string' -> 'integer' | odd"
-        self.assertEqual(waiver.parse_block(body(f"api -> issuer | {f}"))[0].finding, f)
+        self.assertEqual(waiver.parse_block(body(f"gateway -> core | {f}"))[0].finding, f)
 
     def test_malformed_lines_fail(self):
-        for bad in ("api issuer | x", "api -> issuer", "api -> issuer |", "API -> issuer | x",
-                    "api->issuer | x", "-> issuer | x"):
+        for bad in ("gateway core | x", "gateway -> core", "gateway -> core |", "GATEWAY -> core | x",
+                    "gateway->core | x", "-> core | x"):
             with self.assertRaises(waiver.WaiverError, msg=bad):
                 waiver.parse_block(body(bad))
 
     def test_duplicate_line_fails(self):
         with self.assertRaises(waiver.WaiverError) as cm:
-            waiver.parse_block(body(f"api -> issuer | {F1}", f"api -> issuer | {F1}"))
+            waiver.parse_block(body(f"gateway -> core | {F1}", f"gateway -> core | {F1}"))
         self.assertIn("duplicate", str(cm.exception))
 
     def test_empty_block_fails(self):
@@ -56,11 +56,11 @@ class ParseTests(unittest.TestCase):
 
     def test_two_blocks_fail(self):
         with self.assertRaises(waiver.WaiverError):
-            waiver.parse_block(body(f"api -> issuer | {F1}") + body(f"ui -> api | {F2}"))
+            waiver.parse_block(body(f"gateway -> core | {F1}") + body(f"web -> gateway | {F2}"))
 
     def test_unclosed_block_fails(self):
         with self.assertRaises(waiver.WaiverError):
-            waiver.parse_block(f"```breaking\napi -> issuer | {F1}\n")
+            waiver.parse_block(f"```breaking\ngateway -> core | {F1}\n")
 
 
 class ShapeTests(unittest.TestCase):
@@ -70,8 +70,8 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(waiver.check_shape(["other"], "notes", CONTRACTS), [])
 
     def test_label_and_block_together(self):
-        got = waiver.check_shape([waiver.LABEL], body(f"api -> issuer | {F1}"), CONTRACTS)
-        self.assertEqual(got, [waiver.Entry("api", "issuer", F1)])
+        got = waiver.check_shape([waiver.LABEL], body(f"gateway -> core | {F1}"), CONTRACTS)
+        self.assertEqual(got, [waiver.Entry("gateway", "core", F1)])
 
     def test_label_without_block_fails(self):
         with self.assertRaises(waiver.WaiverError) as cm:
@@ -80,13 +80,13 @@ class ShapeTests(unittest.TestCase):
 
     def test_block_without_label_fails(self):
         with self.assertRaises(waiver.WaiverError) as cm:
-            waiver.check_shape(["bug"], body(f"api -> issuer | {F1}"), CONTRACTS)
+            waiver.check_shape(["bug"], body(f"gateway -> core | {F1}"), CONTRACTS)
         self.assertIn(waiver.LABEL, str(cm.exception))
 
     def test_pair_must_be_a_configured_contract(self):
         with self.assertRaises(waiver.WaiverError) as cm:
-            waiver.check_shape([waiver.LABEL], body(f"issuer -> api | {F1}"), CONTRACTS)
-        self.assertIn("issuer -> api", str(cm.exception))
+            waiver.check_shape([waiver.LABEL], body(f"core -> gateway | {F1}"), CONTRACTS)
+        self.assertIn("core -> gateway", str(cm.exception))
 
 
 class LabelBeforeMergeTests(unittest.TestCase):
@@ -137,19 +137,19 @@ class MatrixTests(unittest.TestCase):
                 "provider_ref": "a" * 40, "states": ["s"], "consumer_side": side}
 
     def test_pair_with_a_live_consumer_check_passes(self):
-        entries = [waiver.Entry("api", "issuer", F1)]
-        waiver.check_matrix(entries, [self.check("api", "issuer", "live"),
-                                      self.check("api", "issuer", "candidate")])
+        entries = [waiver.Entry("gateway", "core", F1)]
+        waiver.check_matrix(entries, [self.check("gateway", "core", "live"),
+                                      self.check("gateway", "core", "candidate")])
 
     def test_pair_not_in_the_matrix_fails(self):
         with self.assertRaises(waiver.WaiverError) as cm:
-            waiver.check_matrix([waiver.Entry("ui", "api", F2)], [self.check("api", "issuer", "live")])
-        self.assertIn("ui -> api", str(cm.exception))
+            waiver.check_matrix([waiver.Entry("web", "gateway", F2)], [self.check("gateway", "core", "live")])
+        self.assertIn("web -> gateway", str(cm.exception))
 
     def test_pair_with_only_a_candidate_consumer_check_fails(self):
         with self.assertRaises(waiver.WaiverError):
-            waiver.check_matrix([waiver.Entry("api", "issuer", F1)],
-                                [self.check("api", "issuer", "candidate")])
+            waiver.check_matrix([waiver.Entry("gateway", "core", F1)],
+                                [self.check("gateway", "core", "candidate")])
 
     def test_empty_list_passes_any_matrix(self):
         waiver.check_matrix([], [])
@@ -157,9 +157,9 @@ class MatrixTests(unittest.TestCase):
 
 class JsonTests(unittest.TestCase):
     def test_round_trip(self):
-        entries = [waiver.Entry("api", "issuer", F1)]
+        entries = [waiver.Entry("gateway", "core", F1)]
         text = waiver.to_json(entries)
-        self.assertEqual(json.loads(text), [{"consumer": "api", "provider": "issuer", "finding": F1}])
+        self.assertEqual(json.loads(text), [{"consumer": "gateway", "provider": "core", "finding": F1}])
         self.assertEqual(waiver.from_json(text), entries)
 
     def test_empty_values(self):
@@ -168,44 +168,44 @@ class JsonTests(unittest.TestCase):
         self.assertEqual(waiver.from_json("[]"), [])
 
     def test_bad_json_fails(self):
-        for bad in ("{", "{}", '[{"consumer": "api"}]', '["x"]', '[{"consumer": "api", '
-                    '"provider": "issuer", "finding": ""}]'):
+        for bad in ("{", "{}", '[{"consumer": "gateway"}]', '["x"]', '[{"consumer": "gateway", '
+                    '"provider": "core", "finding": ""}]'):
             with self.assertRaises(waiver.WaiverError, msg=bad):
                 waiver.from_json(bad)
 
 
 class SplitTests(unittest.TestCase):
     """R4's matching, per pair."""
-    E = [waiver.Entry("api", "issuer", F1), waiver.Entry("ui", "api", F2)]
+    E = [waiver.Entry("gateway", "core", F1), waiver.Entry("web", "gateway", F2)]
 
     def test_listed_finding_is_waived(self):
-        self.assertEqual(waiver.split([F1], "api -> issuer", self.E), ([F1], [], []))
+        self.assertEqual(waiver.split([F1], "gateway -> core", self.E), ([F1], [], []))
 
     def test_unlisted_finding(self):
-        self.assertEqual(waiver.split([F1, "X: y"], "api -> issuer", self.E), ([F1], ["X: y"], []))
+        self.assertEqual(waiver.split([F1, "X: y"], "gateway -> core", self.E), ([F1], ["X: y"], []))
 
     def test_listed_entry_that_did_not_occur_is_stale(self):
-        self.assertEqual(waiver.split([], "api -> issuer", self.E), ([], [], [F1]))
+        self.assertEqual(waiver.split([], "gateway -> core", self.E), ([], [], [F1]))
 
     def test_another_pairs_entry_never_waives_here(self):
-        self.assertEqual(waiver.split([F2], "api -> issuer", self.E), ([], [F2], [F1]))
+        self.assertEqual(waiver.split([F2], "gateway -> core", self.E), ([], [F2], [F1]))
 
     def test_a_finding_printed_twice_is_waived_once(self):
-        self.assertEqual(waiver.split([F1, F1], "api -> issuer", self.E), ([F1], [], []))
+        self.assertEqual(waiver.split([F1, F1], "gateway -> core", self.E), ([F1], [], []))
 
 
 class PairAndPasteTests(unittest.TestCase):
     def test_parse_pair(self):
-        self.assertEqual(waiver.parse_pair("api -> issuer"), ("api", "issuer"))
-        for bad in ("api->issuer", "api -> ", "api", "Api -> issuer"):
+        self.assertEqual(waiver.parse_pair("gateway -> core"), ("gateway", "core"))
+        for bad in ("gateway->core", "gateway -> ", "gateway", "Gateway -> core"):
             with self.assertRaises(waiver.WaiverError, msg=bad):
                 waiver.parse_pair(bad)
 
     def test_paste_block_round_trips_through_the_parser(self):
-        text = waiver.paste_block("api -> issuer", [F1, F2, F1])
+        text = waiver.paste_block("gateway -> core", [F1, F2, F1])
         self.assertTrue(text.startswith("```breaking\n"))
-        self.assertEqual(waiver.parse_block(text), [waiver.Entry("api", "issuer", F1),
-                                                    waiver.Entry("api", "issuer", F2)])
+        self.assertEqual(waiver.parse_block(text), [waiver.Entry("gateway", "core", F1),
+                                                    waiver.Entry("gateway", "core", F2)])
 
 
 if __name__ == "__main__":

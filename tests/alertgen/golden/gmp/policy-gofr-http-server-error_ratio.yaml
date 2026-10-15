@@ -5,14 +5,14 @@ conditions:
 - conditionPrometheusQueryLanguage:
     duration: 600s
     evaluationInterval: 60s
-    query: (sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
-      / sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m])))
-      > 0.05 and sum by (job) (increase(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m]))
+    query: (sum by (job) (rate(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
+      / sum by (job) (rate(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*"}[10m])))
+      > 0.05 and sum by (job) (increase(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*"}[10m]))
       >= 20
-  displayName: HTTP 5xx ratio is high (api, issuer)
-displayName: HTTP 5xx ratio is high (api, issuer) [gofr.http.server.error_ratio]
+  displayName: HTTP 5xx ratio is high (core, gateway)
+displayName: HTTP 5xx ratio is high (core, gateway) [gofr.http.server.error_ratio]
 documentation:
-  content: '**HTTP 5xx ratio is high** — services: api, issuer.
+  content: '**HTTP 5xx ratio is high** — services: core, gateway.
 
 
     More than the threshold share of HTTP responses from this GoFr service were 5xx.
@@ -25,9 +25,9 @@ documentation:
     - Condition: > 5% (compared as 0.05), over 10m, for 10m, only with at least 20
     requests in the window
 
-    - Query: `(sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
-    / sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m])))
-    > 0.05 and sum by (job) (increase(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m]))
+    - Query: `(sum by (job) (rate(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
+    / sum by (job) (rate(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*"}[10m])))
+    > 0.05 and sum by (job) (increase(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*"}[10m]))
     >= 20`
 
 
@@ -44,4 +44,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: gofr-http-server-error_ratio
-  spec_hash: 37e44dd9592c348e
+  spec_hash: 2bd415da4030466b

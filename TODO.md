@@ -1,13 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-47 open across 15 live sections. 8 closed items archived.
+46 open across 15 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 2 open, 4 closed
+- **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open, 5 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
 - **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
 - **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
@@ -66,7 +66,7 @@ Rulings (owner, 2026-10-15):
   CI. Done 2026-10-15, verified read-only: root `6bc9fff` dropped the `<provider>@live →
   <provider>` pair. Provider main `c76935c` gained a `spec-compat` job in its release gate,
   run against the spec the live service serves.
-- [x] `actions/release-flow/releaseflow/cli_ops_check.py` `load()` — comparing a JSON spec with a
+- [x] `actions/release-flow/releaseflow/ops_subset.py` `load()` — comparing a JSON spec with a
   YAML spec gives false breaks. JSON goes through `json.loads`, which keeps the string `"off"`.
   YAML goes through `yaml.safe_load`, which follows YAML 1.1 and turns an unquoted `off`/`on`/
   `yes`/`no` into a boolean. Consumer C measured this on 2026-10-15: a served `openapi.json`
@@ -80,10 +80,12 @@ Rulings (owner, 2026-10-15):
 - [x] `release_flow.py` (the `ops-subset` / `spec-compat` usage text) and `spec_compat.py`
   (module docstring) — consumer C's real file paths replaced with generic wording
   (2026-10-15, `feat/breaking-approved-waiver`).
-- [ ] Wider, for the owner to judge (found 2026-10-15 by a `git ls-files` sweep): the whole
-  release-flow package and its tests/testdata use consumer C's service names (`issuer`, `api`,
-  `ui`, `cli`) and testdata files like `g5-issuer134-reduced.json`. These words are generic, but
-  together they describe one consumer's topology.
+- [x] Wider (owner ruled 2026-10-15) (found 2026-10-15 by a `git ls-files` sweep): the whole
+  release-flow package and its tests/testdata used consumer C's service names and matching
+  testdata file names. Renamed 2026-10-15 to neutral roles (core, gateway, web, site, tool, lib)
+  on the owner's ruling that this public repo names no consumer service. The second, older name
+  for `ops-subset` was dropped the same day, after consumer C moved off it (verified read-only at
+  its root main).
 
 ## Release flow — app-id from the environment (opened 2026-10-13)
 
@@ -358,13 +360,13 @@ escape — editing a `policy-*.json` is a silent no-op against the live policy. 
 that made it reach for a local script is fixed as of 2026-09-07 (JSON policy files are now
 read by both the linter and the applier; see `DECISIONS.md`).
 
-- [ ] `auth/infra/alerts/policy-*.json` — add `"notificationChannels":
+- [ ] `<consumer-repo>/infra/alerts/policy-*.json` — add `"notificationChannels":
       ["NOTIFICATION_CHANNEL_PLACEHOLDER"]` to each; the files currently carry no such key
       because the script passes `--notification-channels` on the CLI, and
       `validate-alerts.yml` **fails** a policy without it (correctly — it would notify nobody).
-- [ ] `auth/infra/alerts/email-channel.json` — no channel file exists yet; the script takes
+- [ ] `<consumer-repo>/infra/alerts/email-channel.json` — no channel file exists yet; the script takes
       the channel id from the `NOTIFY_CHANNEL` env var instead.
-- [ ] `auth/.github/workflows/` — add a thin caller with `channel_file: email-channel.json`
+- [ ] `<consumer-repo>/.github/workflows/` — add a thin caller with `channel_file: email-channel.json`
       and `policy_glob: 'policy-*.json'`, then retire `apply-alerts.sh`.
 
 **Cross-repo: the checklist above is auth-repo work, not ours.** Recorded here only so the
@@ -429,7 +431,7 @@ current: `python3 scripts/fleet_drift.py --orgs <consumer-C-org>,<consumer-A-org
 caller lines fleet-wide — 37 STALE, 20 OK, 0 MUTABLE**, spread `v2.3.1` → `v2.5.0`. Zero mutable
 pins — nothing is on `@main` or the `v1` alias, so the supply-chain risk that motivated this
 section is not currently live anywhere. Deepest stragglers are on the deploy path:
-`<consumer-C-org>/api` and `<consumer-C-org>/issuer` `deploy.yml` pin `deploy-cloud-run` and `promote-image` at
+`<consumer-C-org>/gateway` and `<consumer-C-org>/core` `deploy.yml` pin `deploy-cloud-run` and `promote-image` at
 `v2.3.1`, four minors behind. `cleanup-secret-versions.yml` is deliberately still at `v2.4.1` in
 all three consumer repos — that bump is not a no-op, it swaps a project-level `gcloud secrets
 list` for a per-secret `gcloud secrets describe` and changes the IAM the caller needs, so it is
@@ -454,10 +456,10 @@ semver here tracks the **input contract**, so each pin needs its own diff read b
       `cleanup-gar-images` already has to reason about — its own header comment names them, and
       the consumer A RCA found all 52 untagged manifests were index children of exactly this shape.
 
-      Surfaced 2026-08-12 while closing `<consumer-C-org>/issuer#2`, which carried `provenance: false`
+      Surfaced 2026-08-12 while closing `<consumer-C-org>/core#2`, which carried `provenance: false`
       on a local build step that no longer exists (build-once moved the build into
       `deploy-cloud-run`). Its stated reason was that Cloud Run consumes a plain image —
-      **that claim is unverified here**, and both `issuer` and `api` deploy fine today, so this
+      **that claim is unverified here**, and both the core service and the gateway deploy fine today, so this
       is registry clutter and an unmade decision, not a bug.
 
       It is genuinely a decision, not a cleanup: provenance is SLSA supply-chain metadata, and
@@ -560,7 +562,7 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       properly: untagged digests sitting exactly at the threshold age are wall-clock noise;
       tagged images, live digests, or ages away from the boundary are real. Latent `TypeError`
       on a missing `updateTime` fixed in the same pass.
-- [ ] **Pilot `<consumer-C-org>/issuer` end-to-end** (lowest blast radius of the five). In its
+- [ ] **Pilot `<consumer-C-org>/core` end-to-end** (lowest blast radius of the five). In its
       `deploy.yml`: add a `main`-triggered `deploy-cloud-run` job with `build_only: true` →
       `:<sha>`; move the migrate-smoke validation to run against that pushed image; rewrite the
       tag path to call `promote-image` with `source_tag: ${{ github.sha }}`,
@@ -571,7 +573,7 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
       `timeout_minutes` above it — the tag run and the `main` build run are independent, so
       without it a release cut alongside the merge fails on a healthy build. See the
       2026-07-28 race RCA in DECISIONS.md.
-- [ ] **Roll to the remaining four**, in this order: `<consumer-C-org>/api`, `<consumer-A-org>/api`,
+- [ ] **Roll to the remaining four**, in this order: `<consumer-C-org>/gateway`, `<consumer-A-org>/api`,
       `<consumer-B-org>/image-service`, then **`<consumer-B-org>/api` last** — it drives three Cloud Run services
       off one image and has the largest env-var surface.
       **Precondition to confirm per repo before converting:** config is runtime-resolved
@@ -777,14 +779,14 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
   to the reusables is a measurable build-time regression. Worth an opt-in
   `cache_node_modules` input. Note the key must include the Node version, and it is only sound
   because `npm ci` is deterministic.
-- [x] **`deploy-cloudflare-pages` post-deploy smoke check — BUILT 2026-08-11** (`smoke_path`, `smoke_expect`, bounded retry, blocking). Next: migrate `<consumer-C-org>/ui` onto the reusable, which this unblocks. Original entry:  (`smoke_path` + bounded
-  retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `<consumer-C-org>/ui`
+- [x] **`deploy-cloudflare-pages` post-deploy smoke check — BUILT 2026-08-11** (`smoke_path`, `smoke_expect`, bounded retry, blocking). Next: migrate `<consumer-C-org>/web` onto the reusable, which this unblocks. Original entry:  (`smoke_path` + bounded
+  retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `<consumer-C-org>/web`
   hand-rolls exactly this after the **2026-06-29 `/device` outage**, where a stale bundle went
   live with a broken client-routed path and nothing caught it — Pages deploys are
   eventually-consistent, so the poll needs a bounded retry, not a single curl. It is also part of
   why that repo has not migrated to the reusable. **Six consumers**: the five current callers
   (`<consumer-B-org>/{ui,admin-ui,website}`, `<consumer-A-org>/{webapp,website}`) plus `eazyupdates-ui`. Lift the
-  logic from `<consumer-C-org>/ui`'s `deploy.yml` rather than reinventing it.
+  logic from `<consumer-C-org>/web`'s `deploy.yml` rather than reinventing it.
 - [x] **Repin the three GAR callers onto `v2.0.0`** (release-relative retention). **DONE — overtaken
       by events 2026-08-20:** all three had already reached `@v2.2.0`, and the fleet-wide repin to
       `@v2.3.1` (<consumer-B-org>/project#31, <consumer-C-org>/project#13, <consumer-A-org>/project#82) supersedes this
@@ -797,12 +799,12 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
       silently retaining a backlog. `<consumer-C-project-id>` takes `grace_period_days: 1` (it is the one doing
       build-once promotion). Fold `<consumer-A-org>/project#65`'s pin-comment fix and incident record into
       the <consumer-A-org> repin PR rather than merging it separately — same file, guaranteed conflict.
-- [ ] **`<consumer-C-org>/ui` + `<consumer-C-org>/website` are the unmigrated Cloudflare Pages tail.** `ui` pins
+- [ ] **`<consumer-C-org>/web` + `<consumer-C-org>/site` are the unmigrated Cloudflare Pages tail.** `web` pins
   `cloudflare/wrangler-action@v4` — a **mutable tag**, which is precisely what this repo's SHA-pin
-  CI rule exists to prevent, on a workflow holding a Pages deploy token; `website` shells out to
+  CI rule exists to prevent, on a workflow holding a Pages deploy token; `site` shells out to
   `npx wrangler`. Both should move to `deploy-cloudflare-pages`, but the smoke-check gap above is
-  a real blocker for `ui` — do that first, then migrate.
-  ⧖ **`ui` migration OPEN as <consumer-C-org>/ui#3 (2026-08-11)** — pinned `@v1.23.0`; the `guard` job
+  a real blocker for `web` — do that first, then migrate.
+  ⧖ **`web` migration OPEN as <consumer-C-org>/web#3 (2026-08-11)** — pinned `@v1.23.0`; the `guard` job
   (tag reachable from `origin/main`) and the tag→`package.json` stamp stayed caller-side; the
   `/device` smoke check became inputs, still aimed at `<consumer-C-domain>` rather than the preview
   URL. Node deliberately held at `22` (reusable defaults to 24) — bump separately.

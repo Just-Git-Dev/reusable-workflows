@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""cli -> issuer contract: every operation the released cli vendors must still exist.
+"""tool -> core contract: every operation the released tool vendors must still exist.
 
-The cli generates its whole command tree from its vendored issuer spec at startup, so an
-issuer release that drops (or re-methods) an operation silently breaks a command in a
-binary already in users' hands. This compares (METHOD, path) pairs: every pair in the cli's
-vendored spec must exist in the candidate issuer spec. Extra issuer operations are fine.
+The tool generates its whole command tree from its vendored core spec at startup, so an
+core release that drops (or re-methods) an operation silently breaks a command in a
+binary already in users' hands. This compares (METHOD, path) pairs: every pair in the tool's
+vendored spec must exist in the candidate core spec. Extra core operations are fine.
 
-Generalised as `ops-subset`: the same subset test serves ui -> api (ui's vendored copy of
-api's swagger must be a subset of the candidate api spec) where byte identity can never hold
-for "ui@live vs api@new". "cli"/"issuer" below read as consumer/provider.
+Generalised as `ops-subset`: the same subset test serves web -> gateway (web's vendored copy of
+gateway's swagger must be a subset of the candidate gateway spec) where byte identity can never hold
+for "web@live vs gateway@new". "tool"/"core" below read as consumer/provider.
 
-Usage: cli_ops_check.py CLI_SPEC ISSUER_SPEC [--label X]     (JSON or YAML files)
+Usage: ops_subset.py CLI_SPEC ISSUER_SPEC [--label X]     (JSON or YAML files)
 Exit: 0 all present; 1 missing operation(s) or ZERO examined (a check that examined nothing
 proves nothing); 2 usage / unreadable file / PyYAML missing for a YAML input.
 PyYAML is imported lazily and only for YAML input (like tools/stepup-path-check/check.py).

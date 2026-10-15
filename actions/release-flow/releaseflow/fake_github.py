@@ -110,7 +110,7 @@ class FakeGitHub:
                 return 200, {"name": repo.name, "permissions": {"push": repo.can_push}}
             if rest == "git/matching-refs/tags/v":
                 # Like real GitHub: matching-refs is NOT paginated -- every page returns every
-                # matching ref (measured 2026-10-09: issuer pages 1, 2, 50 each returned 152).
+                # matching ref (measured 2026-10-09: core pages 1, 2, 50 each returned 152).
                 return 200, [{"ref": f"refs/tags/{t}", "object": dict(o)}
                              for t, o in repo.refs.items()]
             if rest == "releases":
@@ -235,25 +235,25 @@ CFG_DICT = {
     "owner": OWNER,
     "gar_registry": "asia-southeast1-docker.pkg.dev/consumer-a-project",
     "services": [
-        {"repo": "issuer", "kind": "image", "order": 1, "deploy_workflow": "deploy.yml",
-         "health_url": "https://auth.example/health", "image": "backend/api",
+        {"repo": "core", "kind": "image", "order": 1, "deploy_workflow": "deploy.yml",
+         "health_url": "https://auth.example/health", "image": "backend/core",
          "ci": [{"workflow": "tests.yml", "paths_ignore": ["**.md", "docs/**"]},
                 {"workflow": "changelog-hygiene.yml"}]},
-        {"repo": "api", "kind": "image", "order": 2, "deploy_workflow": "deploy.yml",
-         "health_url": "https://api.example/health", "image": "backend/bff-api",
+        {"repo": "gateway", "kind": "image", "order": 2, "deploy_workflow": "deploy.yml",
+         "health_url": "https://gateway.example/health", "image": "backend/gateway",
          "ci": [{"workflow": "ci.yml"}]},
-        {"repo": "ui", "kind": "pages", "order": 3, "deploy_workflow": "deploy.yml",
+        {"repo": "web", "kind": "pages", "order": 3, "deploy_workflow": "deploy.yml",
          "ci": [{"workflow": "test.yml"}]},
-        {"repo": "website", "kind": "pages", "order": 4, "deploy_workflow": "deploy.yml",
+        {"repo": "site", "kind": "pages", "order": 4, "deploy_workflow": "deploy.yml",
          "ci": [{"workflow": "workflow-hygiene.yml"}]},
     ],
-    "consumers_only": ["cli"],
-    "contracts": [{"consumer": "api", "provider": "issuer"},
-                  {"consumer": "cli", "provider": "issuer"},
-                  {"consumer": "ui", "provider": "api"},
-                  {"consumer": "ui", "provider": "issuer"}],
+    "consumers_only": ["tool"],
+    "contracts": [{"consumer": "gateway", "provider": "core"},
+                  {"consumer": "tool", "provider": "core"},
+                  {"consumer": "web", "provider": "gateway"},
+                  {"consumer": "web", "provider": "core"}],
 }
-ALLOWED = ["issuer", "api", "ui", "website"]
+ALLOWED = ["core", "gateway", "web", "site"]
 
 
 class FakeClock:
@@ -269,7 +269,7 @@ class FakeClock:
         self.now += s
 
 
-LIVE = {"issuer": "v0.131.0", "api": "v0.37.0", "ui": "v0.54.0", "website": "v0.3.8"}
+LIVE = {"core": "v0.131.0", "gateway": "v0.37.0", "web": "v0.54.0", "site": "v0.3.8"}
 
 
 def run(branch, created, event="release", conclusion="success", title=None):

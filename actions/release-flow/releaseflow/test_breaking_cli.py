@@ -19,8 +19,8 @@ import waiver  # noqa: E402
 from fake_github import CFG_DICT, FakeGitHub, SHA_A, SHA_B  # noqa: E402
 
 TMP_ROOT = HERE.parents[2] / ".scratch" / "test-tmp"
-F1 = "POST /login: body/custom_claims: property removed in candidate"
-BLOCK = f"Notes.\n\n```breaking\napi -> issuer | {F1}\n```\n"
+F1 = "POST /login: body/extra_fields: property removed in candidate"
+BLOCK = f"Notes.\n\n```breaking\ngateway -> core | {F1}\n```\n"
 ENV = {"RELEASE_FLOW_READ_TOKEN": "r", "GITHUB_REPOSITORY": "consumer-a-org/project"}
 MERGED = "2026-10-15T12:00:00Z"
 
@@ -59,7 +59,7 @@ class ShapeCommandTests(unittest.TestCase):
     def test_label_and_block_print_the_list(self):
         rc, out, err = self.shape(self.ev(BLOCK, waiver.LABEL))
         self.assertEqual(rc, 0, err)
-        self.assertEqual(json.loads(out), [{"consumer": "api", "provider": "issuer", "finding": F1}])
+        self.assertEqual(json.loads(out), [{"consumer": "gateway", "provider": "core", "finding": F1}])
 
     def test_neither_prints_an_empty_list(self):
         rc, out, err = self.shape(self.ev(None))
@@ -67,7 +67,7 @@ class ShapeCommandTests(unittest.TestCase):
 
     def test_r1_and_r2_failures_are_exit_1(self):
         for ev in (self.ev(BLOCK), self.ev("notes", waiver.LABEL),
-                   self.ev(BLOCK.replace("api -> issuer", "website -> api"), waiver.LABEL)):
+                   self.ev(BLOCK.replace("gateway -> core", "site -> gateway"), waiver.LABEL)):
             rc, _, err = self.shape(ev)
             self.assertEqual(rc, 1, ev)
             self.assertIn("FAIL", err)
@@ -156,9 +156,9 @@ class ApprovalCommandTests(unittest.TestCase):
 
 
 class MatrixCommandTests(unittest.TestCase):
-    LIVE = {"consumer": "api", "consumer_ref": "v1.0.0", "provider": "issuer",
+    LIVE = {"consumer": "gateway", "consumer_ref": "v1.0.0", "provider": "core",
             "provider_ref": "a" * 40, "states": ["s"], "consumer_side": "live"}
-    ENTRY = [{"consumer": "api", "provider": "issuer", "finding": F1}]
+    ENTRY = [{"consumer": "gateway", "provider": "core", "finding": F1}]
 
     def test_ok_prints_the_list(self):
         rc, out, err = call(["breaking-matrix", "--breaking", json.dumps(self.ENTRY),

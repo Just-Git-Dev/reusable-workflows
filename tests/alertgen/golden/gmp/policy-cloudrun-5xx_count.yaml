@@ -4,12 +4,12 @@ combiner: OR
 conditions:
 - conditionPrometheusQueryLanguage:
     evaluationInterval: 60s
-    query: sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[15m]))
+    query: sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway",response_code_class="5xx"}[15m]))
       > 5
-  displayName: Cloud Run is returning 5xx responses (api, issuer)
-displayName: Cloud Run is returning 5xx responses (api, issuer) [cloudrun.5xx_count]
+  displayName: Cloud Run is returning 5xx responses (core, gateway)
+displayName: Cloud Run is returning 5xx responses (core, gateway) [cloudrun.5xx_count]
 documentation:
-  content: '**Cloud Run is returning 5xx responses** — services: api, issuer.
+  content: '**Cloud Run is returning 5xx responses** — services: core, gateway.
 
 
     This low-traffic service returned more 5xx responses in the window than the threshold.
@@ -21,7 +21,7 @@ documentation:
 
     - Condition: > 5 (compared as 5), over 15m, for 0s
 
-    - Query: `sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[15m]))
+    - Query: `sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway",response_code_class="5xx"}[15m]))
     > 5`
 
 
@@ -38,4 +38,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: cloudrun-5xx_count
-  spec_hash: 64f94ceb3134db35
+  spec_hash: d023c1e2aad0dc5f

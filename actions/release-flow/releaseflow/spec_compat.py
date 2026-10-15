@@ -4,7 +4,7 @@
 BASELINE is a provider spec a running (live) consumer depends on: the one it was built against
 (the consumer's pinned copy of the provider spec at its live tag) or the one the live provider
 serves today.
-CANDIDATE is the provider spec about to ship. Unlike the api's fixture-parity test (strict both
+CANDIDATE is the provider spec about to ship. Unlike the gateway's fixture-parity test (strict both
 ways, right for a candidate consumer) this is one-directional: it fails only when the candidate
 could break the baseline's consumer. The rules are the list in docs/release-flow.md
 § Contract checks; in short, for every operation (method + path, path-parameter NAMES ignored):
@@ -27,7 +27,7 @@ occur fails (stale). A `candidate` consumer check waives nothing. On failure a p
 Exit: 0 compatible (or every finding waived); 1 incompatible, or ZERO operations examined (a
 check that examined nothing proves nothing; never waivable); 2 usage / unreadable file / PyYAML
 missing for a YAML input / bad RELEASE_BREAKING (never waivable).
-Reuses cli_ops_check's loader (PyYAML imported lazily, only for YAML input).
+Reuses ops_subset's loader (PyYAML imported lazily, only for YAML input).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ import re
 import sys
 
 import waiver
-from cli_ops_check import METHODS, load
+from ops_subset import METHODS, load
 
 
 class Unresolved(Exception):

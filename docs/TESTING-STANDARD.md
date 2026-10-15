@@ -233,7 +233,7 @@ gets atomic, and it gets run.
 The base stack (database, cache, the core service) is owned by whichever repo owns the
 core service. That repo holds `test/support/stack.sh` and
 `test/docker-compose.test.yml`. The umbrella needs a *bigger* stack — the core service
-plus a BFF plus a web tier plus a browser runner. It gets it two ways, both of which
+plus a gateway plus a web tier plus a browser runner. It gets it two ways, both of which
 avoid duplication:
 
 1. **Compose `include:`** — the umbrella's compose file `include:`s the base file and
@@ -630,7 +630,7 @@ silent-green in waiting. Defend it in the comment:
 
 <root-repo>/
   tests/
-    docker-compose.test.yml       # include:s the base, adds bff/web/runner
+    docker-compose.test.yml       # include:s the base, adds gateway/web/runner
     support/
       stack.sh                    # SHIM → core-service driver
       factories.ts                # shared test data builders

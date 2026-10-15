@@ -193,7 +193,7 @@ stage() {  # stage <name> <workflow-dir>
 # ---- self-test: prove the red path fires ----------------------------------
 if [ "${1:-}" = "--self-test" ]; then
   ref=origin/ci/workflow-hygiene
-  src="${2:-$here/../../../auth/issuer}"
+  src="${2:-$here/../../../<consumer-repo>/<service>}"
   rm -rf "$work"; mkdir -p "$work/trees" "$work/scripts" || exit 1
   trap 'rm -rf "$work"' EXIT
   cp "$self" "$work/scripts/pin_gate_behaviour.sh"

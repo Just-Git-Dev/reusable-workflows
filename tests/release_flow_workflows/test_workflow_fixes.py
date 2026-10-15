@@ -43,8 +43,8 @@ class ConfigCheckInvocationTests(unittest.TestCase):
             exe.write_text(f'#!/bin/sh\nexec python3 -B "{wf.ROOT}/actions/release-flow/release-flow" "$@"\n')
             exe.chmod(0o755)
             env = {**os.environ, "PATH": f"{d}:{os.environ['PATH']}", "PYTHONDONTWRITEBYTECODE": "1",
-                   "GITHUB_REPOSITORY_OWNER": "consumer-a-org", "ALLOWED": "issuer,api,ui,website",
-                   "READ_ONLY": "cli", "CONFIG": str(cfg)}
+                   "GITHUB_REPOSITORY_OWNER": "consumer-a-org", "ALLOWED": "core,gateway,web,site",
+                   "READ_ONLY": "tool", "CONFIG": str(cfg)}
             for n, jn, cmd in cmds:
                 p = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True)
                 self.assertEqual(p.returncode, 0, f"{n}:{jn}: {cmd}\n{p.stderr}")

@@ -1,4 +1,4 @@
-"""cli_ops_check.load(): a YAML spec must read the same as its JSON rendering.
+"""ops_subset.load(): a YAML spec must read the same as its JSON rendering.
 
 PyYAML's safe_load follows YAML 1.1, where an unquoted on/off/yes/no (any case) is a
 boolean. JSON (and YAML 1.2, which OpenAPI tooling emits) keeps them as strings. So a JSON
@@ -16,7 +16,7 @@ from io import StringIO
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
-import cli_ops_check  # noqa: E402
+import ops_subset  # noqa: E402
 import spec_compat  # noqa: E402
 
 YAML_SPEC = """\
@@ -72,10 +72,10 @@ class YamlLoadTests(unittest.TestCase):
         self.json_path.write_text(json.dumps(JSON_SPEC))
 
     def test_yaml_reads_equal_to_its_json_rendering(self):
-        self.assertEqual(cli_ops_check.load(str(self.yaml_path)), JSON_SPEC)
+        self.assertEqual(ops_subset.load(str(self.yaml_path)), JSON_SPEC)
 
     def test_yaml_1_2_booleans_still_parse(self):
-        props = cli_ops_check.load(str(self.yaml_path))["paths"]["/settings"]["get"][
+        props = ops_subset.load(str(self.yaml_path))["paths"]["/settings"]["get"][
             "responses"]["200"]["content"]["application/json"]["schema"]["properties"]
         self.assertIs(props["flag"]["default"], False)
         self.assertIs(props["other"]["default"], True)
@@ -89,7 +89,7 @@ class YamlLoadTests(unittest.TestCase):
 
     def test_loader_does_not_mutate_pyyaml_safe_loader(self):
         import yaml
-        cli_ops_check.load(str(self.yaml_path))
+        ops_subset.load(str(self.yaml_path))
         self.assertIs(yaml.safe_load("x: off")["x"], False)
 
 

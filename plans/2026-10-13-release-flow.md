@@ -65,15 +65,15 @@ devops-verified. consumer B has no local copy and its `release.yml` waits for th
   link), `step-bodies` (test runners), `pinned-actions`. Test runners: stdlib `tests/run_*.py`.
   There is no consumer-name CI guard, and no Python lint.
 - consumer A f2 (agent): CLI `f2.py` with subcommands find-manifest, check-merge, concurrent, validate,
-  ci-green, order, drafts, gate-services, resolve, contract-states, publish, ops-subset, cli-ops,
+  ci-green, order, drafts, gate-services, resolve, contract-states, publish, ops-subset,
   spec-compat, report. Exit codes 0/1/2/3. Env `F2_READ_TOKEN`, `F2_WRITE_TOKEN`. Tests use
   `fake_github.FakeGitHub`, an in-memory transport, through `main(argv, env, deps)`. Runtime is
-  stdlib-only except PyYAML (lazy, `cli_ops_check`). The literals to parameterise are at
+  stdlib-only except PyYAML (lazy, `ops_subset`). The literals to parameterise are at
   `guard.py:14,33,48`, `validate.py:106,127`, `publish.py:29-34,95,133-135`, `resolve.py:31-32`,
   `gh.py:58,77`, `manifest.py:24-25`, and `f2.py:103`.
 - consumer B (agent, plus consumer B's own reply): there is no local copy. Its draft `releases/services.json`
-  already uses `kind: download` + `assets`. All four deploys set `run-name: Deploy <tag>`. The api
-  health check is consumer A-shaped. Order is api → webapp → website → sync. Smoke comes from its `e2e.yml`
+  already uses `kind: download` + `assets`. All four deploys set `run-name: Deploy <tag>`. The gateway
+  health check is consumer A-shaped. Order is gateway → webapp → site → sync. Smoke comes from its `e2e.yml`
   `workflow_call`, on an unmerged branch.
 - Root never dispatches a Deploy dry run (H9). `Deploy DRYRUN` runs are only excluded when working
   out what is live. consumer B has been told.

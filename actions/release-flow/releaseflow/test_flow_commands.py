@@ -91,13 +91,13 @@ def do_publish(f, cfg_d, ent, health=None, transport=None):
 class RunNameTemplateTests(unittest.TestCase):
     def test_deploy_run_is_matched_by_the_template(self):
         d = cfg_dict(deploy_run_name="Ship {tag} now")
-        f, _, e = pub_world(d, "ui", "v0.55.0", SHA_C, run_name="Ship {tag} now")
+        f, _, e = pub_world(d, "web", "v0.55.0", SHA_C, run_name="Ship {tag} now")
         res, _ = do_publish(f, d, e)
         self.assertEqual(res.status, publish.LIVE, res.detail)
 
     def test_a_run_titled_by_another_template_is_not_ours(self):
         d = cfg_dict(deploy_run_name="Ship {tag} now")
-        f, _, e = pub_world(d, "ui", "v0.55.0", SHA_C)  # the fake titles it "Deploy v0.55.0"
+        f, _, e = pub_world(d, "web", "v0.55.0", SHA_C)  # the fake titles it "Deploy v0.55.0"
         res, _ = do_publish(f, d, e)
         self.assertEqual(res.status, publish.DEPLOY_FAILED)
         self.assertIn("timed out", res.detail)
@@ -106,8 +106,8 @@ class RunNameTemplateTests(unittest.TestCase):
 class HealthTests(unittest.TestCase):
     def test_dotted_path_and_expect(self):
         d = cfg_dict()
-        svc(d, "issuer")["health"] = {"path": "a.b.state", "expect": "ok"}
-        f, _, e = pub_world(d, "issuer", "v0.132.0", SHA_A)
+        svc(d, "core")["health"] = {"path": "a.b.state", "expect": "ok"}
+        f, _, e = pub_world(d, "core", "v0.132.0", SHA_A)
         h = Health({"a": {"b": {"state": "ok"}}})
         res, _ = do_publish(f, d, e, h)
         self.assertEqual(res.status, publish.LIVE, res.detail)
@@ -115,19 +115,19 @@ class HealthTests(unittest.TestCase):
 
     def test_default_path_is_data_status_UP(self):
         d = cfg_dict()
-        f, _, e = pub_world(d, "issuer", "v0.132.0", SHA_A)
+        f, _, e = pub_world(d, "core", "v0.132.0", SHA_A)
         res, _ = do_publish(f, d, e, Health({"data": {"status": "UP"}}))
         self.assertEqual(res.status, publish.LIVE)
-        f, _, e = pub_world(d, "issuer", "v0.132.0", SHA_A)
+        f, _, e = pub_world(d, "core", "v0.132.0", SHA_A)
         res, _ = do_publish(f, d, e, Health({"status": "UP"}))  # custom path not in force
         self.assertEqual(res.status, publish.DEPLOY_FAILED)
 
     def test_wrong_value_or_missing_path_never_passes_and_retries(self):
         d = cfg_dict()
-        svc(d, "issuer")["health"] = {"path": "a.b", "expect": "ok"}
+        svc(d, "core")["health"] = {"path": "a.b", "expect": "ok"}
         for body in ({"a": {"b": "bad"}}, {"a": "ok"}, {"b": "ok"}, {"a": {"b": ["ok"]}}, [],
                      {"a": {"b": {"c": "ok"}}}):
-            f, _, e = pub_world(d, "issuer", "v0.132.0", SHA_A)
+            f, _, e = pub_world(d, "core", "v0.132.0", SHA_A)
             h = Health(body)
             res, clock = do_publish(f, d, e, h)
             self.assertEqual(res.status, publish.DEPLOY_FAILED, body)
@@ -137,13 +137,13 @@ class HealthTests(unittest.TestCase):
 
     def test_http_200_is_still_required(self):
         d = cfg_dict()
-        f, _, e = pub_world(d, "issuer", "v0.132.0", SHA_A)
+        f, _, e = pub_world(d, "core", "v0.132.0", SHA_A)
         res, _ = do_publish(f, d, e, Health({"data": {"status": "UP"}}, status=503))
         self.assertEqual(res.status, publish.DEPLOY_FAILED)
 
     def test_recovers_on_a_later_try(self):
         d = cfg_dict()
-        f, _, e = pub_world(d, "issuer", "v0.132.0", SHA_A)
+        f, _, e = pub_world(d, "core", "v0.132.0", SHA_A)
         h = Health({"data": {"status": "DOWN"}}, {"data": {"status": "UP"}})
         res, _ = do_publish(f, d, e, h)
         self.assertEqual(res.status, publish.LIVE)
@@ -332,7 +332,7 @@ class ConfigCheckTests(unittest.TestCase):
 
     def test_prints_the_three_values_compactly(self):
         with tmpdir() as d:
-            rc, out, err = self.cc(d, "--allowed", AL, "--read-only", "cli", release_dir="ops/rel")
+            rc, out, err = self.cc(d, "--allowed", AL, "--read-only", "tool", release_dir="ops/rel")
             self.assertEqual(rc, 0, err)
             self.assertEqual(out.strip(), '{"owner":"consumer-a-org","release_dir":"ops/rel",'
                                           '"base_branch":"main"}')
@@ -342,7 +342,7 @@ class ConfigCheckTests(unittest.TestCase):
             for extra in (("--read-only", ""), ("--read-only", "other")):
                 rc, out, err = self.cc(d, "--allowed", AL, *extra)
                 self.assertEqual(rc, 2, extra)
-                self.assertIn("cli", err)
+                self.assertIn("tool", err)
                 self.assertEqual(out, "")
 
     def test_absent_read_only_skips_the_rule_given_enforces_it(self):
@@ -354,7 +354,7 @@ class ConfigCheckTests(unittest.TestCase):
             self.assertIn('"owner"', out)
             rc, _, err = self.cc(d, "--allowed", AL, "--read-only", "")
             self.assertEqual(rc, 2)
-            self.assertIn("cli", err)
+            self.assertIn("tool", err)
 
     def test_no_consumers_only_needs_no_read_only(self):
         with tmpdir() as d:
@@ -363,19 +363,19 @@ class ConfigCheckTests(unittest.TestCase):
 
     def test_owner_must_match_the_running_org(self):
         with tmpdir() as d:
-            rc, _, err = self.cc(d, "--allowed", AL, "--read-only", "cli",
+            rc, _, err = self.cc(d, "--allowed", AL, "--read-only", "tool",
                                  env={"GITHUB_REPOSITORY_OWNER": "someone-else"})
             self.assertEqual(rc, 2)
             self.assertIn("owner", err)
-            rc, _, err = self.cc(d, "--allowed", AL, "--read-only", "cli", env={})
+            rc, _, err = self.cc(d, "--allowed", AL, "--read-only", "tool", env={})
             self.assertEqual(rc, 2)
             self.assertIn("GITHUB_REPOSITORY_OWNER", err)
 
     def test_repo_outside_allowed_and_bad_config(self):
         with tmpdir() as d:
-            rc, _, err = self.cc(d, "--allowed", "issuer,api,ui", "--read-only", "cli")
+            rc, _, err = self.cc(d, "--allowed", "core,gateway,web", "--read-only", "tool")
             self.assertEqual(rc, 2)
-            self.assertIn("website", err)
+            self.assertIn("site", err)
             rc, _, _ = call(["config-check", "--allowed", AL, "--config", str(Path(d) / "no.json")],
                             {"GITHUB_REPOSITORY_OWNER": "consumer-a-org"})
             self.assertEqual(rc, 2)
@@ -388,16 +388,16 @@ class ConfigCheckTests(unittest.TestCase):
 class DraftsCheckOnlyTests(unittest.TestCase):
     def world(self):
         f = FakeGitHub()
-        i = f.repo("issuer")
+        i = f.repo("core")
         i.add_release("v0.131.0")
         i.good_commit(SHA_A, "v0.132.0")
         i.add_tag("v0.132.0", SHA_A)
-        green_ci(f, "issuer", SHA_A)
+        green_ci(f, "core", SHA_A)
         return f
 
     def go(self, d, f, env=None, *extra):
         env = {"RELEASE_FLOW_READ_TOKEN": "r"} if env is None else env
-        argv = ["drafts", mfile(d, ("issuer", "v0.132.0", SHA_A)), "--check-only",
+        argv = ["drafts", mfile(d, ("core", "v0.132.0", SHA_A)), "--check-only",
                 "--config", write(d, "c.json", cfg_dict()), "--allowed", AL, *extra]
         with mock.patch.object(release_flow.gh, "Writer",
                                side_effect=AssertionError("a Writer was built")):
@@ -408,7 +408,7 @@ class DraftsCheckOnlyTests(unittest.TestCase):
             f = self.world()
             rc, out, err = self.go(d, f)
             self.assertEqual(rc, 0, err)
-            self.assertEqual(json.loads(out), {"issuer": "rehearsal"})
+            self.assertEqual(json.loads(out), {"core": "rehearsal"})
             self.assertEqual(f.writes(), [])
             self.assertTrue(f.requests)  # it did read
 
@@ -425,11 +425,11 @@ class DraftsCheckOnlyTests(unittest.TestCase):
 
     def test_every_precheck_still_runs(self):
         cases = {
-            "validate (sha not on base)": lambda f: f.repo("issuer").compare.update({SHA_A: "diverged"}),
-            "ci-green": lambda f: f.repo("issuer").ci_runs.clear(),
-            "tag moved": lambda f: f.repo("issuer").tag_objects.update(
-                {f.repo("issuer").refs["v0.132.0"]["sha"]: SHA_B}),
-            "tag missing": lambda f: f.repo("issuer").refs.pop("v0.132.0"),
+            "validate (sha not on base)": lambda f: f.repo("core").compare.update({SHA_A: "diverged"}),
+            "ci-green": lambda f: f.repo("core").ci_runs.clear(),
+            "tag moved": lambda f: f.repo("core").tag_objects.update(
+                {f.repo("core").refs["v0.132.0"]["sha"]: SHA_B}),
+            "tag missing": lambda f: f.repo("core").refs.pop("v0.132.0"),
         }
         for label, breaker in cases.items():
             with tmpdir() as d:
@@ -442,7 +442,7 @@ class DraftsCheckOnlyTests(unittest.TestCase):
     def test_without_check_only_the_write_path_is_unchanged(self):
         with tmpdir() as d:
             f = self.world()
-            argv = ["drafts", mfile(d, ("issuer", "v0.132.0", SHA_A)),
+            argv = ["drafts", mfile(d, ("core", "v0.132.0", SHA_A)),
                     "--config", write(d, "c.json", cfg_dict()), "--allowed", AL]
             rc, out, err = call(argv, {"RELEASE_FLOW_READ_TOKEN": "r",
                                        "RELEASE_FLOW_WRITE_TOKEN": "w"}, {"transport": f})
@@ -501,8 +501,8 @@ class VerdictTests(unittest.TestCase):
         os.chdir(self.d)
         self.addCleanup(os.chdir, self.old)
         os.makedirs("releases")
-        # api listed before issuer in the file; the verdict must give services.json order
-        self.mpath = mfile(self.d, ("api", "v0.38.0", SHA_B), ("issuer", "v0.132.0", SHA_A),
+        # gateway listed before core in the file; the verdict must give services.json order
+        self.mpath = mfile(self.d, ("gateway", "v0.38.0", SHA_B), ("core", "v0.132.0", SHA_A),
                            name="releases/2026-10-09-x.yaml")
         self.cfg = write(self.d, "c.json", cfg_dict())
 
@@ -518,7 +518,7 @@ class VerdictTests(unittest.TestCase):
         rc, j, out, err = self.v(needs())
         self.assertEqual(rc, 0, err)
         self.assertEqual(j, {"ok": True, "rehearsal": False, "manifest": MANIFEST, "pr": "7",
-                             "manifest_sha256": "", "order": ["issuer", "api"],
+                             "manifest_sha256": "", "order": ["core", "gateway"],
                              "failed_stage": "", "failures": []})
         self.assertEqual(out.strip(), json.dumps(j, separators=(",", ":")))
         self.assertEqual(len(out.strip().splitlines()), 1)
@@ -532,14 +532,14 @@ class VerdictTests(unittest.TestCase):
         # The artifact the plan stage staged is the only manifest the later stages may read
         # (a rehearsal's manifest is not on the base branch at all).
         import hashlib
-        staged = mfile(self.d, ("api", "v0.38.0", SHA_B), ("issuer", "v0.132.0", SHA_A),
+        staged = mfile(self.d, ("gateway", "v0.38.0", SHA_B), ("core", "v0.132.0", SHA_A),
                        name="staged.yaml")
         sha = hashlib.sha256(Path(staged).read_bytes()).hexdigest()
         os.remove(self.mpath)
         rc, j, _, err = self.v(self.with_sha(sha), "--manifest-file", staged)
         self.assertEqual(rc, 0, err)
         self.assertEqual(j["manifest_sha256"], sha)
-        self.assertEqual(j["order"], ["issuer", "api"])
+        self.assertEqual(j["order"], ["core", "gateway"])
         for bad in ("0" * 64, "", "xyz"):
             rc, j, _, err = self.v(self.with_sha(bad), "--manifest-file", staged)
             self.assertEqual(rc, 2, bad)
@@ -559,7 +559,7 @@ class VerdictTests(unittest.TestCase):
         for state in ("skipped", None):
             rc, j, _, err = self.v(needs(checks="[]", contracts=state))
             self.assertEqual((rc, j["ok"]), (0, True), (state, err))
-            rc, j, _, _ = self.v(needs(checks='[{"consumer":"ui"}]', contracts=state))
+            rc, j, _, _ = self.v(needs(checks='[{"consumer":"web"}]', contracts=state))
             self.assertEqual((rc, j["ok"], j["failed_stage"], j["order"]),
                              (1, False, "contracts", []), state)
         rc, j, _, _ = self.v(needs(checks='[{"x":1}]', contracts="success"))
@@ -595,10 +595,10 @@ class VerdictTests(unittest.TestCase):
 
     def test_release_dir_comes_from_the_config(self):
         os.makedirs("ops/rel")
-        mfile(self.d, ("issuer", "v0.132.0", SHA_A), name="ops/rel/2026-10-09-x.yaml")
+        mfile(self.d, ("core", "v0.132.0", SHA_A), name="ops/rel/2026-10-09-x.yaml")
         cfg = write(self.d, "c2.json", cfg_dict(release_dir="ops/rel"))
         rc, j, _, err = self.v(needs(manifest_path="ops/rel/2026-10-09-x.yaml"), cfg=cfg)
-        self.assertEqual((rc, j["order"]), (0, ["issuer"]), err)
+        self.assertEqual((rc, j["order"]), (0, ["core"]), err)
         rc, j, _, _ = self.v(needs(manifest_path=MANIFEST), cfg=cfg)
         self.assertEqual((rc, j["failed_stage"]), (1, "plan"))
 
@@ -643,8 +643,8 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual((rc, out), (2, ""))
         rc, out, _ = call(["verdict", "--stage", "drafts", "--needs-file",
                            write(self.d, "n.json", needs()), "--contracts-job", "contracts",
-                           "--config", self.cfg, "--allowed", "issuer,api"])
-        self.assertEqual((rc, out), (2, ""))  # website is in services.json, outside --allowed
+                           "--config", self.cfg, "--allowed", "core,gateway"])
+        self.assertEqual((rc, out), (2, ""))  # site is in services.json, outside --allowed
 
     def test_ok_but_unreadable_manifest_is_exit_2(self):
         os.remove(self.mpath)

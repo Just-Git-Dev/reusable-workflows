@@ -2,7 +2,7 @@
 """release-flow release-PR flow driver. The workflows are thin; the logic is here and unit-tested.
 
 Subcommands (M = path to the release manifest; every command that touches a manifest or
-services.json also needs `--allowed issuer,api,ui,website`, a list HARD-CODED in the
+services.json also needs `--allowed core,gateway,web,site`, a list HARD-CODED in the
 workflow, so editing services.json cannot widen what the write token touches; `--config`
 defaults to releases/services.json in the CURRENT DIRECTORY):
 
@@ -40,7 +40,7 @@ defaults to releases/services.json in the CURRENT DIRECTORY):
   resolve M [--drafts-proof REPO:TAG]
                    JSON {repo: {ref, version, listed, image, live_ref}} incl. consumers_only.
                    live_ref of a deployable repo comes from its successful Deploy runs (see
-                   resolve.py); unlisted ref = live_ref. cli's live_ref = highest tag not on a
+                   resolve.py); unlisted ref = live_ref. tool's live_ref = highest tag not on a
                    DRAFT release, which needs a token that sees drafts: with --drafts-proof the
                    draft REPO:TAG (just created by `drafts`; REPO in --allowed) must be
                    visible, else exit 1; without it, repo permissions.push must be true.
@@ -69,7 +69,6 @@ defaults to releases/services.json in the CURRENT DIRECTORY):
                    declares exists in the candidate provider spec (examined N; 0 = failure).
                    For a consumer that vendors a copy of its provider's spec (for mocks),
                    where byte identity cannot hold for "consumer@live vs provider@new".
-                   `cli-ops` is an alias.
   spec-compat BASELINE CANDIDATE [--label X] [--pair "C -> P" --consumer-side live|candidate]
                    a LIVE consumer's baseline provider spec (its pin, or what the live provider
                    serves) vs the candidate provider spec; fails when the candidate could break
@@ -125,7 +124,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ci as ci_mod  # noqa: E402
-import cli_ops_check  # noqa: E402
+import ops_subset  # noqa: E402
 import spec_compat  # noqa: E402
 import config as config_mod  # noqa: E402
 import drafts as drafts_mod  # noqa: E402
@@ -198,11 +197,10 @@ def build_parser():
         with_manifest(n).add_argument("--drafts-proof", metavar="REPO:TAG")
     s = with_manifest("publish")
     s.add_argument("--repo", required=True)
-    for n in ("ops-subset", "cli-ops"):  # cli-ops is the original name, kept as an alias
-        s = sub.add_parser(n)
-        s.add_argument("cli_spec", metavar="CONSUMER_VENDORED_SPEC")
-        s.add_argument("issuer_spec", metavar="PROVIDER_SPEC")
-        s.add_argument("--label", default="")
+    s = sub.add_parser("ops-subset")
+    s.add_argument("consumer_spec", metavar="CONSUMER_VENDORED_SPEC")
+    s.add_argument("provider_spec", metavar="PROVIDER_SPEC")
+    s.add_argument("--label", default="")
     s = sub.add_parser("spec-compat")
     s.add_argument("pinned_spec", metavar="PINNED")
     s.add_argument("candidate_spec", metavar="CANDIDATE")
@@ -386,8 +384,8 @@ def run(args, env, deps):
     cmd = args.cmd
     transport = lambda tok: deps.get("transport") or gh.urllib_transport(tok)  # noqa: E731
 
-    if cmd in ("ops-subset", "cli-ops"):
-        return cli_ops_check.main([args.cli_spec, args.issuer_spec,
+    if cmd == "ops-subset":
+        return ops_subset.main([args.consumer_spec, args.provider_spec,
                                    *(["--label", args.label] if args.label else [])])
     if cmd == "spec-compat":
         return spec_compat.main([args.pinned_spec, args.candidate_spec,

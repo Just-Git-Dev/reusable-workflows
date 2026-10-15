@@ -18,7 +18,7 @@ This page covers the format.
 
 ```yaml
 apiVersion: alertspec/v1
-services: [issuer, api]            # GoFr `job` label == Cloud Run service_name
+services: [core, gateway]            # GoFr `job` label == Cloud Run service_name
 packs: [cloudrun, gofr-http, gofr-sql, gofr-meta, gcp-logs]
 overrides:
   cloudrun.5xx_count:           {threshold: 5, window: 10m}  # a default-off rule: configuring it turns it on
@@ -27,11 +27,11 @@ overrides:
   gofr.sql.pool_saturation:     {enabled: false}
   gofr.http.server.latency_p95:
     services:
-      issuer: {threshold: 4s}      # issuer gets its own policy; api keeps the default
+      core: {threshold: 4s}      # core gets its own policy; gateway keeps the default
   logs.error_match:             {filter: 'jsonPayload.message:"exceeded the quota" OR jsonPayload.message:"could not connect"'}
 custom:
-  - id: bff-upstream-errors
-    metric: {name: bff_upstream_error, type: counter}
+  - id: gateway-upstream-errors
+    metric: {name: gateway_upstream_error, type: counter}
     kind: rate
     filters: {code: {in: ["502", "503"]}}
     window: 10m
@@ -39,9 +39,9 @@ custom:
     threshold: 0.1/s
     for: 10m
     severity: page
-    summary: "BFF upstream 5xx rate is high"
+    summary: "gateway upstream 5xx rate is high"
     triage: >-
-      The BFF is getting 502/503 from an upstream. Check which upstream in the logs
+      The gateway is getting 502/503 from an upstream. Check which upstream in the logs
       (jsonPayload.upstream), then that upstream's own dashboard and recent deploys.
     may_be_absent: true            # metric may not exist yet
 ```
@@ -75,7 +75,7 @@ So the number of policies stays close to the number of rules, not rules × servi
 - A default-on rule covers every service. `services: {worker: {enabled: false}}` drops one.
 - A **default-off** rule (`cloudrun.5xx_count`, `logs.error_match`) turns on for every service
   when you write a rule-level override for it (`{threshold: 5}`) or `enabled: true`. Configured
-  *only* per service (`services: {api: {enabled: true}}`), it covers just those services.
+  *only* per service (`services: {gateway: {enabled: true}}`), it covers just those services.
 - `{enabled: false}` at rule level turns the rule off. Combining it with `enabled: true` for a
   service is an error, because the spec contradicts itself.
 - A default-off rule that needs a parameter (`logs.error_match` needs `filter`) is an error if

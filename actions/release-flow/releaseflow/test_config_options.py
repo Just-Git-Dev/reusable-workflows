@@ -46,19 +46,19 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual((cfg.changelog.path, cfg.changelog.heading),
                          ("CHANGELOG.md", "## {version}"))
         self.assertEqual(cfg.deploy_run_name, "Deploy {tag}")
-        self.assertEqual(tuple(cfg.service("issuer").health), ("data.status", "UP"))
-        self.assertEqual(cfg.service("issuer").assets, ())
+        self.assertEqual(tuple(cfg.service("core").health), ("data.status", "UP"))
+        self.assertEqual(cfg.service("core").assets, ())
 
     def test_overrides(self):
         d = cfg_dict(release_dir="ops/rel", base_branch="release/prod", deploy_run_name="Ship {tag}!",
                      changelog={"path": "docs/CHANGES.md", "heading": "## [{version}]"})
-        svc(d, "issuer")["health"] = {"path": "a.b", "expect": "ok"}
+        svc(d, "core")["health"] = {"path": "a.b", "expect": "ok"}
         cfg = config.from_dict(d)
         self.assertEqual((cfg.release_dir, cfg.base_branch, cfg.deploy_run_name),
                          ("ops/rel", "release/prod", "Ship {tag}!"))
         self.assertEqual((cfg.changelog.path, cfg.changelog.heading),
                          ("docs/CHANGES.md", "## [{version}]"))
-        self.assertEqual(tuple(cfg.service("issuer").health), ("a.b", "ok"))
+        self.assertEqual(tuple(cfg.service("core").health), ("a.b", "ok"))
 
     def test_changelog_null_disables(self):
         self.assertIsNone(config.from_dict(cfg_dict(changelog=None)).changelog)
@@ -87,13 +87,13 @@ class ConfigDefaultsTests(unittest.TestCase):
                   {"path": "a", "expect": ""}, {"path": 3, "expect": "UP"}, "UP",
                   {"path": "a", "expect": "UP", "extra": 1}):
             d = cfg_dict()
-            svc(d, "issuer")["health"] = v
-            bad(self, d, "service issuer", "health")
+            svc(d, "core")["health"] = v
+            bad(self, d, "service core", "health")
 
     def test_health_forbidden_on_other_kinds(self):
         d = cfg_dict()
-        svc(d, "ui")["health"] = {"path": "a", "expect": "UP"}
-        bad(self, d, "service ui", "health")
+        svc(d, "web")["health"] = {"path": "a", "expect": "UP"}
+        bad(self, d, "service web", "health")
         d = cfg_dict()
         d["services"].append({**DOWNLOAD, "health": {"path": "a", "expect": "UP"}})
         bad(self, d, "service desktop", "health")
@@ -119,7 +119,7 @@ class DownloadKindTests(unittest.TestCase):
             bad(self, d, "service desktop", "assets")
 
     def test_assets_forbidden_on_other_kinds(self):
-        for repo in ("issuer", "ui"):
+        for repo in ("core", "web"):
             d = cfg_dict()
             svc(d, repo)["assets"] = ["a.zip"]
             bad(self, d, f"service {repo}", "assets")
@@ -132,19 +132,19 @@ class DownloadKindTests(unittest.TestCase):
 
     def test_unknown_kind_names_all_three(self):
         d = cfg_dict()
-        svc(d, "ui")["kind"] = "zip"
-        bad(self, d, "service ui", "download")
+        svc(d, "web")["kind"] = "zip"
+        bad(self, d, "service web", "download")
 
 
 class GarRegistryTests(unittest.TestCase):
     def test_not_required_without_image_services(self):
         d = cfg_dict()
         del d["gar_registry"]
-        d["services"] = [svc(d, "ui"), copy.deepcopy(DOWNLOAD)]
+        d["services"] = [svc(d, "web"), copy.deepcopy(DOWNLOAD)]
         d["contracts"] = []
         d["consumers_only"] = []
         cfg = config.from_dict(d)
-        self.assertEqual([s.repo for s in cfg.services], ["ui", "desktop"])
+        self.assertEqual([s.repo for s in cfg.services], ["web", "desktop"])
 
     def test_required_with_an_image_service(self):
         d = cfg_dict()
@@ -190,13 +190,13 @@ class ManifestPathRuleTests(unittest.TestCase):
 
 def v_world(branch="main", changelog_path="CHANGELOG.md"):
     f = FakeGitHub()
-    i = f.repo("issuer")
+    i = f.repo("core")
     i.add_release("v0.131.0")
     i.good_commit(SHA_A, "v0.132.0")
     i.add_tag("v0.132.0", SHA_A)
     i.base_branch = branch
     i.changelog_path = changelog_path
-    return f, i, [manifest.Entry("issuer", "v0.132.0", SHA_A)]
+    return f, i, [manifest.Entry("core", "v0.132.0", SHA_A)]
 
 
 def check(f, es, **top):
@@ -277,10 +277,10 @@ class GuardOptionsTests(unittest.TestCase):
 
 def r_world():
     f = FakeGitHub()
-    for n in ("issuer", "api", "ui", "website", "cli"):
+    for n in ("core", "gateway", "web", "site", "tool"):
         f.repo(n)
     make_live(f)
-    f.repo("cli").add_release("v0.3.7")
+    f.repo("tool").add_release("v0.3.7")
     return f
 
 
@@ -291,42 +291,42 @@ def res(f, entries, **top):
 class ResolveOptionsTests(unittest.TestCase):
     def test_title_regex_and_dryrun_marker_follow_the_template(self):
         f = r_world()
-        f.repo("api").live_runs = [
+        f.repo("gateway").live_runs = [
             run("v0.99.0", "2026-09-03T00:00:00Z", title="Ship DRYRUN now"),  # newest: skipped
             run("v0.37.0", "2026-09-02T00:00:00Z", title="Ship v0.37.0 now"),
             run("v0.36.0", "2026-09-01T00:00:00Z", title="Ship v0.36.0 now")]
-        out = res(f, [manifest.Entry("issuer", "v0.132.0", SHA_A)], deploy_run_name="Ship {tag} now")
-        self.assertEqual(out["api"]["live_ref"], "v0.37.0")
+        out = res(f, [manifest.Entry("core", "v0.132.0", SHA_A)], deploy_run_name="Ship {tag} now")
+        self.assertEqual(out["gateway"]["live_ref"], "v0.37.0")
 
     def test_default_dryrun_marker_is_not_the_custom_one(self):
         f = r_world()
-        f.repo("api").live_runs = [run("v0.37.0", "2026-09-02T00:00:00Z",
+        f.repo("gateway").live_runs = [run("v0.37.0", "2026-09-02T00:00:00Z",
                                        title="Deploy DRYRUN v0.37.0")]
         # under the custom template this title is not a dry run and not a version title either
         with self.assertRaises(resolve.ResolveError):
-            f.repo("api").live_runs[0]["event"] = "workflow_dispatch"
-            res(f, [manifest.Entry("issuer", "v0.132.0", SHA_A)], deploy_run_name="Ship {tag} now")
+            f.repo("gateway").live_runs[0]["event"] = "workflow_dispatch"
+            res(f, [manifest.Entry("core", "v0.132.0", SHA_A)], deploy_run_name="Ship {tag} now")
 
     def test_template_is_regex_escaped(self):
         f = r_world()
-        f.repo("api").live_runs = [run("main", "2026-09-02T00:00:00Z", title="Deploy [v0.37.0]",
+        f.repo("gateway").live_runs = [run("main", "2026-09-02T00:00:00Z", title="Deploy [v0.37.0]",
                                        event="workflow_dispatch")]
-        out = res(f, [manifest.Entry("issuer", "v0.132.0", SHA_A)], deploy_run_name="Deploy [{tag}]")
-        self.assertEqual(out["api"]["live_ref"], "v0.37.0")
-        f.repo("api").live_runs = [run("main", "2026-09-02T00:00:00Z", title="Deploy Xv0.37.0Y",
+        out = res(f, [manifest.Entry("core", "v0.132.0", SHA_A)], deploy_run_name="Deploy [{tag}]")
+        self.assertEqual(out["gateway"]["live_ref"], "v0.37.0")
+        f.repo("gateway").live_runs = [run("main", "2026-09-02T00:00:00Z", title="Deploy Xv0.37.0Y",
                                        event="workflow_dispatch")]
         with self.assertRaises(resolve.ResolveError):  # '[' must not act as a character class
-            res(f, [manifest.Entry("issuer", "v0.132.0", SHA_A)], deploy_run_name="Deploy [{tag}]")
+            res(f, [manifest.Entry("core", "v0.132.0", SHA_A)], deploy_run_name="Deploy [{tag}]")
 
     def test_suffix_must_match(self):
         f = r_world()
-        f.repo("api").live_runs = [run("main", "2026-09-02T00:00:00Z", title="Ship v0.37.0 later",
+        f.repo("gateway").live_runs = [run("main", "2026-09-02T00:00:00Z", title="Ship v0.37.0 later",
                                        event="workflow_dispatch")]
         with self.assertRaises(resolve.ResolveError):
-            res(f, [manifest.Entry("issuer", "v0.132.0", SHA_A)], deploy_run_name="Ship {tag} now")
+            res(f, [manifest.Entry("core", "v0.132.0", SHA_A)], deploy_run_name="Ship {tag} now")
 
     def test_every_emitted_ref_is_a_sha_or_a_version(self):
-        out = res(r_world(), [manifest.Entry("issuer", "v0.132.0", SHA_A)])
+        out = res(r_world(), [manifest.Entry("core", "v0.132.0", SHA_A)])
         import re
         for name, e in out.items():
             self.assertRegex(e["ref"], r"^([0-9a-f]{40}|v[0-9]+\.[0-9]+\.[0-9]+)$", name)
@@ -334,7 +334,7 @@ class ResolveOptionsTests(unittest.TestCase):
     def test_a_bad_ref_is_refused(self):
         for bad_sha in ("main", "A" * 40, "abc123", SHA_A[:-1], "v1.2", "-x"):
             with self.assertRaises(resolve.ResolveError, msg=bad_sha):
-                res(r_world(), [manifest.Entry("issuer", "v0.132.0", bad_sha)])
+                res(r_world(), [manifest.Entry("core", "v0.132.0", bad_sha)])
 
 
 if __name__ == "__main__":

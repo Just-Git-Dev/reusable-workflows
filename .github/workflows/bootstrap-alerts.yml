@@ -285,7 +285,7 @@ jobs:
           owner, rule = sys.argv[3], sys.argv[4]
           # Re-check EXACT label equality: gcloud's `--filter key="v"` is not guaranteed to
           # be an equality match for every API (`gcloud topic filters`), and a word match
-          # would make `…latency_p95` also match `…latency_p95-issuer`.
+          # would make `…latency_p95` also match `…latency_p95-core`.
           matches = [p for p in (json.load(open(sys.argv[1])) or [])
                      if (p.get("userLabels") or {}).get("alertgen_owner") == owner
                      and (p.get("userLabels") or {}).get("rule_id") == rule]

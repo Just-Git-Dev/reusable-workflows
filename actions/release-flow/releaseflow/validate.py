@@ -35,7 +35,7 @@ def semver_tags(reader, base):
     """
     out = []
     # ONE GET: matching-refs is not paginated -- every page returns every matching ref, so
-    # paginate() would never see an empty page (2026-10-09, 152 issuer refs on pages 1/2/50).
+    # paginate() would never see an empty page (2026-10-09, 152 core refs on pages 1/2/50).
     refs = reader.get_ok(f"{base}/git/matching-refs/tags/v")
     if not isinstance(refs, list):
         raise gh.GitHubError(f"GET {base}/git/matching-refs/tags/v: expected a list")

@@ -254,12 +254,12 @@ class TypeAndShapeTests(unittest.TestCase):
 
 
 class RealDataTests(unittest.TestCase):
-    """Reduced real specs: api v0.37.0's pinned issuer spec vs issuer v0.134.0 (login, token,
+    """Reduced real specs: gateway v0.37.0's pinned core spec vs core v0.134.0 (login, token,
     logout and their $ref closure)."""
 
     def load(self):
-        pinned = json.loads((DATA / "g5-pinned-api037-reduced.json").read_text())
-        cand = json.loads((DATA / "g5-issuer134-reduced.json").read_text())
+        pinned = json.loads((DATA / "g5-pinned-gateway037-reduced.json").read_text())
+        cand = json.loads((DATA / "g5-core134-reduced.json").read_text())
         return pinned, cand
 
     def test_additive_release_passes(self):
