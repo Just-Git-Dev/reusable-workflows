@@ -1,13 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-48 open across 15 live sections. 8 closed items archived.
+47 open across 15 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 3 open, 2 closed
+- **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 2 open, 4 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
 - **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
 - **ACTIVE** — [Pre-commit gates that check the wrong thing (opened 2026-09-27)](#pre-commit-gates-that-check-the-wrong-thing-opened-2026-09-27) — 3 open
@@ -58,8 +58,25 @@ Rulings (owner, 2026-10-15):
   `RELEASE_FLOW_TREE` and the caller changes (release-pr trigger types; `--pair`,
   `--consumer-side`, `RELEASE_BREAKING` on its spec-compat line). Verify read-only: a rehearsal
   on a real breaking PR goes red without the label, green with it, red with one line edited.
-- [ ] Consumer C — move check B out of the root `release.yml` into the provider service's own
-  CI. That is the consumer's change, made by its own session; this repo only verifies it.
+  Shipped 2026-10-15 (tag object `184c1a9` → `8e6f0bd`). Consumer C adopted it the same day; the
+  pins, trigger types and flags were verified read-only at its root main `6bc9fff`. STILL OPEN:
+  the three rehearsal runs. They wait on consumer C's first tagged provider release that removes
+  something.
+- [x] Consumer C — move check B out of the root `release.yml` into the provider service's own
+  CI. Done 2026-10-15, verified read-only: root `6bc9fff` dropped the `<provider>@live →
+  <provider>` pair. Provider main `c76935c` gained a `spec-compat` job in its release gate,
+  run against the spec the live service serves.
+- [x] `actions/release-flow/releaseflow/cli_ops_check.py` `load()` — comparing a JSON spec with a
+  YAML spec gives false breaks. JSON goes through `json.loads`, which keeps the string `"off"`.
+  YAML goes through `yaml.safe_load`, which follows YAML 1.1 and turns an unquoted `off`/`on`/
+  `yes`/`no` into a boolean. Consumer C measured this on 2026-10-15: a served `openapi.json`
+  against a raw `swagger.yaml` reported 2 false enum narrowings. The mechanism is checked in the
+  code; the 2 false hits are consumer C's report and were not re-run here. A same-format
+  comparison is not affected, because both sides are misread the same way. Fix: load YAML with a
+  loader that keeps those words as strings (one that drops the YAML 1.1 bool resolver), add a
+  mixed-format regression test, and ship it in a patch release. FIXED 2026-10-15 on branch
+  `fix/spec-yaml-bool-words` (`test_spec_load.py` red → green). Not in a release yet: that
+  waits on the owner's explicit ask.
 - [x] `release_flow.py` (the `ops-subset` / `spec-compat` usage text) and `spec_compat.py`
   (module docstring) — consumer C's real file paths replaced with generic wording
   (2026-10-15, `feat/breaking-approved-waiver`).

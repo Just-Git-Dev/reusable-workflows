@@ -19,9 +19,27 @@ PyYAML is imported lazily and only for YAML input (like tools/stepup-path-check/
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 METHODS = ("get", "put", "post", "delete", "patch", "head", "options")
+
+
+def _spec_loader(yaml):
+    """SafeLoader with YAML 1.2 booleans: only true/false (any case), never on/off/yes/no.
+
+    PyYAML follows YAML 1.1, where an unquoted `off` is False. JSON keeps "off" a string, so a
+    JSON spec compared with a raw YAML one saw enum value "off" vanish: a false break.
+    """
+    class SpecLoader(yaml.SafeLoader):
+        pass
+    SpecLoader.yaml_implicit_resolvers = {
+        first: [(tag, rx) for tag, rx in resolvers if tag != "tag:yaml.org,2002:bool"]
+        for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()}
+    SpecLoader.add_implicit_resolver(
+        "tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+        list("tTfF"))
+    return SpecLoader
 
 
 def load(path):
@@ -37,7 +55,7 @@ def load(path):
         raise SystemExit(f"{path} is not JSON and PyYAML is not installed: "
                          "pip install pyyaml (needed to read YAML specs)")
     try:
-        return yaml.safe_load(text)
+        return yaml.load(text, Loader=_spec_loader(yaml))  # noqa: S506 - a SafeLoader subclass
     except yaml.YAMLError as ex:  # unreadable = exit 2 at the callers, never a traceback's 1
         raise ValueError(f"{path} is neither JSON nor valid YAML: {ex}") from ex
 
