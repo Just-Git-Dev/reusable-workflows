@@ -898,6 +898,12 @@
     },
     "cleanup-gar-images": {
       "inputs": {
+        "allow_inert_images": {
+          "default": "",
+          "description": "Comma-separated image names (the last path segment of the package) exempt from `fail_on_inert` \u2014 e.g. a pre-release service that has legitimately published no release yet. Exempt images keep the warning.",
+          "required": false,
+          "type": "string"
+        },
         "build_retention_releases": {
           "default": "2",
           "description": "Keep BUILDS newer than the Nth-most-recent release, ordered by time rather than semver precedence (a backport released today must not move the boundary back to its version's position). 2 = pending builds plus one release of rollback window. Cannot exceed keep_semver_count, and with fewer than N releases there is no boundary and nothing is deleted.",
@@ -913,6 +919,12 @@
         "dry_run": {
           "default": true,
           "description": "true = print the plan only, delete nothing.",
+          "required": false,
+          "type": "boolean"
+        },
+        "fail_on_inert": {
+          "default": false,
+          "description": "true = end the run RED if any image has zero release-tagged images (its retention is inert and nothing in it is ever deleted). Fails at the end, after deletions and the immutable-tag end-state, and on dry runs too. Default false keeps the warning-only behaviour.",
           "required": false,
           "type": "boolean"
         },

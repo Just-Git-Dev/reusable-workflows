@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [`cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run](#2026-10-15--cleanup-gar-images-opt-in-fail_on_inert-makes-an-inert-sweep-fail-the-run)
 - `2026-10-15` — [`v3.5.2` released (neutral service names, older `ops-subset` alias removed)](#2026-10-15--v352-released-neutral-service-names-older-ops-subset-alias-removed)
 - `2026-10-15` — [Public repo names no consumer service — neutral role names, older `ops-subset` alias removed](#2026-10-15--public-repo-names-no-consumer-service--neutral-role-names-older-ops-subset-alias-removed)
 - `2026-10-15` — [`v3.5.1` released (`release-flow` YAML 1.2 booleans)](#2026-10-15--v351-released-release-flow-yaml-12-booleans)
@@ -114,6 +115,20 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-15 — `cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run
+
+**What.** `cleanup-gar-images` gains two optional inputs, `fail_on_inert` (boolean, default `false`) and `allow_inert_images` (comma-separated image names, the last path segment). An image is inert when it has zero release-tagged images. The plan JSON now always records `inert` and `inert_allowed`, the summary has an "Inert images" section, and a new last step `Fail on inert images` ends the run red when `inert` is non-empty. Deletion behaviour is unchanged. Additive inputs, so a minor release (`v3.6.0`) when cut.
+
+**Why.** Consumer B had one image tagged `0.1.x` (no `v`). The default `release_tag_pattern` never matched it, so the sweep was inert for that image: 2.68 GB stayed for weeks while every daily run finished green at `deleted=0`. The existing `::warning::` sits on a green run, and nobody reads those.
+
+**Why opt-in.** A pre-release service is legitimately inert, so failing by default would turn every young repo red. Callers opt in with `fail_on_inert: true` and exempt known cases with `allow_inert_images`. Only zero releases counts: fewer releases than `build_retention_releases` (no boundary yet) stays a warning.
+
+**Why it fails at the end.** The step runs after deletions and after `Ensure immutable-tag end-state`, so healthy images are still cleaned and the repository is re-locked before the run goes red. It uses `!cancelled()` plus the flag, and skips quietly if no plan file exists (the plan step failing already reddens the run).
+
+**Why dry runs fail too.** A scheduled preview should surface an inert image as well; otherwise the first sign would be the first applied run.
+
+**Owner ask.** Approved 2026-10-15 (plan: `plans/2026-10-15-cleanup-gar-fail-on-inert.md`).
 
 ## 2026-10-15 — `v3.5.2` released (neutral service names, older `ops-subset` alias removed)
 

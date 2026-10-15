@@ -170,6 +170,23 @@ on:
         type: boolean
         required: false
         default: true
+      fail_on_inert:
+        description: >-
+          true = end the run RED if any image has zero release-tagged images
+          (its retention is inert and nothing in it is ever deleted). Fails at
+          the end, after deletions and the immutable-tag end-state, and on dry
+          runs too. Default false keeps the warning-only behaviour.
+        type: boolean
+        required: false
+        default: false
+      allow_inert_images:
+        description: >-
+          Comma-separated image names (the last path segment of the package)
+          exempt from `fail_on_inert` — e.g. a pre-release service that has
+          legitimately published no release yet. Exempt images keep the warning.
+        type: string
+        required: false
+        default: ''
     outputs:
       candidates:
         description: 'Number of image versions selected for deletion by the plan.'
@@ -215,6 +232,7 @@ jobs:
       KEEP_TAGS:             ${{ inputs.keep_tags }}
       KEEP_TAG_PREFIXES:     ${{ inputs.keep_tag_prefixes }}
       DRY_RUN:               ${{ inputs.dry_run }}
+      ALLOW_INERT_IMAGES:    ${{ inputs.allow_inert_images }}
       POLICY_IN:             ${{ inputs.immutable_tags_policy }}
       RELOCK_IN:             ${{ inputs.relock_immutable_tags }}
     outputs:
@@ -483,6 +501,9 @@ jobs:
           # drag the cutoff back with it and silently disable the sweep for the repo.
           policy_keep = set()
           retention = {}
+          inert, inert_allowed = [], []
+          ALLOW_INERT = {n.strip() for n in os.environ.get("ALLOW_INERT_IMAGES", "").split(",")
+                         if n.strip()}
           for pkg, imgs in by_pkg.items():
               for img in imgs:
                   if any(protected(t) for t in (img.get("tags", []) or [])):
@@ -512,6 +533,11 @@ jobs:
                       policy_keep.add(img.get("version"))
 
               if not releases:
+                  # Recorded in the plan so the final `Fail on inert images` step can act
+                  # on it; the warning stays for both lists. Nothing here changes what is
+                  # deleted — an image with no releases has no boundary either way.
+                  (inert_allowed if pkg.rsplit("/", 1)[-1] in ALLOW_INERT
+                   else inert).append(pkg)
                   print("::warning::%s has no image tagged like a release (pattern %s) — "
                         "retention is inert for it and nothing will ever be deleted. If it "
                         "does publish releases, release_tag_pattern is wrong."
@@ -605,6 +631,8 @@ jobs:
               "build_retention_releases": BUILD_RETENTION_RELEASES,
               "grace_period_days": GRACE_PERIOD_DAYS,
               "retention": retention,
+              "inert": sorted(inert),
+              "inert_allowed": sorted(inert_allowed),
               "cutoff": {p: (c.isoformat() if c else None) for p, c in cutoff.items()},
               "to_delete": to_delete,
               "blocked_by_parent": blocked,
@@ -645,6 +673,15 @@ jobs:
             echo "- grace_period_days: $(jq -r '.grace_period_days' /tmp/delete-plan.json)"
             echo ""
             jq -r '.retention | to_entries[] | "- `\(.key)` — \(.value.releases_kept)/\(.value.releases) release(s) kept, \(.value.builds_kept)/\(.value.builds) build(s) kept; boundary: \(.value.boundary_time // "NONE — too few releases, nothing will be deleted") \(.value.boundary_tags | join(","))"' /tmp/delete-plan.json
+            echo ""
+            echo "### Inert images (no release-tagged image — nothing is ever deleted)"
+            echo ""
+            if [ "$(jq '(.inert | length) + (.inert_allowed | length)' /tmp/delete-plan.json)" = "0" ]; then
+              echo "none"
+            else
+              jq -r '.inert[] | "- `\(.)` — inert"' /tmp/delete-plan.json
+              jq -r '.inert_allowed[] | "- `\(.)` — inert, allowed by allow_inert_images"' /tmp/delete-plan.json
+            fi
             echo ""
             echo "### Candidates"
             echo ""
@@ -1084,4 +1121,39 @@ jobs:
             echo "::error::tags can be moved to a different digest until this is fixed. Run:"
             echo "::error::  ${fix_cmd}"
           } >&2
+          exit 1
+
+      # Last on purpose: healthy images are still cleaned and the repository is
+      # re-locked before this turns the run red. Runs on dry runs too, so a scheduled
+      # preview surfaces an inert image. `!cancelled()` rather than `always()` so a
+      # cancelled run stays cancelled; a missing plan (the plan step itself failed,
+      # which already reddened the run) is handled in the body.
+      - name: Fail on inert images
+        if: ${{ !cancelled() && inputs.fail_on_inert }}
+        env:
+          FAIL_ON_INERT: ${{ inputs.fail_on_inert }}
+        run: |
+          [ "$FAIL_ON_INERT" = "true" ] || exit 0
+          if [ ! -f /tmp/delete-plan.json ]; then
+            echo "::notice::no delete plan was produced — skipping the inert-image check"
+            exit 0
+          fi
+
+          INERT=$(jq -r '.inert // [] | .[]' /tmp/delete-plan.json)
+          if [ -z "$INERT" ]; then
+            echo "::notice::fail_on_inert: no inert images"
+            exit 0
+          fi
+
+          {
+            echo "## Inert images — fail_on_inert"
+            echo ""
+            echo "These images have no tag matching \`${RELEASE_TAG_PATTERN}\`, so retention never deletes anything from them:"
+            echo ""
+            while IFS= read -r img; do echo "- \`${img}\`"; done <<< "$INERT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r img; do
+            echo "::error::${img} has no image tagged like a release (pattern ${RELEASE_TAG_PATTERN}), so its sweep is inert. Fix the tag format, set release_tag_pattern to match it, or add '${img##*/}' to allow_inert_images."
+          done <<< "$INERT"
           exit 1

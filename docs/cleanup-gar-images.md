@@ -49,6 +49,30 @@ pre-release one, so the run **warns** when an image has no release-tagged
 artifacts at all. Silence is the thing to be afraid of: `<consumer-A-project-id>` ran green at
 `deleted=0` for six consecutive days while its registry grew to 580 MB.
 
+### Making an inert sweep fail
+
+A warning on a green run is easy to miss: another consumer had one image tagged
+`0.1.x` (no `v`), the default `release_tag_pattern` never matched it, and every daily
+run finished green at `deleted=0` for weeks with 2.68 GB kept. Set `fail_on_inert: true`
+and the run goes **red** when any image has **zero** release-tagged images.
+
+- An image with *some* releases, but fewer than `build_retention_releases`, is still only
+  a warning: that is the normal state of a young service.
+- The run fails **at the end**, after deletions and the immutable-tag end-state step, so
+  healthy images are still cleaned and the repository is never left unlocked.
+- **Dry runs fail too**, so a scheduled preview surfaces an inert image as well.
+- The error names the image and the pattern. Fix it by correcting the tag format, setting
+  `release_tag_pattern` to match, or listing the image in `allow_inert_images` (e.g. a
+  service that has legitimately published no release yet).
+- The plan JSON records `inert` and `inert_allowed` either way, and the step summary has an
+  "Inert images" section. Deletion behaviour is unchanged.
+
+```yaml
+    with:
+      fail_on_inert: true
+      allow_inert_images: 'pre-release-svc'
+```
+
 ### The cutoff is anchored to your artifacts, not to `now`
 
 `grace_period_days` is measured back from the oldest image the release policy
@@ -115,6 +139,8 @@ warning rather than passing quietly.
 | `immutable_tags_policy` | no | `enforce` | state the repository is left in after an applied sweep: `enforce` \| `preserve` \| `unlock`; see [Immutable tags](#immutable-tags) |
 | `relock_immutable_tags` | no | `true` | **deprecated** — `false` still means "leave it unlocked" and folds into `immutable_tags_policy: unlock` |
 | `dry_run` | no | `true` | `true` prints the plan and deletes nothing |
+| `fail_on_inert` | no | `false` | `true` ends the run **red** if any image has zero release-tagged images. Fails last, dry runs included; see [Making an inert sweep fail](#making-an-inert-sweep-fail) |
+| `allow_inert_images` | no | `''` | comma-separated image names (last path segment of the package) exempt from `fail_on_inert`; they keep the warning only |
 
 The repo path is derived as `<gcp_region>-docker.pkg.dev/<gcp_project>/<gar_repo>`.
 
@@ -380,6 +406,9 @@ jobs:
       service_account: ${{ vars.GCP_CLEANER_SA }}
       gar_repo: backend
       dry_run: ${{ needs.resolve.outputs.dry == 'true' }}
+      # v3.6.0+: end the run red when an image has no release-tagged images.
+      fail_on_inert: true
+      # allow_inert_images: 'pre-release-svc,another-svc'
 ```
 
 ## Tests
