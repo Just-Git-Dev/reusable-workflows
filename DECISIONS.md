@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-15` — [Release flow: a `breaking-approved` label waives an exact list of breaking changes (supersedes the no-approval ruling)](#2026-10-15--release-flow-a-breaking-approved-label-waives-an-exact-list-of-breaking-changes-supersedes-the-no-approval-ruling)
 - `2026-10-15` — [Root release checks contracts between services only — no removal-approval list (2026-10-15)](#2026-10-15--root-release-checks-contracts-between-services-only--no-removal-approval-list-2026-10-15)
 - `2026-10-13` — [`release-flow`: the release-PR check example triggers on manifests only (`releases/*.yaml`)](#2026-10-13--release-flow-the-release-pr-check-example-triggers-on-manifests-only-releasesyaml)
 - `2026-10-13` — [`release-flow`: the App key is a declared secret passed BY NAME — `inherit` passes nothing across orgs](#2026-10-13--release-flow-the-app-key-is-a-declared-secret-passed-by-name--inherit-passes-nothing-across-orgs)
@@ -109,7 +110,66 @@ archived by age only; nothing is deleted, and both files are greppable.
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
 
+## 2026-10-15 — Release flow: a `breaking-approved` label waives an exact list of breaking changes (supersedes the no-approval ruling)
+
+**Supersedes** the 2026-10-15 entry "Root release checks contracts between services only — no
+removal-approval list". Its between-services-only half stands. Its no-approval half is reversed.
+
+**Context.** Under the earlier ruling, any removal that breaks a live consumer took two releases.
+After the consumer's session relayed a fuller ruling, the owner confirmed in the devops session
+(2026-10-15) that the shared flow should get a label-gated, exact-list waiver. Plan:
+`plans/2026-10-15-breaking-approved-waiver.md`.
+
+**Decision (owner rulings 1-6).** (1) A removal that breaks a live consumer is a BREAKING change
+and is flagged. Approved, it ships in one release; otherwise it takes two. (2) The owner approves
+by adding the label `breaking-approved` to the root release PR before merge. (3) The approval
+covers only the EXACT list of breaks, written in a ```` ```breaking ```` block in the PR body.
+(4) Every waived break is printed in the Release run's job summary. (5) A spec-compat crash
+(exit 2), or zero operations examined, stays red with the label. (6) Accepted risk, signed by the
+label: between the provider deploy and the consumer deploy, the live consumer talks to a provider
+without the removed item. Rules R1-R6 are in `docs/release-flow.md` §Contract checks.
+
+**Where the list is checked (Q-A, owner).** Before merge, a rehearsal on the open release PR.
+After merge, the real Release, before its first write. `release-pr-check` checks only the shape
+(label and block together, grammar, configured pairs), from the event payload, with no token.
+**Why not recompute the breaks in `release-pr-check`:** that would put the release App key into a
+`pull_request`-triggered workflow, whose workflow file the PR itself can edit. It would also need
+a per-caller way to find the specs, which the shared config does not have. The rehearsal already
+runs the caller's own contracts with zero writes.
+
+**Two refinements found while building (not in the approved plan; reported to the owner):**
+- *The waiver applies only to the live-consumer check* (`checks` entry with `consumer_side:
+  live`). One pair can appear in several publish states. Where the consumer is the candidate, it
+  was built without the removed item, so a per-call "stale entry fails" rule would turn every
+  approved release red. A break found there means the new consumer itself needs what the new
+  provider removed. That is a broken release, not the ruling-6 window, so nothing waives it. With
+  the consumer live, the provider must be the candidate, so each pair has at most one such check.
+  That keeps "every waived finding == the block" exact. Cost: the caller also passes
+  `--consumer-side ${{ matrix.consumer_side }}`.
+- *The merge guard judges the NEWEST `release-pr` run on the PR head* (largest check-run id),
+  not every run. The author flow adds a body edit and a label on the SAME head sha, which leaves
+  an older red run beside the green one. Under the old "every same-named run is success" rule,
+  that red run would block the release whether GitHub returns it or not. Which runs the
+  check-runs endpoint returns by default is unverified, so the guard is correct either way. Every
+  same-named run must still come from GitHub Actions and from the release-pr workflow. When any
+  run lacks an id, the old rule applies (fail closed).
+
+**Evidence for "no new permission".** GitHub's "Permissions required for GitHub Apps" page lists
+`GET /repos/{owner}/{repo}/issues/{issue_number}/events` under **Pull requests: read** as well as
+Issues: read (docs-checked 2026-10-15). The plan job already has `pull-requests: read`.
+
+**Residual risk, accepted.** The Release reads the PR body when its plan job starts, seconds after
+the merge. REST shows no record of body edits, so an edit made in those seconds is not detected.
+Even so, R4 still requires the waived set to equal the findings exactly.
+
+**Release.** rw `v3.5.0`, a minor release (additive input contract, new CLI tree). Released only
+on an explicit ask.
+
 ## 2026-10-15 — Root release checks contracts between services only — no removal-approval list (2026-10-15)
+
+> **Partly superseded (same day):** the no-approval half is reversed by the entry above,
+> "Release flow: a `breaking-approved` label waives an exact list of breaking changes". The
+> between-services-only half stands.
 
 **Context.** A consumer's root release refused a deliberate removal from a provider's OpenAPI
 spec, and two patch versions were burned before publish. The caller ran `spec-compat` twice per

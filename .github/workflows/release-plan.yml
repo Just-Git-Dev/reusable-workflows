@@ -100,6 +100,9 @@ on:
       checks:
         description: 'JSON list for a matrix include; [] when no contract involves a listed service'
         value: ${{ jobs.resolve.outputs.checks }}
+      breaking:
+        description: "JSON [{consumer, provider, finding}] approved by the breaking-approved label ([] without it); pass to spec-compat as RELEASE_BREAKING"
+        value: ${{ jobs.resolve.outputs.breaking }}
 
 permissions:
   contents: read
@@ -133,6 +136,7 @@ jobs:
       order: ${{ steps.o.outputs.order }}
       rehearsal: ${{ steps.in.outputs.rehearsal }}
       owner: ${{ steps.cfg.outputs.owner }}
+      breaking: ${{ steps.brk.outputs.breaking }}
     steps:
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -256,6 +260,41 @@ jobs:
             echo "pr=$pr"
           } >> "$GITHUB_OUTPUT"
 
+      # The breaking-approved waiver (docs/release-flow.md § Contract checks): label + exact
+      # ```breaking block on the release PR (R1, R2); a real release also requires the label to
+      # predate the merge (R5). A rehearsal reads the open PR of manifest-ref; without one, none.
+      - name: Breaking-change approval (label + exact list on the release PR)
+        id: brk
+        env:
+          RELEASE_FLOW_READ_TOKEN: ${{ github.token }}
+          REHEARSAL: ${{ inputs.rehearsal }}
+          MANIFEST_REF: ${{ inputs.manifest-ref }}
+          PR: ${{ steps.m.outputs.pr }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          if [ "$REHEARSAL" = "true" ]; then
+            if [ -n "$MANIFEST_REF" ]; then
+              list=$(release-flow breaking-approval --head-branch "$MANIFEST_REF" --config "$CONFIG")
+            else
+              list='[]'
+            fi
+          else
+            list=$(release-flow breaking-approval --pr "$PR" --config "$CONFIG")
+          fi
+          jq -e 'type == "array"' <<<"$list" >/dev/null || { echo "::error::breaking-approval printed '$list', not a JSON list"; exit 1; }
+          echo "breaking=$(jq -c . <<<"$list")" >> "$GITHUB_OUTPUT"
+          n=$(jq length <<<"$list")
+          if [ "$n" -gt 0 ]; then
+            {
+              echo "### Approved breaking changes (\`breaking-approved\`): $n"
+              echo
+              jq -r '.[] | "- `\(.consumer) -> \(.provider) | \(.finding)`"' <<<"$list"
+              echo
+              echo "Accepted risk: until the consumer deploys, the live consumer talks to a provider without these items."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       # Shape only here (`order` parses strictly): this job holds no cross-repo token. The
       # cross-repo `validate` is resolve's first step. More than six services is refused (exit 2).
       - name: Publish order
@@ -301,6 +340,7 @@ jobs:
     outputs:
       resolved: ${{ steps.r.outputs.resolved }}
       checks: ${{ steps.r.outputs.checks }}
+      breaking: ${{ steps.brk.outputs.breaking }}
     steps:
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,6 +437,18 @@ jobs:
           checks=$(release-flow contract-states "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG")
           jq . <<<"$checks"
           echo "checks=$(jq -c . <<<"$checks")" >> "$GITHUB_OUTPUT"
+
+      # R3: an approved break must belong to a LIVE-consumer check of this release; the caller's
+      # spec-compat applies the list per check (R4). No token: it reads only plan's outputs.
+      - name: Approved breaking changes match a live-consumer check
+        id: brk
+        env:
+          BREAKING: ${{ needs.plan.outputs.breaking }}
+          CHECKS: ${{ steps.r.outputs.checks }}
+        run: |
+          set -euo pipefail
+          list=$(release-flow breaking-matrix --breaking "$BREAKING" --checks "$CHECKS")
+          echo "breaking=$(jq -c . <<<"$list")" >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------- service-gates
   # READ-ONLY. Each listed service's own release-gate check on the tagged sha must be a finished

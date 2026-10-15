@@ -139,3 +139,24 @@ jobs:
             echo "Publish order once merged:"
             printf '%s\n' "$order" | sed 's/^/- /'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # SHAPE ONLY (R1, R2 in docs/release-flow.md § Contract checks): the label and a
+      # well-formed ```breaking block come together. Read from the event payload, no token. The
+      # exact list is checked by a rehearsal before merge and by the Release after it.
+      - name: Breaking-change approval shape (label + block, no token)
+        env:
+          CONFIG: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          list=$(release-flow breaking-shape --event-file "$GITHUB_EVENT_PATH" --config "$CONFIG")
+          n=$(jq length <<<"$list")
+          if [ "$n" -gt 0 ]; then
+            {
+              echo
+              echo "### \`breaking-approved\`: $n listed breaking change(s)"
+              echo
+              jq -r '.[] | "- `\(.consumer) -> \(.provider) | \(.finding)`"' <<<"$list"
+              echo
+              echo "Shape only. A rehearsal checks that this list is exact; the Release checks it again before any write."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

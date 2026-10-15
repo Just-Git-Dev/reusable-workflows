@@ -2,7 +2,8 @@
 """Live-consumer compatibility: does a CANDIDATE provider spec still serve what a BASELINE needs?
 
 BASELINE is a provider spec a running (live) consumer depends on: the one it was built against
-(api's contract/issuer-openapi.yaml at its live tag) or the one the live provider serves today.
+(the consumer's pinned copy of the provider spec at its live tag) or the one the live provider
+serves today.
 CANDIDATE is the provider spec about to ship. Unlike the api's fixture-parity test (strict both
 ways, right for a candidate consumer) this is one-directional: it fails only when the candidate
 could break the baseline's consumer. The rules are the list in docs/release-flow.md
@@ -16,17 +17,26 @@ could break the baseline's consumer. The rules are the list in docs/release-flow
     the same rules; allOf is merged. A type one side states and the other does not = CHANGED.
 Additive changes (new operations, optional fields/params, widened enums) pass.
 
-Usage: spec_compat.py BASELINE CANDIDATE [--label X]     (JSON or YAML files)
-Exit: 0 compatible; 1 incompatible, or ZERO operations examined (a check that examined nothing
-proves nothing); 2 usage / unreadable file / PyYAML missing for a YAML input.
+Usage: spec_compat.py BASELINE CANDIDATE [--label X] [--pair "C -> P" --consumer-side live|candidate]
+       (JSON or YAML files)
+With --pair, env RELEASE_BREAKING (the plan's `breaking` output, JSON) is the owner-approved
+list (waiver.py): in a `live` consumer check each listed finding of this pair is printed WAIVED
+and written to $GITHUB_STEP_SUMMARY, an unlisted finding fails, and a listed one that did not
+occur fails (stale). A `candidate` consumer check waives nothing. On failure a paste-ready
+```breaking block is printed (R6).
+Exit: 0 compatible (or every finding waived); 1 incompatible, or ZERO operations examined (a
+check that examined nothing proves nothing; never waivable); 2 usage / unreadable file / PyYAML
+missing for a YAML input / bad RELEASE_BREAKING (never waivable).
 Reuses cli_ops_check's loader (PyYAML imported lazily, only for YAML input).
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 
+import waiver
 from cli_ops_check import METHODS, load
 
 
@@ -387,18 +397,57 @@ class Checker:
         return self.findings
 
 
-def main(argv):
+def _take(argv, flag):
+    """Remove `flag VALUE` from argv -> VALUE, None when absent; ValueError when VALUE is missing."""
+    if flag not in argv:
+        return None
+    i = argv.index(flag)
+    if i + 1 >= len(argv):
+        raise ValueError(flag)
+    value = argv[i + 1]
+    del argv[i:i + 2]
+    return value
+
+
+def _summary(env, label, waived):
+    path = env.get("GITHUB_STEP_SUMMARY")
+    if not path or not waived:
+        return
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(f"### {label}: {len(waived)} breaking change(s) WAIVED by "
+                 f"`{waiver.LABEL}`\n\n")
+        fh.writelines(f"- `{f}`\n" for f in waived)
+        fh.write("\n")
+
+
+def main(argv, env=None):
+    env = os.environ if env is None else env
     argv = list(argv)
-    label = "spec-compat"
-    if "--label" in argv:
-        i = argv.index("--label")
-        if i + 1 >= len(argv):
-            print(__doc__, file=sys.stderr)
-            return 2
-        label = f"spec-compat[{argv[i + 1]}]"
-        del argv[i:i + 2]
+    try:
+        raw_label = _take(argv, "--label")
+        pair = _take(argv, "--pair")
+        side = _take(argv, "--consumer-side")
+    except ValueError:
+        print(__doc__, file=sys.stderr)
+        return 2
+    label = f"spec-compat[{raw_label}]" if raw_label is not None else "spec-compat"
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
+        return 2
+    try:
+        if (pair is None) != (side is None):
+            raise waiver.WaiverError("--pair and --consumer-side go together")
+        if side is not None and side not in ("live", "candidate"):
+            raise waiver.WaiverError(f"--consumer-side {side!r} is neither live nor candidate")
+        if pair is not None:
+            waiver.parse_pair(pair)
+        entries = waiver.from_json(env.get("RELEASE_BREAKING", ""))
+        if entries and pair is None:
+            raise waiver.WaiverError("RELEASE_BREAKING lists approved breaks but --pair is not "
+                                     "given, so none can be matched; pass --pair and "
+                                     "--consumer-side from the checks matrix")
+    except waiver.WaiverError as ex:
+        print(f"{label}: {ex}", file=sys.stderr)
         return 2
     try:
         baseline, cand = load(argv[0]), load(argv[1])
@@ -409,15 +458,34 @@ def main(argv):
     findings = ck.run()
     print(f"{label}: examined {ck.n_ops} operation(s), {ck.n_props} propert(ies)/parameter(s) "
           "of the baseline spec")
-    if ck.n_ops == 0:
+    if ck.n_ops == 0:  # never waivable (ruling 5)
         print("FAIL: examined 0 operations -- the baseline spec has no paths, nothing was checked")
         return 1
-    for f in findings:
+    if side == "live":
+        waived, unlisted, stale = waiver.split(findings, pair, entries)
+    else:  # no pair, or a candidate consumer: nothing is waived and nothing can go stale
+        waived, unlisted, stale = [], list(dict.fromkeys(findings)), []
+    for f in waived:
+        print(f"WAIVED {f}")
+    for f in unlisted:
         print(f"INCOMPATIBLE {f}")
-    if findings:
-        print(f"FAIL: {len(findings)} incompatibility(ies) between the baseline spec "
-              "and the candidate")
+    for f in stale:
+        print(f"STALE approval (listed for {pair}, did not occur): {f}")
+    _summary(env, label, waived)
+    if unlisted or stale:
+        print(f"FAIL: {len(unlisted)} incompatibility(ies) not approved, {len(stale)} stale "
+              f"approval(s), {len(waived)} waived")
+        if side == "candidate":
+            print(f"A break in a candidate-consumer check cannot be waived with "
+                  f"`{waiver.LABEL}`: the new consumer itself needs what the provider removed.")
+        elif findings:
+            print(f"To ship these as approved breaking changes, the owner labels the release PR "
+                  f"`{waiver.LABEL}` and its body carries exactly:")
+            print(waiver.paste_block(pair or "<consumer> -> <provider>", findings), end="")
         return 1
+    if waived:
+        print(f"ok: {len(waived)} incompatibility(ies) WAIVED by `{waiver.LABEL}`; nothing else")
+        return 0
     print("ok: the candidate still serves everything the baseline spec uses")
     return 0
 

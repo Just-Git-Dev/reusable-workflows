@@ -9,6 +9,7 @@ loudly instead means a queued release is never dropped without anyone noticing.
 from __future__ import annotations
 
 import gh
+import waiver
 
 
 WORKFLOW_PATH = ".github/workflows/release-pr.yml"
@@ -39,9 +40,17 @@ def check_merge(reader, root, sha, check_name, base_branch="main",
     except gh.GitHubError as ex:
         raise GuardError(f"cannot read check runs for {head}: {ex}") from ex
     runs = [c for c in data.get("check_runs", []) if c.get("name") == check_name]
-    if not runs or any(c.get("conclusion") != "success" for c in runs):
+    # The NEWEST run is the verdict: an edit or a label (the breaking-approved flow) re-runs the
+    # check on the same head, leaving an older red run beside the green one. Without an int id on
+    # every run, "newest" is unknowable, so every run must succeed (fail closed).
+    if runs and all(isinstance(c.get("id"), int) for c in runs):
+        judged = [max(runs, key=lambda c: c["id"])]
+    else:
+        judged = runs
+    if not runs or any(c.get("conclusion") != "success" for c in judged):
         raise GuardError(f"check {check_name!r} on PR head {head} did not conclude success "
-                         f"(found {[c.get('conclusion') for c in runs]})")
+                         f"(found {[c.get('conclusion') for c in runs]}, judged "
+                         f"{[c.get('conclusion') for c in judged]})")
     # A check NAME proves nothing: any app can publish a check called release-pr. Every
     # same-named run must come from GitHub Actions AND from the release-pr.yml workflow.
     for c in runs:
@@ -76,3 +85,40 @@ def concurrent(reader, root, workflow, run_id):
                    if str(r["id"]) != str(run_id)]
     if others:
         raise GuardError(f"other {workflow} run(s) active: {sorted(set(others))}")
+
+
+def breaking_approval(reader, root, contracts, pr=None, head_branch=None):
+    """The `breaking-approved` list of the release PR (waiver.py) -> [Entry].
+
+    Real release (pr): the MERGED PR's current label + body (R1, R2), and the label must have
+    been on it before merged_at (R5, from issues/{n}/events). Rehearsal (head_branch): the one
+    OPEN PR whose head is that branch; its current label + body (R1, R2)."""
+    try:
+        if pr is not None:
+            obj = reader.get_ok(f"repos/{root}/pulls/{pr}")
+        else:
+            owner = root.split("/", 1)[0]
+            found = reader.get_ok(f"repos/{root}/pulls?state=open&head={owner}:{head_branch}")
+            if len(found) != 1:
+                raise GuardError(f"{len(found)} open PRs have head branch {head_branch!r}, want "
+                                 "exactly 1 (a rehearsal reads the release PR's approval)")
+            obj = found[0]
+    except gh.GitHubError as ex:
+        raise GuardError(f"cannot read the release PR: {ex}") from ex
+    if pr is not None and not obj.get("merged_at"):
+        raise GuardError(f"PR #{pr} is not merged")
+    names = [lb.get("name") for lb in obj.get("labels") or []]
+    try:
+        entries = waiver.check_shape(names, obj.get("body"), contracts)
+        if pr is not None and entries:
+            try:
+                events = reader.paginate(f"repos/{root}/issues/{pr}/events")
+            except gh.GitHubError as ex:
+                raise GuardError(f"cannot read PR #{pr}'s label events: {ex}") from ex
+            if not waiver.label_before_merge(events, obj["merged_at"]):
+                raise GuardError(f"the {waiver.LABEL!r} label was not on PR #{pr} before its "
+                                 f"merge at {obj['merged_at']}; a label added after the merge "
+                                 "approves nothing")
+    except waiver.WaiverError as ex:
+        raise GuardError(str(ex)) from ex
+    return entries

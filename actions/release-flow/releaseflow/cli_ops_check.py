@@ -36,7 +36,10 @@ def load(path):
     except ImportError:
         raise SystemExit(f"{path} is not JSON and PyYAML is not installed: "
                          "pip install pyyaml (needed to read YAML specs)")
-    return yaml.safe_load(text)
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as ex:  # unreadable = exit 2 at the callers, never a traceback's 1
+        raise ValueError(f"{path} is neither JSON nor valid YAML: {ex}") from ex
 
 
 def ops(spec):
@@ -63,7 +66,7 @@ def main(argv):
         return 2
     try:
         consumer, provider = ops(load(argv[0])), ops(load(argv[1]))
-    except (OSError, SystemExit) as ex:
+    except (OSError, SystemExit, ValueError) as ex:
         print(f"{label}: {ex}", file=sys.stderr)
         return 2
     print(f"{label}: examined {len(consumer)} operation(s) vendored by the consumer")

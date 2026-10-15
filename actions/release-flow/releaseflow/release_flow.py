@@ -67,11 +67,10 @@ defaults to releases/services.json in the CURRENT DIRECTORY):
   ops-subset CONSUMER_VENDORED_SPEC PROVIDER_SPEC [--label X]
                    every (method, path) the consumer's vendored copy of the provider's spec
                    declares exists in the candidate provider spec (examined N; 0 = failure).
-                   Used for cli->issuer and ui->api (ui vendors api's
-                   ui/web/src/mocks/vendor/bff-swagger.yaml and an issuer copy,
-                   ui/web/src/mocks/vendor/issuer-openapi.yaml); byte identity cannot hold
-                   for "ui@live vs api@new". `cli-ops` is an alias.
-  spec-compat BASELINE CANDIDATE [--label X]
+                   For a consumer that vendors a copy of its provider's spec (for mocks),
+                   where byte identity cannot hold for "consumer@live vs provider@new".
+                   `cli-ops` is an alias.
+  spec-compat BASELINE CANDIDATE [--label X] [--pair "C -> P" --consumer-side live|candidate]
                    a LIVE consumer's baseline provider spec (its pin, or what the live provider
                    serves) vs the candidate provider spec; fails when the candidate could break
                    that consumer. Operations match by method + path (path-param names ignored).
@@ -84,7 +83,21 @@ defaults to releases/services.json in the CURRENT DIRECTORY):
                    candidate-only oneOf/anyOf/allOf part with `required`; a oneOf/anyOf branch
                    gone; discriminator mapping changed; a construct it cannot compare ($ref path
                    item, `content` parameter). Additive changes and widened/removed enums pass.
-                   Prints examined N; 0 operations = failure. Used for api@live -> issuer@new.
+                   Prints examined N; 0 operations = failure. Typically consumer@live ->
+                   provider@new. With --pair, env RELEASE_BREAKING (plan's `breaking`) waives the
+                   owner-approved findings of a `live` consumer check (WAIVED; an unlisted or a
+                   stale one fails); on failure prints a paste-ready ```breaking block.
+  breaking-shape --event-file F
+                   R1 + R2 of the breaking-approved waiver from a pull_request event payload:
+                   the label and a well-formed ```breaking block come together; pairs are
+                   configured contracts. Prints the list as JSON.   no token
+  breaking-approval (--pr N | --head-branch B)
+                   R1 + R2 on the merged release PR N, plus R5 (the label predates merged_at,
+                   from its issue events); or, for a rehearsal, on the one OPEN PR of branch B.
+                   Prints the approved list as JSON.   read token (pull-requests: read)
+  breaking-matrix --breaking J --checks J
+                   R3: every approved pair has a live-consumer entry in the checks matrix.
+                   Prints the list.   no token
   report --stage S --result success|failure [--detail T] [--drafts FILE] [--publish FILE]
                    markdown to stdout (FILE = JSON {repo: release_id} / {repo: status}).
 
@@ -125,6 +138,7 @@ import resolve as resolve_mod  # noqa: E402
 import states as states_mod  # noqa: E402
 import validate as validate_mod  # noqa: E402
 import verdict as verdict_mod  # noqa: E402
+import waiver as waiver_mod  # noqa: E402
 
 DEFAULT_CONFIG = Path("releases") / "services.json"  # relative to the CURRENT directory
 
@@ -193,6 +207,18 @@ def build_parser():
     s.add_argument("pinned_spec", metavar="PINNED")
     s.add_argument("candidate_spec", metavar="CANDIDATE")
     s.add_argument("--label", default="")
+    s.add_argument("--pair", default=None)
+    s.add_argument("--consumer-side", default=None)
+    s = sub.add_parser("breaking-shape")
+    s.add_argument("--event-file", required=True)
+    s.add_argument("--config", default=str(DEFAULT_CONFIG))
+    s = sub.add_parser("breaking-approval")
+    s.add_argument("--pr", default=None)
+    s.add_argument("--head-branch", default=None)
+    s.add_argument("--config", default=str(DEFAULT_CONFIG))
+    s = sub.add_parser("breaking-matrix")
+    s.add_argument("--breaking", required=True)
+    s.add_argument("--checks", required=True)
     s = sub.add_parser("report")
     s.add_argument("--stage", required=True)
     s.add_argument("--result", required=True, choices=["success", "failure"])
@@ -304,6 +330,58 @@ def _verdict(args):
     return 0 if res["ok"] else 1
 
 
+def _breaking(args, env, transport):
+    """The breaking-approved waiver (waiver.py). Prints the approved list as compact JSON.
+    Exit 1 = a rule failed; 2 = unreadable input (raised as Usage / ConfigError)."""
+    try:
+        if args.cmd == "breaking-matrix":
+            try:
+                checks = json.loads(args.checks)
+            except ValueError as ex:
+                raise Usage(f"--checks is not JSON: {ex}") from ex
+            if not isinstance(checks, list):
+                raise Usage("--checks must be a JSON list")
+            try:
+                entries = waiver_mod.from_json(args.breaking)
+            except waiver_mod.WaiverError as ex:
+                raise Usage(str(ex)) from ex
+            waiver_mod.check_matrix(entries, checks)
+        elif args.cmd == "breaking-shape":
+            cfg = config_mod.load(args.config)
+            try:
+                event = json.loads(Path(args.event_file).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as ex:
+                raise Usage(f"cannot read --event-file {args.event_file}: {ex}") from ex
+            pr = event.get("pull_request") if isinstance(event, dict) else None
+            if not isinstance(pr, dict):
+                raise Usage("the event is not a pull_request event")
+            names = [lb.get("name") for lb in pr.get("labels") or []]
+            contracts = {(c.consumer, c.provider) for c in cfg.contracts}
+            entries = waiver_mod.check_shape(names, pr.get("body"), contracts)
+        else:
+            if (args.pr is None) == (args.head_branch is None):
+                raise Usage("breaking-approval needs exactly one of --pr and --head-branch")
+            if args.pr is not None and not re.fullmatch(r"[0-9]+", args.pr):
+                raise Usage(f"--pr {args.pr!r} is not a PR number")
+            if args.head_branch is not None and not re.fullmatch(r"[A-Za-z0-9._/-]+",
+                                                                 args.head_branch):
+                raise Usage(f"--head-branch {args.head_branch!r} is not a plain branch name")
+            cfg = config_mod.load(args.config)
+            reader = gh.Reader(transport(_token(env, "RELEASE_FLOW_READ_TOKEN")))
+            contracts = {(c.consumer, c.provider) for c in cfg.contracts}
+            try:
+                entries = guard.breaking_approval(reader, _root(env), contracts,
+                                                  pr=args.pr, head_branch=args.head_branch)
+            except guard.GuardError as ex:
+                _err(f"FAIL: {ex}")
+                return 1
+    except waiver_mod.WaiverError as ex:
+        _err(f"FAIL: {ex}")
+        return 1
+    print(waiver_mod.to_json(entries))
+    return 0
+
+
 def run(args, env, deps):
     cmd = args.cmd
     transport = lambda tok: deps.get("transport") or gh.urllib_transport(tok)  # noqa: E731
@@ -313,7 +391,12 @@ def run(args, env, deps):
                                    *(["--label", args.label] if args.label else [])])
     if cmd == "spec-compat":
         return spec_compat.main([args.pinned_spec, args.candidate_spec,
-                                 *(["--label", args.label] if args.label else [])])
+                                 *(["--label", args.label] if args.label else []),
+                                 *(["--pair", args.pair] if args.pair is not None else []),
+                                 *(["--consumer-side", args.consumer_side]
+                                   if args.consumer_side is not None else [])], env=env)
+    if cmd in ("breaking-shape", "breaking-approval", "breaking-matrix"):
+        return _breaking(args, env, transport)
     if cmd == "report":
         load_json = lambda p: json.loads(Path(p).read_text()) if p else None  # noqa: E731
         sys.stdout.write(report_mod.render(args.stage, args.result, args.detail,

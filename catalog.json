@@ -2815,6 +2815,7 @@
       },
       "name": "Release plan (reusable)",
       "outputs": {
+        "breaking": "JSON [{consumer, provider, finding}] approved by the breaking-approved label ([] without it); pass to spec-compat as RELEASE_BREAKING",
         "checks": "JSON list for a matrix include; [] when no contract involves a listed service",
         "manifest": "The manifest path",
         "manifest-sha256": "sha256 of the manifest file; every later stage checks the staged artifact against it",
