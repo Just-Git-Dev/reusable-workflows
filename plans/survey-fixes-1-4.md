@@ -123,7 +123,7 @@ on 2026-09-15 and the section does not know it.
 - Spread `v2.3.1` → `v2.5.0`.
 - **Zero mutable pins** — no caller is on `@main` or `@v1`, so the supply-chain risk that
   motivated the section is not currently live anywhere.
-- Deepest stragglers are on the **deploy path**: `<consumer-C-org>/api` and `<consumer-C-org>/issuer`
+- Deepest stragglers are on the **deploy path**: `<consumer-C-org>/gateway` and `<consumer-C-org>/core`
   `deploy.yml` pin `deploy-cloud-run` and `promote-image` at `v2.3.1`, four minors behind.
 
 Replace the narrative numbers with the tool invocation and the current summary, and say plainly

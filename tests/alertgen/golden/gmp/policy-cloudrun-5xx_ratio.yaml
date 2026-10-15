@@ -5,14 +5,14 @@ conditions:
 - conditionPrometheusQueryLanguage:
     duration: 600s
     evaluationInterval: 60s
-    query: (sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[10m]))
-      / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
-      > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    query: (sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway",response_code_class="5xx"}[10m]))
+      / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m])))
+      > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m]))
       >= 20
-  displayName: Cloud Run 5xx ratio is high (api, issuer)
-displayName: Cloud Run 5xx ratio is high (api, issuer) [cloudrun.5xx_ratio]
+  displayName: Cloud Run 5xx ratio is high (core, gateway)
+displayName: Cloud Run 5xx ratio is high (core, gateway) [cloudrun.5xx_ratio]
 documentation:
-  content: '**Cloud Run 5xx ratio is high** — services: api, issuer.
+  content: '**Cloud Run 5xx ratio is high** — services: core, gateway.
 
 
     More than the threshold share of requests to this Cloud Run service returned 5xx.
@@ -26,9 +26,9 @@ documentation:
     - Condition: > 5% (compared as 0.05), over 10m, for 10m, only with at least 20
     requests in the window
 
-    - Query: `(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[10m]))
-    / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
-    > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    - Query: `(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway",response_code_class="5xx"}[10m]))
+    / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m])))
+    > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m]))
     >= 20`
 
 
@@ -45,4 +45,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: cloudrun-5xx_ratio
-  spec_hash: 0d5eb902b9138d94
+  spec_hash: f94c5514d1425ce9

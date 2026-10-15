@@ -113,7 +113,7 @@ jobs:
       gcp_region: asia-southeast1
       gar_project: <consumer-C-project-id>
       gar_repo: backend
-      image_name: bff-api
+      image_name: gateway
       rollback_digest: ${{ github.event.inputs.rollback_digest }}
       commit_sha: ${{ github.event.inputs.commit_sha }}
       reason: ${{ github.event.inputs.reason }}
@@ -121,7 +121,7 @@ jobs:
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account: ${{ vars.GCP_RELEASER_SA }}
       deploy_target: cloud-run
-      run_service: api
+      run_service: gateway
 ```
 
 ## Example — key-based GKE rollback to a prior tag

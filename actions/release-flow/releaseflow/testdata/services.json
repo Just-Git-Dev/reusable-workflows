@@ -2,38 +2,38 @@
   "owner": "consumer-a-org",
   "gar_registry": "asia-southeast1-docker.pkg.dev/consumer-a-project",
   "services": [
-    {"repo": "issuer", "kind": "image", "order": 1, "deploy_workflow": "deploy.yml",
-     "health_url": "https://auth.example.test/.well-known/health", "image": "backend/api",
+    {"repo": "core", "kind": "image", "order": 1, "deploy_workflow": "deploy.yml",
+     "health_url": "https://auth.example.test/.well-known/health", "image": "backend/core",
      "ci": [
        {"workflow": "tests.yml", "paths_ignore": ["**.md", "docs/**"]},
        {"workflow": "deploy.yml"},
        {"workflow": "changelog-hygiene.yml"},
        {"workflow": "workflow-hygiene.yml"}
      ]},
-    {"repo": "api", "kind": "image", "order": 2, "deploy_workflow": "deploy.yml",
-     "health_url": "https://api.example.test/.well-known/health", "image": "backend/bff-api",
+    {"repo": "gateway", "kind": "image", "order": 2, "deploy_workflow": "deploy.yml",
+     "health_url": "https://gateway.example.test/.well-known/health", "image": "backend/gateway",
      "ci": [
        {"workflow": "ci.yml"},
        {"workflow": "deploy.yml"},
        {"workflow": "changelog-hygiene.yml"}
      ]},
-    {"repo": "ui", "kind": "pages", "order": 3, "deploy_workflow": "deploy.yml",
+    {"repo": "web", "kind": "pages", "order": 3, "deploy_workflow": "deploy.yml",
      "ci": [
        {"workflow": "test.yml"},
        {"workflow": "changelog-hygiene.yml"},
        {"workflow": "workflow-hygiene.yml"}
      ]},
-    {"repo": "website", "kind": "pages", "order": 4, "deploy_workflow": "deploy.yml",
+    {"repo": "site", "kind": "pages", "order": 4, "deploy_workflow": "deploy.yml",
      "ci": [
        {"workflow": "changelog-hygiene.yml"},
        {"workflow": "workflow-hygiene.yml"}
      ]}
   ],
-  "consumers_only": ["cli"],
+  "consumers_only": ["tool"],
   "contracts": [
-    {"consumer": "api", "provider": "issuer"},
-    {"consumer": "cli", "provider": "issuer"},
-    {"consumer": "ui", "provider": "api"},
-    {"consumer": "ui", "provider": "issuer"}
+    {"consumer": "gateway", "provider": "core"},
+    {"consumer": "tool", "provider": "core"},
+    {"consumer": "web", "provider": "gateway"},
+    {"consumer": "web", "provider": "core"}
   ]
 }

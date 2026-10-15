@@ -8,12 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gh  # noqa: E402
 from fake_github import FakeGitHub, OWNER, SHA_A  # noqa: E402
 
-P = f"repos/{OWNER}/issuer"
+P = f"repos/{OWNER}/core"
 
 
 def writer():
     fake = FakeGitHub()
-    fake.repo("issuer")
+    fake.repo("core")
     return fake, gh.Writer(fake)
 
 
@@ -29,9 +29,9 @@ class AllowlistTests(unittest.TestCase):
 
     def test_rerun_failed_jobs_allowed_only_exactly(self):
         fake, w = writer()
-        fake.repo("issuer").stage_draft("v1.0.0", SHA_A)
-        fake.repo("issuer").published_tag = "v1.0.0"
-        w.rerun_failed(OWNER, "issuer", 2)
+        fake.repo("core").stage_draft("v1.0.0", SHA_A)
+        fake.repo("core").published_tag = "v1.0.0"
+        w.rerun_failed(OWNER, "core", 2)
         self.assertEqual(fake.writes(), [("POST", f"{P}/actions/runs/2/rerun-failed-jobs", None)])
 
     def test_every_other_actions_endpoint_is_refused(self):
@@ -110,7 +110,7 @@ class AllowlistTests(unittest.TestCase):
         fake, w = writer()
         fake.fail.append(("POST", "/releases", 422))
         with self.assertRaises(gh.GitHubError):
-            w.create_draft(OWNER, "issuer", "v1.0.0")
+            w.create_draft(OWNER, "core", "v1.0.0")
 
     def test_reader_has_no_write_surface(self):
         r = gh.Reader(FakeGitHub())
@@ -119,7 +119,7 @@ class AllowlistTests(unittest.TestCase):
 
     def test_reader_paginates_until_empty(self):
         fake = FakeGitHub(page_size=2)
-        repo = fake.repo("issuer")
+        repo = fake.repo("core")
         for i in range(5):
             repo.add_release(f"v0.0.{i}")
         got = gh.Reader(fake).paginate(f"{P}/releases")
@@ -129,14 +129,14 @@ class AllowlistTests(unittest.TestCase):
         # git/matching-refs returns every ref on every page (real GitHub, 2026-10-09); a
         # paginate() over it must fail fast and say why, not loop to the 200-page cap.
         fake = FakeGitHub()
-        fake.repo("issuer").add_tag("v0.1.0", "a" * 40)
+        fake.repo("core").add_tag("v0.1.0", "a" * 40)
         with self.assertRaisesRegex(gh.GitHubError, "not paginated"):
             gh.Reader(fake).paginate(f"{P}/git/matching-refs/tags/v")
 
     def test_semver_tags_reads_unpaginated_matching_refs_once(self):
         import validate
         fake = FakeGitHub(page_size=2)
-        repo = fake.repo("issuer")
+        repo = fake.repo("core")
         for i in range(5):
             repo.add_tag(f"v0.{i}.0", f"{i}" * 40)
         tags = validate.semver_tags(gh.Reader(fake), P)

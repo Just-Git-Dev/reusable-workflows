@@ -5,15 +5,15 @@ conditions:
 - conditionPrometheusQueryLanguage:
     duration: 1800s
     evaluationInterval: 60s
-    query: label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[30m])),
-      "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"api|issuer"}[30m]))
+    query: label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[30m])),
+      "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"core|gateway"}[30m]))
       > 0
-  displayName: GoFr metrics are silent while the service serves traffic (api, issuer)
-displayName: GoFr metrics are silent while the service serves traffic (api, issuer)
+  displayName: GoFr metrics are silent while the service serves traffic (core, gateway)
+displayName: GoFr metrics are silent while the service serves traffic (core, gateway)
   [gofr.metrics.silent_while_serving]
 documentation:
   content: '**GoFr metrics are silent while the service serves traffic** — services:
-    api, issuer.
+    core, gateway.
 
 
     Cloud Run counted requests to this service but GoFr exported no HTTP metrics for
@@ -26,8 +26,8 @@ documentation:
 
     - Condition: over 30m, for 30m
 
-    - Query: `label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[30m])),
-    "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"api|issuer"}[30m]))
+    - Query: `label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[30m])),
+    "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"core|gateway"}[30m]))
     > 0`
 
 
@@ -44,4 +44,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: gofr-metrics-silent_while_serving
-  spec_hash: 3fe86c56bb8c85c0
+  spec_hash: a58e4516f813f259

@@ -5,13 +5,13 @@ conditions:
 - conditionPrometheusQueryLanguage:
     duration: 600s
     evaluationInterval: 60s
-    query: histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
-      > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    query: histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m])))
+      > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m]))
       >= 20
-  displayName: Cloud Run p95 latency is high (api, issuer)
-displayName: Cloud Run p95 latency is high (api, issuer) [cloudrun.latency_p95]
+  displayName: Cloud Run p95 latency is high (core, gateway)
+displayName: Cloud Run p95 latency is high (core, gateway) [cloudrun.latency_p95]
 documentation:
-  content: '**Cloud Run p95 latency is high** — services: api, issuer.
+  content: '**Cloud Run p95 latency is high** — services: core, gateway.
 
 
     The 95th-percentile request latency measured by Cloud Run is above the threshold.
@@ -25,8 +25,8 @@ documentation:
     - Condition: > 5s (compared as 5000), over 10m, for 10m, only with at least 20
     requests in the window
 
-    - Query: `histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
-    > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    - Query: `histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m])))
+    > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m]))
     >= 20`
 
 
@@ -43,4 +43,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: cloudrun-latency_p95
-  spec_hash: cb0628d8fb93e956
+  spec_hash: d834151edfebad8d

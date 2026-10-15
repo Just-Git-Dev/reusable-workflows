@@ -60,7 +60,7 @@ def extract_step(workflow: Path, job: str, step_name: str) -> str:
 
 
 def base_spec(**kw):
-    spec = {"apiVersion": "alertspec/v1", "services": ["api"], "packs": []}
+    spec = {"apiVersion": "alertspec/v1", "services": ["gateway"], "packs": []}
     spec.update(kw)
     return spec
 
@@ -151,21 +151,21 @@ def test_spec():
           rules["gofr.redis.latency_p95"][0].threshold == 50000)
 
     # precedence + grouping
-    spec = base_spec(services=["issuer", "api"], packs=["gofr-http"],
+    spec = base_spec(services=["core", "gateway"], packs=["gofr-http"],
                      overrides={"gofr.http.server.latency_p95": {
-                         "threshold": "3s", "services": {"issuer": {"threshold": "4s"}}}})
+                         "threshold": "3s", "services": {"core": {"threshold": "4s"}}}})
     rules = by_id(resolve(spec))
     lat = sorted(rules["gofr.http.server.latency_p95"], key=lambda r: r.services)
     check("per-service override splits the rule into two policies", len(lat) == 2, lat)
     check("service-level override beats rule-level",
-          [(r.services, r.threshold) for r in lat] == [(["api"], 3), (["issuer"], 4)],
+          [(r.services, r.threshold) for r in lat] == [(["core"], 4), (["gateway"], 3)],
           [(r.services, r.threshold) for r in lat])
     check("the un-overridden group keeps the plain key",
           sorted(r.key for r in lat) == ["gofr.http.server.latency_p95",
-                                        "gofr.http.server.latency_p95.issuer"],
+                                        "gofr.http.server.latency_p95.core"],
           [r.key for r in lat])
     err = rules["gofr.http.server.error_ratio"]
-    check("identical services render as ONE policy", len(err) == 1 and err[0].services == ["api", "issuer"],
+    check("identical services render as ONE policy", len(err) == 1 and err[0].services == ["core", "gateway"],
           [(r.services) for r in err])
     e = errors_of(lambda: resolve(base_spec(packs=["gofr-http"], overrides={
         "gofr.http.server.latency_p95": {"services": {"ghost": {"threshold": "1s"}}}})))
@@ -190,13 +190,13 @@ def test_spec():
     check("logs.error_match with a filter is on", "logs.error_match" in rules)
 
     # custom rules
-    good = {"id": "bff-upstream-errors", "metric": {"name": "bff_upstream_error", "type": "counter"},
+    good = {"id": "gateway-upstream-errors", "metric": {"name": "gateway_upstream_error", "type": "counter"},
             "kind": "rate", "filters": {"code": {"in": ["502", "503"]}}, "window": "10m", "op": ">",
             "threshold": "0.1/s", "for": "10m", "severity": "page",
-            "summary": "BFF upstream 5xx rate is high",
+            "summary": "gateway upstream 5xx rate is high",
             "triage": "x" * 80, "may_be_absent": True}
     rules = by_id(resolve(base_spec(custom=[good])))
-    check("valid custom rate rule compiles", "bff-upstream-errors" in rules, list(rules))
+    check("valid custom rate rule compiles", "gateway-upstream-errors" in rules, list(rules))
 
     def bad(**kw):
         c = dict(good)
@@ -249,22 +249,22 @@ def test_spec():
                      ("min_requests", 5)):
         e = bad(**{key: val})
         check(f"custom rate rule with `{key}` (unused by the kind) is an error", key in e, e)
-    two = base_spec(services=["api", "issuer"], packs=["cloudrun"])
+    two = base_spec(services=["gateway", "core"], packs=["cloudrun"])
     rules = by_id(resolve(dict(two, overrides={"cloudrun.5xx_count": {
-        "services": {"api": {"enabled": True}}}})))
+        "services": {"gateway": {"enabled": True}}}})))
     check("per-service enabled:true on a default-off rule enables ONLY that service",
-          [r.services for r in rules.get("cloudrun.5xx_count", [])] == [["api"]],
+          [r.services for r in rules.get("cloudrun.5xx_count", [])] == [["gateway"]],
           [r.services for r in rules.get("cloudrun.5xx_count", [])])
     rules = by_id(resolve(dict(two, overrides={"cloudrun.5xx_count": {
-        "services": {"issuer": {"enabled": False}}}})))
+        "services": {"core": {"enabled": False}}}})))
     check("per-service enabled:false on a default-off rule enables nothing",
           "cloudrun.5xx_count" not in rules, list(rules))
     rules = by_id(resolve(dict(two, overrides={"cloudrun.5xx_ratio": {
-        "services": {"issuer": {"enabled": False}}}})))
+        "services": {"core": {"enabled": False}}}})))
     check("per-service enabled:false removes only that service",
-          [r.services for r in rules["cloudrun.5xx_ratio"]] == [["api"]])
+          [r.services for r in rules["cloudrun.5xx_ratio"]] == [["gateway"]])
     e = errors_of(lambda: resolve(dict(two, overrides={"cloudrun.5xx_ratio": {
-        "enabled": False, "services": {"api": {"enabled": True}}}})))
+        "enabled": False, "services": {"gateway": {"enabled": True}}}})))
     check("rule-level enabled:false + service-level enabled:true is an error", "enabled" in e, e)
     r = by_id(resolve(base_spec(packs=["gofr-http"])))["gofr.http.server.error_ratio"][0]
     check("error_ratio probe proves the `bad` label exists (a typo'd label never fires)",
@@ -339,7 +339,7 @@ def test_render():
             check(f"{fname}: log rule has notificationRateLimit",
                   p["alertStrategy"]["notificationRateLimit"]["period"] == "300s", p["alertStrategy"])
             check(f"{fname}: log rule scoped to the spec's services",
-                  'resource.labels.service_name="api"' in cond["conditionMatchedLog"]["filter"],
+                  'resource.labels.service_name="gateway"' in cond["conditionMatchedLog"]["filter"],
                   cond["conditionMatchedLog"]["filter"])
 
     by_rule = {p["userLabels"]["rule_id"]: p for _, p in pols}
@@ -355,7 +355,7 @@ def test_render():
     crash = by_rule["logs-crash_loop"]["conditions"][0]["conditionMatchedLog"]["filter"]
     check("crash_loop matches GoFr's own FATAL level, not only severity",
           'jsonPayload.level="FATAL"' in crash, crash)
-    c = by_rule["bff-upstream-errors"]["conditions"][0]["conditionPrometheusQueryLanguage"]
+    c = by_rule["gateway-upstream-errors"]["conditions"][0]["conditionPrometheusQueryLanguage"]
     check("may_be_absent -> disableMetricValidation", c.get("disableMetricValidation") is True, c)
     check("custom `in` filter renders as an anchored regex", 'code=~"502|503"' in c["query"], c["query"])
     check("for -> condition duration", c["duration"] == "600s", c)

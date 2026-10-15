@@ -24,7 +24,7 @@
 
 ## Context
 
-A consumer burned two patch versions (issuer + api) because `spec-compat` refuses any removal,
+A consumer burned two patch versions (core + gateway) because `spec-compat` refuses any removal,
 even a deliberate one that is already inert on the wire. On 2026-10-15 the owner first ruled
 "no approval; two releases". After the consumer's session relayed a fuller ruling, the owner
 confirmed here that a label-gated, exact-list waiver should be built in the shared flow. Owner
@@ -64,7 +64,7 @@ rulings (relayed by the consumer, confirmed by the owner in this session):
 **The block (PR body), one line per break, pair first:**
 ````
 ```breaking
-api -> issuer | POST /login: request property custom_claims removed in candidate
+gateway -> core | POST /login: request property extra_fields removed in candidate
 ```
 ````
 The text after `|` is the spec-compat finding exactly (`{where}: {msg}`). The pair uses
@@ -76,7 +76,7 @@ The text after `|` is the spec-compat finding exactly (`{where}: {msg}`). The pa
 - R3 Plan (post-merge, and in a rehearsal via the open PR for `manifest-ref`) reads label + body.
   It refuses a block entry whose pair is not in the `checks` matrix, and outputs `breaking` (JSON
   list) for the caller.
-- R4 `spec-compat … --pair "api -> issuer"` with env `RELEASE_BREAKING` = plan's output:
+- R4 `spec-compat … --pair "gateway -> core"` with env `RELEASE_BREAKING` = plan's output:
   - each finding listed for this pair → printed `WAIVED`, and written to `$GITHUB_STEP_SUMMARY`;
   - any unlisted finding → fail (as today);
   - any listed entry for this pair that did not occur → fail (no stale approvals);

@@ -346,7 +346,7 @@ directly — they would need a marshalling job that outputs them.
 
 A green deploy proves the upload succeeded. It does not prove the site works.
 
-`<consumer-C-org>/ui` added a post-deploy check by hand after the **2026-06-29 outage**, where a
+`<consumer-C-org>/web` added a post-deploy check by hand after the **2026-06-29 outage**, where a
 stale bundle went live in production with a broken client-routed path and nothing caught
 it. This generalises that guard.
 

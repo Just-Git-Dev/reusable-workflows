@@ -2143,7 +2143,7 @@ def main():
 
     # Every image in the repo, not just one.
     r = run_cleanup_latest_step(clatest, dry_run="false",
-                                packages=("host/p/repo/api", "host/p/repo/bff-api"))
+                                packages=("host/p/repo/core", "host/p/repo/gateway"))
     check("latest · sweeps every package in the plan", len(r["deletes"]) == 2, r["calls"])
 
     # ---- the policy gate, which is what makes defaulting to true safe ----
@@ -2650,15 +2650,15 @@ def main():
     # THE TXT CASE: several TXT records legitimately share one name (SPF, DMARC, per-vendor
     # verification tokens). Matching on name+type alone would overwrite someone else's token.
     r = run_cfdns_records_step(body,
-        records=[{"type": "TXT", "name": "@", "content": "realm-verify=NEW"}],
+        records=[{"type": "TXT", "name": "@", "content": "app-verify=NEW"}],
         existing=[{"id": "txt-other", "content": "v=spf1 -all"}])
     check("a TXT with different content creates rather than overwrites",
           r["sent"][0]["method"] == "POST", r["sent"])
 
     r = run_cfdns_records_step(body,
-        records=[{"type": "TXT", "name": "@", "content": "realm-verify=NEW"}],
+        records=[{"type": "TXT", "name": "@", "content": "app-verify=NEW"}],
         existing=[{"id": "txt-other", "content": "v=spf1 -all"},
-                  {"id": "txt-mine", "content": "realm-verify=NEW"}])
+                  {"id": "txt-mine", "content": "app-verify=NEW"}])
     check("a TXT with matching content updates that one",
           r["sent"][0]["method"] == "PUT" and "txt-mine" in r["sent"][0]["url"], r["sent"])
 
@@ -2779,10 +2779,10 @@ def main():
     # The delimiter must be chosen, not hardcoded: a CORS method list is full of commas, and
     # a comma-joined --set-env-vars would split it into junk variables.
     r = run_crupdate_apply_step(
-        body, env_vars="ALLOW_METHODS=GET,POST,PUT\nREALM=abc", env_mode="set")
+        body, env_vars="ALLOW_METHODS=GET,POST,PUT\nAPP=abc", env_mode="set")
     flag = [a for a in r["argv"] if a.startswith("--set-env-vars=")][0]
     check("commas in a value survive",
-          flag == "--set-env-vars=^@^ALLOW_METHODS=GET,POST,PUT@REALM=abc", flag)
+          flag == "--set-env-vars=^@^ALLOW_METHODS=GET,POST,PUT@APP=abc", flag)
 
     # …and when the values themselves contain the first candidate, the next one is used.
     r = run_crupdate_apply_step(body, env_vars="MAIL=a@b.com\nX=1")
@@ -2802,10 +2802,10 @@ def main():
     check("set mode replaces", any(a.startswith("--set-env-vars=") for a in r["argv"]),
           r["argv"])
 
-    r = run_crupdate_apply_step(body, secrets="/configs/.env=issuer-env:latest",
+    r = run_crupdate_apply_step(body, secrets="/configs/.env=core-env:latest",
                                 sec_mode="set")
     check("secrets are passed in gcloud syntax",
-          "--set-secrets=^@^/configs/.env=issuer-env:latest" in r["argv"], r["argv"])
+          "--set-secrets=^@^/configs/.env=core-env:latest" in r["argv"], r["argv"])
 
     r = run_crupdate_apply_step(body, clear_env="true", env_vars="A=1")
     check("clear_env_vars precedes the env flags",
@@ -3084,7 +3084,7 @@ def main():
                                  policy_glob="policy-*.json",
                                  managed_live=[live_same, live_managed_policy(
                                      name="projects/p/alertPolicies/555",
-                                     rule="gofr-http-server-error_ratio-issuer")])
+                                     rule="gofr-http-server-error_ratio-core")])
     check("only an EXACT owner+rule_id match counts", r["outputs"].get("failed") == "0"
           and r["outputs"].get("skipped") == "1", r["out"])
 

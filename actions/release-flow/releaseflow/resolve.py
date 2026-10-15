@@ -4,7 +4,7 @@ Listed in the manifest -> ref is the candidate sha (image: <registry>/<image>:<s
 Unlisted -> ref is the LIVE version. Every entry also carries `live_ref`.
 
 "Live" (owner ruling H7) comes from DEPLOYS THAT SUCCEEDED, not from tags or Releases (the
-service repos released by tag push before this flow, so their Releases are stale; issuer's latest
+service repos released by tag push before this flow, so their Releases are stale; core's latest
 Release said v0.5.0 while v0.131.0 was live). Walk the deploy workflow's successful runs
 (events release, push, workflow_dispatch), newest CREATED first; the first decisive run wins:
   - run-name (API display_title) `Deploy DRYRUN ...`: skipped, a dry run deploys nothing;
@@ -15,7 +15,7 @@ Release said v0.5.0 while v0.131.0 was live). Walk the deploy workflow's success
     runs something with no version and nothing may guess.
 No qualifying run at all also fails loudly. This relies on each deploy.yml's `run-name`.
 
-cli (consumers_only) is non-flow: it releases by tag push and never gets drafts or deploy runs
+tool (consumers_only) is non-flow: it releases by tag push and never gets drafts or deploy runs
 from this flow, so its live_ref is simply the highest vX.Y.Z tag; no draft visibility needed.
 Ordering of deploy runs uses run_started_at (see _started), so a re-run rollback wins.
 """
@@ -82,7 +82,7 @@ def _live_from_deploys(reader, owner, svc, template):
                 f"in its title, so what prod runs is unknowable: {r.get('html_url')}")
         if validate.semver(r.get("head_branch")) is not None:
             return r["head_branch"]  # legacy tag push / release, before run-name existed
-        # push to a branch (issuer/api build on main): not a deploy
+        # push to a branch (core/gateway build on main): not a deploy
     raise ResolveError(f"{svc.repo}: no successful {svc.deploy_workflow} run found that "
                        "deployed a vX.Y.Z, so its live version is unknown")
 
@@ -107,7 +107,7 @@ def _live_from_tags(reader, owner, name):
 
 def resolve(reader, cfg, entries, drafts_proof=None):
     """drafts_proof: optional (repo, tag); when given, that draft must be visible to the token.
-    Nothing requires it now (deployable repos use deploy runs, cli uses plain tags); it is
+    Nothing requires it now (deployable repos use deploy runs, tool uses plain tags); it is
     kept for a deployable repo that ever needs tag-vs-draft resolution again."""
     if drafts_proof:
         prove_drafts_visible(reader, cfg.owner, *drafts_proof)

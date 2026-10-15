@@ -93,13 +93,13 @@ class CliLoadSequenceTests(unittest.TestCase):
                        and (s.get("with") or {}).get("path") == ".release-flow-src"]
                 self.assertEqual(len(idx), 1, f"{n}:{jn}: want one CLI checkout")
                 i = idx[0]
-                caller, cli, pin = steps[i - 1], steps[i], steps[i + 1]
+                caller, load_step, pin = steps[i - 1], steps[i], steps[i + 1]
                 self.assertTrue(str(caller.get("uses", "")).startswith(wf.CHECKOUT), f"{n}:{jn}")
                 self.assertIs(caller["with"].get("persist-credentials"), False, f"{n}:{jn}: caller checkout")
                 self.assertNotIn("repository", caller["with"], f"{n}:{jn}")
-                self.assertEqual(cli["with"]["repository"], "Just-Git-Dev/reusable-workflows")
-                self.assertEqual(cli["with"]["ref"], "${{ env.WORKFLOW_VERSION }}", f"{n}:{jn}")
-                self.assertIs(cli["with"].get("persist-credentials"), False, f"{n}:{jn}: CLI checkout")
+                self.assertEqual(load_step["with"]["repository"], "Just-Git-Dev/reusable-workflows")
+                self.assertEqual(load_step["with"]["ref"], "${{ env.WORKFLOW_VERSION }}", f"{n}:{jn}")
+                self.assertIs(load_step["with"].get("persist-credentials"), False, f"{n}:{jn}: CLI checkout")
                 run = pin["run"]
                 self.assertIn('git -C .release-flow-src rev-parse HEAD:actions/release-flow', run)
                 self.assertIn('[ "$got" = "$RELEASE_FLOW_TREE" ]', run)

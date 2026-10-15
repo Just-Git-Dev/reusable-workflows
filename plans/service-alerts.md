@@ -95,14 +95,14 @@ build)
 - The 1d gap (80 vs 1,795) was the pre-fix gofr#4266 window: GoFr exported zero for 9.5h, until
   `METRICS_CARDINALITY_LIMIT=100` on revisions created 2026-09-22 18:28Z. On top of that, 1,479
   requests were since-deleted uptime probes. (consumer C localised this.)
-- **I re-checked a post-fix 12h window. Counts:** issuer 32 GoFr / 25 Cloud Run; api 6 / 3.
-  **p95:** issuer 1.88s / 1.35s. They track.
+- **I re-checked a post-fix 12h window. Counts:** core 32 GoFr / 25 Cloud Run; gateway 6 / 3.
+  **p95:** core 1.88s / 1.35s. They track.
 - **The fix is NOT yet proven.** The defect grows with a revision's *uptime*
   (label sets pile up over days warm). Post-fix revisions scale to zero and recycle before they
   could fail, and one uncapped revision also shows zero failures. Only consumer C's soak check
   against a days-warm revision (~2026-09-26) can tell "fixed" from "never ran long enough".
 - **Silent-while-serving expression, checked on history:** `label_replace(Cloud Run rate→job) > 0
-  unless on(job) GoFr rate > 0` returns api and issuer at 2026-09-22T13:00Z and nothing at
+  unless on(job) GoFr rate > 0` returns gateway and core at 2026-09-22T13:00Z and nothing at
   2026-09-23T03:00Z.
 
 **Cloud Run and log-alert constraints** (from consumer C's descriptor/discovery reads, not re-read by
@@ -121,7 +121,7 @@ me)
 
 ```yaml
 apiVersion: alertspec/v1
-services: [issuer, api]            # GoFr `job` label == Cloud Run service_name
+services: [core, gateway]            # GoFr `job` label == Cloud Run service_name
 packs: [cloudrun, gofr-http, gofr-sql, gofr-meta, gcp-logs]
 overrides:
   cloudrun.5xx_count:           {threshold: 5, window: 5m}
@@ -130,8 +130,8 @@ overrides:
   gofr.sql.pool_saturation:     {enabled: false}
   logs.error_match:             {filter: 'jsonPayload.message:"neon" AND severity>=ERROR'}
 custom:
-  - id: bff-upstream-errors
-    metric: {name: bff_upstream_error, type: counter}
+  - id: gateway-upstream-errors
+    metric: {name: gateway_upstream_error, type: counter}
     kind: rate                     # error_ratio | rate | latency_quantile | value
     filters: {code: {in: ["502","503"]}}
     window: 5m
@@ -139,7 +139,7 @@ custom:
     threshold: 0.1/s
     for: 10m
     severity: page                 # page | ticket  → AlertPolicy.severity CRITICAL | WARNING
-    summary: "BFF upstream 5xx rate is high"
+    summary: "gateway upstream 5xx rate is high"
     triage: "…≥80 chars: what to check first…"
     may_be_absent: true            # metric may not exist yet → disableMetricValidation
 ```

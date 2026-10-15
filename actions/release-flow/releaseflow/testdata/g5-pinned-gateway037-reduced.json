@@ -1,0 +1,1085 @@
+{
+ "components": {
+  "schemas": {
+   "Error": {
+    "description": "Neutral description.",
+    "properties": {
+     "code": {
+      "example": "Neutral description.",
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "LoginRequest": {
+    "description": "Neutral description.",
+    "discriminator": {
+     "mapping": {
+      "api_key": "#/components/schemas/LoginRequestAPIKey",
+      "otp": "#/components/schemas/LoginRequestOTP",
+      "password": "#/components/schemas/LoginRequestPassword",
+      "platform_api_key": "#/components/schemas/LoginRequestPlatformAPIKey",
+      "provider_token": "#/components/schemas/LoginRequestProviderToken",
+      "urn:ietf:params:oauth:grant-type:token-exchange": "#/components/schemas/LoginRequestTokenExchange",
+      "user_api_key": "#/components/schemas/LoginRequestUserAPIKey"
+     },
+     "propertyName": "grant_type"
+    },
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/LoginRequestProviderToken"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestPassword"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestOTP"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestAPIKey"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestPlatformAPIKey"
+     },
+     {
+      "$ref": "#/components/schemas/LoginRequestTokenExchange"
+     }
+    ],
+    "properties": {
+     "extra_fields": {
+      "additionalProperties": true,
+      "description": "Neutral description.",
+      "type": "object"
+     },
+     "grant_type": {
+      "enum": [
+       "provider_token",
+       "password",
+       "otp",
+       "api_key",
+       "platform_api_key",
+       "user_api_key",
+       "urn:ietf:params:oauth:grant-type:token-exchange"
+      ],
+      "type": "string"
+     },
+     "role_permissions": {
+      "description": "Neutral description.",
+      "items": {
+       "type": "string"
+      },
+      "nullable": true,
+      "type": "array"
+     }
+    },
+    "required": [
+     "grant_type"
+    ],
+    "type": "object"
+   },
+   "LoginRequestAPIKey": {
+    "description": "Neutral description.",
+    "example": {
+     "api_key": "svc_key_example_0123",
+     "grant_type": "api_key"
+    },
+    "properties": {
+     "api_key": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "grant_type": {
+      "enum": [
+       "api_key"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "api_key"
+    ],
+    "type": "object"
+   },
+   "LoginRequestOTP": {
+    "description": "Neutral description.",
+    "example": {
+     "grant_type": "otp",
+     "identifier": "bot@tenant-a.example",
+     "presented": "038412"
+    },
+    "properties": {
+     "grant_type": {
+      "enum": [
+       "otp"
+      ],
+      "type": "string"
+     },
+     "identifier": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "presented": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Neutral description.",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "identifier",
+     "presented"
+    ],
+    "type": "object"
+   },
+   "LoginRequestPassword": {
+    "description": "Neutral description.",
+    "example": {
+     "grant_type": "password",
+     "identifier": "alice",
+     "presented": "correct-horse-battery-staple",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+    },
+    "properties": {
+     "extra_fields": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "grant_type": {
+      "enum": [
+       "password"
+      ],
+      "type": "string"
+     },
+     "identifier": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "presented": {
+      "description": "Neutral description.",
+      "format": "password",
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Neutral description.",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "identifier",
+     "presented"
+    ],
+    "type": "object"
+   },
+   "LoginRequestPlatformAPIKey": {
+    "description": "Neutral description.",
+    "example": {
+     "api_key": "plat_key_example_0123",
+     "grant_type": "platform_api_key"
+    },
+    "properties": {
+     "api_key": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "grant_type": {
+      "enum": [
+       "platform_api_key"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "api_key"
+    ],
+    "type": "object"
+   },
+   "LoginRequestProviderToken": {
+    "description": "Neutral description.",
+    "example": {
+     "grant_type": "provider_token",
+     "provider": "google",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00",
+     "token": "eyJhbGciOiJSUzI1NiIs..."
+    },
+    "properties": {
+     "extra_fields": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "grant_type": {
+      "enum": [
+       "provider_token"
+      ],
+      "type": "string"
+     },
+     "provider": {
+      "description": "Neutral description.",
+      "enum": [
+       "google",
+       "firebase",
+       "firebase_phone",
+       "microsoft",
+       "apple",
+       "facebook",
+       "github"
+      ],
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Neutral description.",
+      "format": "uuid",
+      "type": "string"
+     },
+     "token": {
+      "description": "Neutral description.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "provider",
+     "token"
+    ],
+    "type": "object"
+   },
+   "LoginRequestTokenExchange": {
+    "description": "Neutral description.",
+    "example": {
+     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+     "subject_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIn0.sig",
+     "subject_token_type": "urn:ietf:params:oauth:token-type:jwt"
+    },
+    "properties": {
+     "grant_type": {
+      "enum": [
+       "urn:ietf:params:oauth:grant-type:token-exchange"
+      ],
+      "type": "string"
+     },
+     "subject_token": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "subject_token_type": {
+      "description": "Neutral description.",
+      "enum": [
+       "urn:ietf:params:oauth:token-type:jwt"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "grant_type",
+     "subject_token"
+    ],
+    "type": "object"
+   },
+   "LoginResponse": {
+    "description": "Neutral description.",
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/LoginResponseUserResolved"
+     },
+     {
+      "$ref": "#/components/schemas/LoginResponseUserMultiTenant"
+     },
+     {
+      "$ref": "#/components/schemas/LoginResponseM2M"
+     }
+    ]
+   },
+   "LoginResponseM2M": {
+    "description": "Neutral description.",
+    "example": {
+     "access_token": "eyJhbGciOi...",
+     "expires_in": 300,
+     "refresh_exp": 1782043200,
+     "refresh_token": "rt_...",
+     "status": "ok",
+     "subject_type": "platform",
+     "tenants": []
+    },
+    "properties": {
+     "access_token": {
+      "type": "string"
+     },
+     "expires_in": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "idle_ttl": {
+      "description": "Neutral description.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_exp": {
+      "description": "Neutral description.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_token": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "service",
+       "platform"
+      ],
+      "type": "string"
+     },
+     "tenants": {
+      "description": "Neutral description.",
+      "items": {
+       "$ref": "#/components/schemas/TenantMembership"
+      },
+      "maxItems": 0,
+      "type": "array"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "refresh_token",
+     "access_token",
+     "expires_in",
+     "tenants"
+    ],
+    "type": "object"
+   },
+   "LoginResponseUserMultiTenant": {
+    "description": "Neutral description.",
+    "example": {
+     "refresh_token": "rt_...",
+     "status": "ok",
+     "subject_type": "user",
+     "tenants": [
+      {
+       "display_name": "Acme Inc",
+       "mfa_required": false,
+       "role": "owner",
+       "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+      },
+      {
+       "display_name": "Beta Co",
+       "mfa_required": true,
+       "role": "member",
+       "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f01"
+      }
+     ]
+    },
+    "properties": {
+     "refresh_token": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "user",
+       "service"
+      ],
+      "type": "string"
+     },
+     "tenants": {
+      "items": {
+       "$ref": "#/components/schemas/TenantMembership"
+      },
+      "type": "array"
+     },
+     "user": {
+      "description": "Neutral description.",
+      "properties": {
+       "id": {
+        "format": "uuid",
+        "type": "string"
+       }
+      },
+      "required": [
+       "id"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "refresh_token",
+     "tenants"
+    ],
+    "type": "object"
+   },
+   "LoginResponseUserResolved": {
+    "description": "Neutral description.",
+    "example": {
+     "access_token": "eyJhbGciOi...",
+     "expires_in": 900,
+     "idle_ttl": 1800,
+     "refresh_exp": 1782043200,
+     "refresh_token": "rt_...",
+     "role": "owner",
+     "status": "ok",
+     "subject_type": "user",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00",
+     "tenants": [
+      {
+       "display_name": "Acme Inc",
+       "mfa_required": false,
+       "role": "owner",
+       "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+      }
+     ],
+     "user": {
+      "id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f99"
+     }
+    },
+    "properties": {
+     "access_token": {
+      "type": "string"
+     },
+     "expires_in": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "idle_ttl": {
+      "description": "Neutral description.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_exp": {
+      "description": "Neutral description.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_token": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "user",
+       "service"
+      ],
+      "type": "string"
+     },
+     "tenant_choice_required": {
+      "description": "Neutral description.",
+      "type": "boolean"
+     },
+     "tenant_choices": {
+      "description": "Neutral description.",
+      "items": {
+       "properties": {
+        "display_name": {
+         "type": "string"
+        },
+        "is_owner": {
+         "description": "Neutral description.",
+         "type": "boolean"
+        },
+        "tenant_id": {
+         "format": "uuid",
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "tenants": {
+      "items": {
+       "$ref": "#/components/schemas/TenantMembership"
+      },
+      "type": "array"
+     },
+     "user": {
+      "description": "Neutral description.",
+      "properties": {
+       "id": {
+        "format": "uuid",
+        "type": "string"
+       }
+      },
+      "required": [
+       "id"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "refresh_token",
+     "access_token",
+     "tenant_id",
+     "role",
+     "expires_in",
+     "tenants"
+    ],
+    "type": "object"
+   },
+   "LogoutRequest": {
+    "properties": {
+     "all": {
+      "default": false,
+      "type": "boolean"
+     },
+     "refresh_token": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "PreconditionFirstLoginPending": {
+    "description": "Neutral description.",
+    "properties": {
+     "code": {
+      "enum": [
+       "first_login_pending_approval"
+      ],
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "user_id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "verification_id": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message",
+     "tenant_id",
+     "user_id",
+     "verification_id"
+    ],
+    "type": "object"
+   },
+   "PreconditionMFA": {
+    "description": "Neutral description.",
+    "properties": {
+     "code": {
+      "enum": [
+       "mfa_required",
+       "mfa_registration_required"
+      ],
+      "type": "string"
+     },
+     "mfa_challenge_token": {
+      "type": "string"
+     },
+     "missing": {
+      "example": [
+       "mfa"
+      ],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "mfa_challenge_token",
+     "tenant_id"
+    ],
+    "type": "object"
+   },
+   "PreconditionSessionLimit": {
+    "description": "Neutral description.",
+    "properties": {
+     "active_sessions": {
+      "items": {
+       "$ref": "#/components/schemas/SessionSummary"
+      },
+      "type": "array"
+     },
+     "code": {
+      "enum": [
+       "session_limit_reached"
+      ],
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     },
+     "revocation_token": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message",
+     "revocation_token",
+     "active_sessions"
+    ],
+    "type": "object"
+   },
+   "SessionSummary": {
+    "properties": {
+     "created_at": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "device_name": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "last_seen_at": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "origin": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "created_at"
+    ],
+    "type": "object"
+   },
+   "StatusOK": {
+    "properties": {
+     "status": {
+      "example": "Neutral description.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "TenantMembership": {
+    "properties": {
+     "display_name": {
+      "type": "string"
+     },
+     "mfa_methods": {
+      "description": "Neutral description.",
+      "items": {
+       "enum": [
+        "totp",
+        "otp"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "mfa_required": {
+      "type": "boolean"
+     },
+     "role": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "tenant_id": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "tenant_id",
+     "display_name",
+     "role",
+     "mfa_required"
+    ],
+    "type": "object"
+   },
+   "TokenRequest": {
+    "description": "Neutral description.",
+    "properties": {
+     "extra_fields": {
+      "additionalProperties": true,
+      "description": "Neutral description.",
+      "type": "object"
+     },
+     "product_roles": {
+      "description": "Neutral description.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "refresh_token": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "role_permissions": {
+      "description": "Neutral description.",
+      "items": {
+       "type": "string"
+      },
+      "nullable": true,
+      "type": "array"
+     },
+     "scope": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Neutral description.",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "TokenResponse": {
+    "description": "Neutral description.",
+    "example": {
+     "access_token": "eyJhbGciOi...",
+     "expires_in": 900,
+     "idle_ttl": 1800,
+     "refresh_exp": 1782043200,
+     "refresh_token": "rt_...",
+     "role": "owner",
+     "status": "ok",
+     "subject_type": "user",
+     "tenant_id": "018f0c9f-2c1f-7c6c-9a0b-3a8b1d4c2f00"
+    },
+    "properties": {
+     "access_token": {
+      "type": "string"
+     },
+     "expires_in": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "idle_ttl": {
+      "description": "Neutral description.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_exp": {
+      "description": "Neutral description.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "refresh_token": {
+      "type": "string"
+     },
+     "role": {
+      "description": "Neutral description.",
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok"
+      ],
+      "type": "string"
+     },
+     "subject_type": {
+      "enum": [
+       "user",
+       "service",
+       "platform"
+      ],
+      "type": "string"
+     },
+     "tenant_id": {
+      "description": "Neutral description.",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "subject_type",
+     "access_token",
+     "refresh_token",
+     "expires_in"
+    ],
+    "type": "object"
+   }
+  }
+ },
+ "info": {
+  "title": "Neutral description.",
+  "version": "0"
+ },
+ "openapi": "3.0.3",
+ "paths": {
+  "/auth/login": {
+   "post": {
+    "description": "Neutral description.",
+    "parameters": [
+     {
+      "description": "Neutral description.",
+      "in": "header",
+      "name": "X-Device-Name",
+      "required": false,
+      "schema": {
+       "maxLength": 120,
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LoginRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LoginResponse"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "401": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "404": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "410": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "412": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "oneOf": [
+          {
+           "$ref": "#/components/schemas/PreconditionSessionLimit"
+          },
+          {
+           "$ref": "#/components/schemas/PreconditionFirstLoginPending"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "501": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     }
+    },
+    "security": [
+     {
+      "BearerPlatformToken": []
+     },
+     {}
+    ],
+    "summary": "Neutral description.",
+    "tags": [
+     "Auth"
+    ]
+   }
+  },
+  "/auth/logout": {
+   "post": {
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LogoutRequest"
+       }
+      }
+     },
+     "required": false
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/StatusOK"
+        }
+       }
+      },
+      "description": "Neutral description."
+     }
+    },
+    "security": [
+     {
+      "BearerRefresh": []
+     }
+    ],
+    "summary": "Neutral description.",
+    "tags": [
+     "Auth"
+    ]
+   }
+  },
+  "/auth/token": {
+   "post": {
+    "description": "Neutral description.",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TokenRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TokenResponse"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "400": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "401": {
+      "$ref": "#/components/responses/Unauthorized"
+     },
+     "403": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      },
+      "description": "Neutral description."
+     },
+     "412": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PreconditionMFA"
+        }
+       }
+      },
+      "description": "Neutral description."
+     }
+    },
+    "security": [
+     {
+      "BearerRefresh": []
+     }
+    ],
+    "summary": "Neutral description.",
+    "tags": [
+     "Auth"
+    ]
+   }
+  }
+ }
+}

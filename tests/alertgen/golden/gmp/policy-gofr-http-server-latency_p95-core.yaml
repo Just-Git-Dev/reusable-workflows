@@ -5,13 +5,13 @@ conditions:
 - conditionPrometheusQueryLanguage:
     duration: 600s
     evaluationInterval: 60s
-    query: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="issuer",path!~"/\\.well-known/.*"}[10m])))
-      > 4 and sum by (job) (increase(app_http_response_count{job="issuer",path!~"/\\.well-known/.*"}[10m]))
+    query: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="core",path!~"/\\.well-known/.*"}[10m])))
+      > 4 and sum by (job) (increase(app_http_response_count{job="core",path!~"/\\.well-known/.*"}[10m]))
       >= 20
-  displayName: HTTP p95 latency is high (issuer)
-displayName: HTTP p95 latency is high (issuer) [gofr.http.server.latency_p95.issuer]
+  displayName: HTTP p95 latency is high (core)
+displayName: HTTP p95 latency is high (core) [gofr.http.server.latency_p95.core]
 documentation:
-  content: '**HTTP p95 latency is high** — services: issuer.
+  content: '**HTTP p95 latency is high** — services: core.
 
 
     The service''s own 95th-percentile response time is above the threshold. Group
@@ -24,12 +24,12 @@ documentation:
     - Condition: > 4s (compared as 4), over 10m, for 10m, only with at least 20 requests
     in the window
 
-    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="issuer",path!~"/\\.well-known/.*"}[10m])))
-    > 4 and sum by (job) (increase(app_http_response_count{job="issuer",path!~"/\\.well-known/.*"}[10m]))
+    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="core",path!~"/\\.well-known/.*"}[10m])))
+    > 4 and sum by (job) (increase(app_http_response_count{job="core",path!~"/\\.well-known/.*"}[10m]))
     >= 20`
 
 
-    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `gofr-http-server-latency_p95-issuer`).
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `gofr-http-server-latency_p95-core`).
     Change the spec, not this policy: the next apply that changes the spec overwrites
     hand edits.'
   mimeType: text/markdown
@@ -41,5 +41,5 @@ userLabels:
   alertgen_owner: acme_app
   catalog_version: 1-0-0
   managed_by: alertgen
-  rule_id: gofr-http-server-latency_p95-issuer
-  spec_hash: 414749f9ba60f297
+  rule_id: gofr-http-server-latency_p95-core
+  spec_hash: ea1113ad50d1b702

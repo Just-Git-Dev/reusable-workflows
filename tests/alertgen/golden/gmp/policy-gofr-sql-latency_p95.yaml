@@ -5,13 +5,13 @@ conditions:
 - conditionPrometheusQueryLanguage:
     duration: 600s
     evaluationInterval: 60s
-    query: histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"api|issuer"}[10m])))
-      > 500 and sum by (job) (increase(app_sql_stats_count{job=~"api|issuer"}[10m]))
+    query: histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"core|gateway"}[10m])))
+      > 500 and sum by (job) (increase(app_sql_stats_count{job=~"core|gateway"}[10m]))
       >= 20
-  displayName: SQL p95 query time is high (api, issuer)
-displayName: SQL p95 query time is high (api, issuer) [gofr.sql.latency_p95]
+  displayName: SQL p95 query time is high (core, gateway)
+displayName: SQL p95 query time is high (core, gateway) [gofr.sql.latency_p95]
 documentation:
-  content: '**SQL p95 query time is high** — services: api, issuer.
+  content: '**SQL p95 query time is high** — services: core, gateway.
 
 
     The 95th-percentile SQL query time is above the threshold. Group app_sql_stats
@@ -24,8 +24,8 @@ documentation:
     - Condition: > 500ms (compared as 500), over 10m, for 10m, only with at least
     20 requests in the window
 
-    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"api|issuer"}[10m])))
-    > 500 and sum by (job) (increase(app_sql_stats_count{job=~"api|issuer"}[10m]))
+    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"core|gateway"}[10m])))
+    > 500 and sum by (job) (increase(app_sql_stats_count{job=~"core|gateway"}[10m]))
     >= 20`
 
 
@@ -42,4 +42,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: gofr-sql-latency_p95
-  spec_hash: f68a9984f274096b
+  spec_hash: b4ab32d9a0e61806

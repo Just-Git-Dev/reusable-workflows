@@ -3,12 +3,12 @@
 A failed deploy is not rolled back, so the mix of new and old services a half-finished
 release leaves behind must keep working. The order is providers first; to make that
 checkable, state k (k = 1..n) is "the first k listed repos at their candidate sha, every other
-repo at its live_ref"; cli is always at live. For each state and each configured
+repo at its live_ref"; tool is always at live. For each state and each configured
 (consumer, provider) contract one check is emitted, but only when at least one side is a
 candidate -- a pair entirely at live changes nothing and would just import unrelated prod
 drift into the release. Identical (consumer, consumer_ref, provider, provider_ref) tuples are
 deduped and their state labels merged. The result is a list of dicts shaped for a GitHub
-Actions matrix `include`; an empty list is valid (e.g. a website-only release).
+Actions matrix `include`; an empty list is valid (e.g. a site-only release).
 """
 
 from __future__ import annotations

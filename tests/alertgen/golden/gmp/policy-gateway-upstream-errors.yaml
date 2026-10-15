@@ -1,0 +1,42 @@
+alertStrategy:
+  autoClose: 1800s
+combiner: OR
+conditions:
+- conditionPrometheusQueryLanguage:
+    disableMetricValidation: true
+    duration: 600s
+    evaluationInterval: 60s
+    query: sum by (job) (rate(gateway_upstream_error{job=~"core|gateway",code=~"502|503"}[10m]))
+      > 0.1
+  displayName: gateway upstream 5xx rate is high (core, gateway)
+displayName: gateway upstream 5xx rate is high (core, gateway) [gateway-upstream-errors]
+documentation:
+  content: '**gateway upstream 5xx rate is high** — services: core, gateway.
+
+
+    The gateway is getting 502/503 from an upstream. Check which upstream in the logs
+    (jsonPayload.upstream), then that upstream''s own dashboard and recent deploys.
+
+
+    - Rule: `gateway-upstream-errors` (custom rule)
+
+    - Condition: > 0.1/s (compared as 0.1), over 10m, for 10m
+
+    - Query: `sum by (job) (rate(gateway_upstream_error{job=~"core|gateway",code=~"502|503"}[10m]))
+    > 0.1`
+
+
+    Managed by alertgen from `infra/alerts/alerts.yaml` (rule_id `gateway-upstream-errors`).
+    Change the spec, not this policy: the next apply that changes the spec overwrites
+    hand edits.'
+  mimeType: text/markdown
+enabled: true
+notificationChannels:
+- NOTIFICATION_CHANNEL_PLACEHOLDER
+severity: CRITICAL
+userLabels:
+  alertgen_owner: acme_app
+  catalog_version: 1-0-0
+  managed_by: alertgen
+  rule_id: gateway-upstream-errors
+  spec_hash: be1c8b0971fc996b

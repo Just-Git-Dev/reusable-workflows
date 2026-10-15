@@ -104,7 +104,7 @@ def run_datacheck(body, probes, table, *, token="tok"):
                     tmp, stub)
 
 
-def _probe(rule, expr, *, may=False, services=("api",), label="job"):
+def _probe(rule, expr, *, may=False, services=("gateway",), label="job"):
     return {"rule_id": rule, "expr": expr, "may_be_absent": may, "services": list(services),
             "service_label": label, "policy_file": f"policy-{rule}.yaml"}
 
@@ -238,15 +238,15 @@ def run(check, extract_step, service_yml):
     print("service-alerts · live data check")
     body = extract_step(service_yml, "alerts", "Check every rule has live data")
     probes = [_probe("a", "MARK_A"), _probe("b", "MARK_B")]
-    r = run_datacheck(body, probes, {"MARK_A": ["200", _series("job", "api")],
-                                     "MARK_B": ["200", _series("job", "api")]})
+    r = run_datacheck(body, probes, {"MARK_A": ["200", _series("job", "gateway")],
+                                     "MARK_B": ["200", _series("job", "gateway")]})
     check("all probes with data passes", r["rc"] == 0 and r["outputs"].get("probes_checked") == "2"
           and r["outputs"].get("probes_with_data") == "2", r)
-    r = run_datacheck(body, probes, {"MARK_A": ["200", _series("job", "api")]})
+    r = run_datacheck(body, probes, {"MARK_A": ["200", _series("job", "gateway")]})
     check("a probe with zero series is CANNOT VERIFY (fatal)",
           r["rc"] != 0 and "CANNOT VERIFY" in r["out"] and "b" in r["out"], r)
     probes_m = [_probe("a", "MARK_A"), _probe("b", "MARK_B", may=True)]
-    r = run_datacheck(body, probes_m, {"MARK_A": ["200", _series("job", "api")]})
+    r = run_datacheck(body, probes_m, {"MARK_A": ["200", _series("job", "gateway")]})
     check("zero series on a may_be_absent rule only warns",
           r["rc"] == 0 and "::warning::" in r["out"], r)
     r = run_datacheck(body, probes_m, {})
@@ -255,12 +255,12 @@ def run(check, extract_step, service_yml):
     r = run_datacheck(body, probes, {"MARK_A": ["403", {"error": {"message": "denied"}}]})
     check("HTTP 403 is CANNOT VERIFY, not zero-and-fine", r["rc"] != 0 and "403" in r["out"], r)
     r = run_datacheck(body, probes, {"MARK_A": ["200", {"status": "error", "error": "bad"}],
-                                     "MARK_B": ["200", _series("job", "api")]})
+                                     "MARK_B": ["200", _series("job", "gateway")]})
     check("a 200 with an error envelope fails", r["rc"] != 0, r)
-    two = [_probe("a", "MARK_A", services=("api", "issuer"))]
-    r = run_datacheck(body, two, {"MARK_A": ["200", _series("job", "api")]})
+    two = [_probe("a", "MARK_A", services=("gateway", "core"))]
+    r = run_datacheck(body, two, {"MARK_A": ["200", _series("job", "gateway")]})
     check("a service with no data in the lookback is named in a warning",
-          r["rc"] == 0 and "issuer" in r["out"] and "::warning::" in r["out"], r)
+          r["rc"] == 0 and "core" in r["out"] and "::warning::" in r["out"], r)
     r = run_datacheck(body, probes, {}, token="")
     check("no access token is CANNOT VERIFY", r["rc"] != 0, r)
 

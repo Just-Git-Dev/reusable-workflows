@@ -5,13 +5,13 @@ conditions:
 - conditionPrometheusQueryLanguage:
     duration: 600s
     evaluationInterval: 60s
-    query: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="api",path!~"/\\.well-known/.*"}[10m])))
-      > 2 and sum by (job) (increase(app_http_response_count{job="api",path!~"/\\.well-known/.*"}[10m]))
+    query: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="gateway",path!~"/\\.well-known/.*"}[10m])))
+      > 2 and sum by (job) (increase(app_http_response_count{job="gateway",path!~"/\\.well-known/.*"}[10m]))
       >= 20
-  displayName: HTTP p95 latency is high (api)
-displayName: HTTP p95 latency is high (api) [gofr.http.server.latency_p95]
+  displayName: HTTP p95 latency is high (gateway)
+displayName: HTTP p95 latency is high (gateway) [gofr.http.server.latency_p95]
 documentation:
-  content: '**HTTP p95 latency is high** — services: api.
+  content: '**HTTP p95 latency is high** — services: gateway.
 
 
     The service''s own 95th-percentile response time is above the threshold. Group
@@ -24,8 +24,8 @@ documentation:
     - Condition: > 2s (compared as 2), over 10m, for 10m, only with at least 20 requests
     in the window
 
-    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="api",path!~"/\\.well-known/.*"}[10m])))
-    > 2 and sum by (job) (increase(app_http_response_count{job="api",path!~"/\\.well-known/.*"}[10m]))
+    - Query: `histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="gateway",path!~"/\\.well-known/.*"}[10m])))
+    > 2 and sum by (job) (increase(app_http_response_count{job="gateway",path!~"/\\.well-known/.*"}[10m]))
     >= 20`
 
 
@@ -42,4 +42,4 @@ userLabels:
   catalog_version: 1-0-0
   managed_by: alertgen
   rule_id: gofr-http-server-latency_p95
-  spec_hash: 97d3d8992c783181
+  spec_hash: 0de9e9a9c44bbaec

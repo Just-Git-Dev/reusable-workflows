@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import spec_compat  # noqa: E402
 from test_spec_compat import PINNED  # noqa: E402
 
-PAIR = "api -> issuer"
+PAIR = "gateway -> core"
 REMOVED = "POST /b: body/y: property removed in candidate"
 GONE = "GET /a: operation missing in candidate"
 
@@ -33,7 +33,7 @@ def cand_without_y_and_a():
     return c
 
 
-def listed(*findings, consumer="api", provider="issuer"):
+def listed(*findings, consumer="gateway", provider="core"):
     return json.dumps([{"consumer": consumer, "provider": provider, "finding": f}
                        for f in findings])
 
@@ -87,12 +87,12 @@ class WaiverTests(unittest.TestCase):
         self.assertIn("STALE", r.out)
 
     def test_another_pairs_entries_neither_waive_nor_go_stale_here(self):
-        r = Run(PINNED, cand_without_y(), *LIVE, breaking=listed(REMOVED, consumer="ui",
-                                                                  provider="api"))
+        r = Run(PINNED, cand_without_y(), *LIVE, breaking=listed(REMOVED, consumer="web",
+                                                                  provider="gateway"))
         self.assertEqual(r.rc, 1, r.out)
         self.assertIn(f"INCOMPATIBLE {REMOVED}", r.out)
         self.assertNotIn("STALE", r.out)
-        r = Run(PINNED, PINNED, *LIVE, breaking=listed(REMOVED, consumer="ui", provider="api"))
+        r = Run(PINNED, PINNED, *LIVE, breaking=listed(REMOVED, consumer="web", provider="gateway"))
         self.assertEqual(r.rc, 0, r.out)
 
     def test_candidate_consumer_side_waives_nothing_and_has_no_stale_rule(self):
@@ -131,7 +131,7 @@ class WaiverTests(unittest.TestCase):
 
     def test_pair_needs_a_valid_consumer_side_and_a_valid_pair(self):
         for extra in (("--pair", PAIR), ("--pair", PAIR, "--consumer-side", "both"),
-                      ("--pair", "api->issuer", "--consumer-side", "live"),
+                      ("--pair", "gateway->core", "--consumer-side", "live"),
                       ("--consumer-side", "live")):
             r = Run(PINNED, PINNED, *extra)
             self.assertEqual(r.rc, 2, f"{extra}: {r.out}")
@@ -142,13 +142,13 @@ class UnreadableYamlTests(unittest.TestCase):
     would read as 'incompatible' (found 2026-10-15 while building the waiver)."""
 
     def test_ops_subset_malformed_yaml_is_exit_2(self):
-        import cli_ops_check
+        import ops_subset
         with tempfile.TemporaryDirectory() as d:
             a, b = Path(d, "a.yaml"), Path(d, "b.json")
             a.write_text("{not json")
             b.write_text(json.dumps(PINNED))
             with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                self.assertEqual(cli_ops_check.main([str(a), str(b)]), 2)
+                self.assertEqual(ops_subset.main([str(a), str(b)]), 2)
 
     def test_spec_compat_malformed_yaml_without_waiver_is_exit_2(self):
         self.assertEqual(Run(None, PINNED, raw_pinned="a: [b").rc, 2)

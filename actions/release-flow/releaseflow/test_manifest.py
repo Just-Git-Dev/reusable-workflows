@@ -14,12 +14,12 @@ from fake_github import ALLOWED, CFG_DICT, SHA_A, SHA_B  # noqa: E402
 GOOD = f"""# a comment
 
 services:
-  - {{repo: issuer, version: v0.132.0, sha: {SHA_A}}}
-  - {{repo: api,    version: v0.38.0,  sha: {SHA_B}}}
+  - {{repo: core, version: v0.132.0, sha: {SHA_A}}}
+  - {{repo: gateway,    version: v0.38.0,  sha: {SHA_B}}}
 """
 
 
-def entry(repo="issuer", ver="v0.1.0", sha=SHA_A):
+def entry(repo="core", ver="v0.1.0", sha=SHA_A):
     return f"  - {{repo: {repo}, version: {ver}, sha: {sha}}}\n"
 
 
@@ -27,7 +27,7 @@ class ParseTests(unittest.TestCase):
     def test_good(self):
         es = manifest.parse(GOOD)
         self.assertEqual([(e.repo, e.version, e.sha) for e in es],
-                         [("issuer", "v0.132.0", SHA_A), ("api", "v0.38.0", SHA_B)])
+                         [("core", "v0.132.0", SHA_A), ("gateway", "v0.38.0", SHA_B)])
 
     def bad(self, text, line, fragment=""):
         with self.assertRaises(manifest.ManifestError) as cm:
@@ -107,12 +107,12 @@ class FindAddedTests(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_load_real_file(self):
         cfg = config.load(Path(__file__).resolve().parent / "testdata" / "services.json")
-        self.assertEqual([s.repo for s in cfg.services], ["issuer", "api", "ui", "website"])
-        self.assertEqual(cfg.consumers_only, ["cli"])
+        self.assertEqual([s.repo for s in cfg.services], ["core", "gateway", "web", "site"])
+        self.assertEqual(cfg.consumers_only, ["tool"])
         self.assertEqual(cfg.owner, "consumer-a-org")
-        self.assertEqual(cfg.service("issuer").image, "backend/api")
-        self.assertEqual(cfg.service("api").image, "backend/bff-api")
-        self.assertEqual(cfg.service("ui").kind, "pages")
+        self.assertEqual(cfg.service("core").image, "backend/core")
+        self.assertEqual(cfg.service("gateway").image, "backend/gateway")
+        self.assertEqual(cfg.service("web").kind, "pages")
         for s in cfg.services:
             self.assertEqual(s.deploy_workflow, "deploy.yml")
 
@@ -120,7 +120,7 @@ class ConfigTests(unittest.TestCase):
         d = json.loads(json.dumps(CFG_DICT))
         d["services"].reverse()
         self.assertEqual([s.repo for s in config.from_dict(d).services],
-                         ["issuer", "api", "ui", "website"])
+                         ["core", "gateway", "web", "site"])
 
     def test_invalid(self):
         def mut(f):
@@ -133,17 +133,17 @@ class ConfigTests(unittest.TestCase):
             mut(lambda d: d["services"][0].update(kind="vm")),
             mut(lambda d: d["services"][2].update(health_url="https://x")),
             mut(lambda d: d["services"][1].update(order=1)),
-            mut(lambda d: d["services"][1].update(repo="issuer")),
+            mut(lambda d: d["services"][1].update(repo="core")),
             mut(lambda d: d.pop("owner")),
             mut(lambda d: d["services"][0].pop("deploy_workflow")),
-            mut(lambda d: d.update(consumers_only=["api"])),
+            mut(lambda d: d.update(consumers_only=["gateway"])),
         ]
         for d in cases:
             with self.assertRaises(config.ConfigError, msg=str(d)):
                 config.from_dict(d)
 
     def test_consumers_only_are_unique_nonempty_names(self):
-        for bad in ([""], ["cli", "cli"], [3]):
+        for bad in ([""], ["tool", "tool"], [3]):
             d = json.loads(json.dumps(CFG_DICT))
             d["consumers_only"] = bad
             with self.assertRaises(config.ConfigError, msg=str(bad)):
@@ -154,16 +154,16 @@ class ConfigTests(unittest.TestCase):
         cfg = config.from_dict(CFG_DICT)
         cfg.restrict(ALLOWED)  # ok
         with self.assertRaises(config.ConfigError):
-            cfg.restrict(["issuer", "api"])  # services.json lists ui/website too
-        self.assertEqual(config.parse_allowed("issuer, api"), ["issuer", "api"])
+            cfg.restrict(["core", "gateway"])  # services.json lists web/site too
+        self.assertEqual(config.parse_allowed("core, gateway"), ["core", "gateway"])
         with self.assertRaises(config.ConfigError):
             config.parse_allowed("")
 
     def test_manifest_outside_allowed(self):
         es = manifest.parse(GOOD)
-        manifest.check_allowed(es, ["issuer", "api"])
+        manifest.check_allowed(es, ["core", "gateway"])
         with self.assertRaises(manifest.ManifestError):
-            manifest.check_allowed(es, ["issuer"])
+            manifest.check_allowed(es, ["core"])
 
 
 if __name__ == "__main__":

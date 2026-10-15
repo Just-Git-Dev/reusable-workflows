@@ -6,7 +6,7 @@ every command also takes a hard-coded `--allowed` list from the workflow, and re
 refuses a services.json naming anything outside it (an edit to this JSON in a PR must not be
 able to point the write token at a new repo).
 
-`consumers_only` repos (cli) are non-flow: they release by tag push, never get draft releases
+`consumers_only` repos (tool) are non-flow: they release by tag push, never get draft releases
 or deploy runs from this flow, and appear only as the consumer side of a contract. Their
 "live" version is simply the highest vX.Y.Z tag.
 

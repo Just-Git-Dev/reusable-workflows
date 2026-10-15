@@ -229,7 +229,7 @@ tag-push CI run still fires as belt-and-braces.
   than grepping for it:
 
   ```bash
-  scripts/pin_gate_behaviour.sh ../../auth/issuer ../../<consumer-B-repo>/ui   # any repo paths
+  scripts/pin_gate_behaviour.sh ../../<consumer-repo>/<service> ../../<consumer-B-repo>/ui   # any repo paths
   scripts/pin_gate_behaviour.sh --self-test                           # prove it goes red
   ```
 

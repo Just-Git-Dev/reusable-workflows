@@ -1,19 +1,8 @@
 groups:
 - name: alertgen
   rules:
-  - alert: bff_upstream_errors
-    expr: sum by (job) (rate(bff_upstream_error{job=~"api|issuer",code=~"502|503"}[10m]))
-      > 0.1
-    for: 10m
-    labels:
-      severity: page
-    annotations:
-      summary: BFF upstream 5xx rate is high ({{ $labels.job }})
-      description: The BFF is getting 502/503 from an upstream. Check which upstream
-        in the logs (jsonPayload.upstream), then that upstream's own dashboard and
-        recent deploys.
   - alert: cloudrun_5xx_count
-    expr: sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[15m]))
+    expr: sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway",response_code_class="5xx"}[15m]))
       > 5
     for: 0s
     labels:
@@ -25,9 +14,9 @@ groups:
         the service's ERROR logs for the window and check the latest revision and
         its dependencies.
   - alert: cloudrun_5xx_ratio
-    expr: (sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer",response_code_class="5xx"}[10m]))
-      / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
-      > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    expr: (sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway",response_code_class="5xx"}[10m]))
+      / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m])))
+      > 0.05 and sum by (service_name) (increase(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m]))
       >= 20
     for: 10m
     labels:
@@ -39,8 +28,8 @@ groups:
         cause; roll back with rollback-service), then its ERROR logs for the failing
         path, then its database or upstream dependencies.
   - alert: cloudrun_latency_p95
-    expr: histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
-      > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m]))
+    expr: histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m])))
+      > 5000 and sum by (service_name) (increase(run_googleapis_com:request_latencies_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m]))
       >= 20
     for: 10m
     labels:
@@ -52,7 +41,7 @@ groups:
         count rising from zero), then slow database queries or upstream calls in the
         service's traces and logs.
   - alert: cloudrun_memory_p99
-    expr: histogram_quantile(0.99, sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[10m])))
+    expr: histogram_quantile(0.99, sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[10m])))
       > 0.85
     for: 10m
     labels:
@@ -64,10 +53,21 @@ groups:
         Run kills the instance and in-flight requests fail. Check for a leak (memory
         climbing between deploys) or a traffic spike, and raise the memory limit only
         after ruling out a leak.
+  - alert: gateway_upstream_errors
+    expr: sum by (job) (rate(gateway_upstream_error{job=~"core|gateway",code=~"502|503"}[10m]))
+      > 0.1
+    for: 10m
+    labels:
+      severity: page
+    annotations:
+      summary: gateway upstream 5xx rate is high ({{ $labels.job }})
+      description: The gateway is getting 502/503 from an upstream. Check which upstream
+        in the logs (jsonPayload.upstream), then that upstream's own dashboard and
+        recent deploys.
   - alert: gofr_http_server_error_ratio
-    expr: (sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
-      / sum by (job) (rate(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m])))
-      > 0.05 and sum by (job) (increase(app_http_response_count{job=~"api|issuer",path!~"/\\.well-known/.*"}[10m]))
+    expr: (sum by (job) (rate(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*",status=~"5.."}[10m]))
+      / sum by (job) (rate(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*"}[10m])))
+      > 0.05 and sum by (job) (increase(app_http_response_count{job=~"core|gateway",path!~"/\\.well-known/.*"}[10m]))
       >= 20
     for: 10m
     labels:
@@ -79,8 +79,8 @@ groups:
         route, then read the service's ERROR logs for it and check the latest deploy
         and the database.
   - alert: gofr_http_server_latency_p95
-    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="api",path!~"/\\.well-known/.*"}[10m])))
-      > 2 and sum by (job) (increase(app_http_response_count{job="api",path!~"/\\.well-known/.*"}[10m]))
+    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="gateway",path!~"/\\.well-known/.*"}[10m])))
+      > 2 and sum by (job) (increase(app_http_response_count{job="gateway",path!~"/\\.well-known/.*"}[10m]))
       >= 20
     for: 10m
     labels:
@@ -91,9 +91,9 @@ groups:
         Group app_http_response by path to find the slow route, then check SQL and
         Redis latency (gofr-sql / gofr-redis) and outbound calls before suspecting
         the service itself.
-  - alert: gofr_http_server_latency_p95_issuer
-    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="issuer",path!~"/\\.well-known/.*"}[10m])))
-      > 4 and sum by (job) (increase(app_http_response_count{job="issuer",path!~"/\\.well-known/.*"}[10m]))
+  - alert: gofr_http_server_latency_p95_core
+    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_http_response_bucket{job="core",path!~"/\\.well-known/.*"}[10m])))
+      > 4 and sum by (job) (increase(app_http_response_count{job="core",path!~"/\\.well-known/.*"}[10m]))
       >= 20
     for: 10m
     labels:
@@ -105,8 +105,8 @@ groups:
         Redis latency (gofr-sql / gofr-redis) and outbound calls before suspecting
         the service itself.
   - alert: gofr_metrics_silent_while_serving
-    expr: label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"api|issuer"}[30m])),
-      "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"api|issuer"}[30m]))
+    expr: label_replace(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",service_name=~"core|gateway"}[30m])),
+      "job", "$1", "service_name", "(.*)") > 0 unless on (job) sum by (job) (rate(app_http_response_count{job=~"core|gateway"}[30m]))
       > 0
     for: 30m
     labels:
@@ -120,8 +120,8 @@ groups:
         and whether APP_NAME still matches the Cloud Run service name (the job label
         must equal service_name).
   - alert: gofr_sql_latency_p95
-    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"api|issuer"}[10m])))
-      > 500 and sum by (job) (increase(app_sql_stats_count{job=~"api|issuer"}[10m]))
+    expr: histogram_quantile(0.95, sum by (job, le) (rate(app_sql_stats_bucket{job=~"core|gateway"}[10m])))
+      > 500 and sum by (job) (increase(app_sql_stats_count{job=~"core|gateway"}[10m]))
       >= 20
     for: 10m
     labels:

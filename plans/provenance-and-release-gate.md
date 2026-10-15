@@ -72,7 +72,7 @@ That fact does real work in §1.3.
 | Pushes today land as an OCI **index** with an `unknown/unknown` attestation child | **VERIFIED as observed behaviour** — `DECISIONS.md:1618-1622` and the consumer A RCA (`DECISIONS.md:1620`): *52 untagged versions, 52 child links, zero orphans* |
 | The sweep already keeps children of kept parents and reports the rest | **VERIFIED** — `cleanup-gar-images.yml:531-537` (child of a kept parent joins the keep-set), `:584-594` (only a *surviving, non-doomed* parent blocks), `:653-655` (`blocked_by_parent` reporting) |
 | buildx's default is `provenance=mode=min` on registry push and `sbom=false` | **UNVERIFIED HERE** — from `docker/build-push-action` documentation, not checked against a live build. See §1.6 for the check that settles it |
-| "Cloud Run needs a plain image" (`<consumer-C-org>/issuer#2`, 2026-08-12) | **UNVERIFIED, and contradicted by current operation** — `deploy-cloud-run.yml` sets nothing, so *if* the default is attestations-on, `issuer` and `api` are both running from an index today. The contradiction is exactly as strong as the unverified default above; do not quote either as settled |
+| "Cloud Run needs a plain image" (`<consumer-C-org>/core#2`, 2026-08-12) | **UNVERIFIED, and contradicted by current operation** — `deploy-cloud-run.yml` sets nothing, so *if* the default is attestations-on, the core service and the gateway are both running from an index today. The contradiction is exactly as strong as the unverified default above; do not quote either as settled |
 
 ⚠️ **Do not infer the default from the child count.** One `unknown/unknown` child per platform is
 consistent with provenance-only *and* with provenance+SBOM — buildx puts both in the **same**
@@ -173,7 +173,7 @@ inputs exist so option D is a one-line change per repo when the plan constraint 
 ### 1.6 The check that settles the unverified default — ✅ RUN 2026-09-15, DEFAULT CONFIRMED
 
 **Settled empirically against a live artifact**, not from buildx's documentation. Subject:
-`asia-southeast1-docker.pkg.dev/<consumer-C-project-id>/backend/api:v0.124.0`.
+`asia-southeast1-docker.pkg.dev/<consumer-C-project-id>/backend/core:v0.124.0`.
 
 1. The release tag names an **OCI index** (`application/vnd.oci.image.index.v1+json`) with two
    children: `linux/amd64`, and one `unknown/unknown` carrying
@@ -357,7 +357,7 @@ exist.
 **UNVERIFIED — do not quote as fact:** buildx's exact default (`provenance=mode=min`,
 `sbom=false`) on registry push; that a release publish cannot be a ruleset target; that tag-target
 rulesets offer no status-check rule; that GitHub artifact attestations are unavailable for
-free-plan private repos; and the 2026-08-12 `<consumer-C-org>/issuer#2` claim that Cloud Run requires a
+free-plan private repos; and the 2026-08-12 `<consumer-C-org>/core#2` claim that Cloud Run requires a
 plain image (contradicted by current operation, but only as strongly as the buildx-default claim
 it depends on).
 

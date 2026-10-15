@@ -5,7 +5,7 @@ The block (PR body), one line per break, pair first; the text after `|` is the s
 finding exactly as printed after `INCOMPATIBLE `:
 
     ```breaking
-    webapp -> backend | POST /login: body/custom_claims: property removed in candidate
+    webapp -> backend | POST /login: body/extra_fields: property removed in candidate
     ```
 
 Rules (docs/release-flow.md § Contract checks): R1 label and block come together; R2 one block,
