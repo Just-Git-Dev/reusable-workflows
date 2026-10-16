@@ -22,9 +22,9 @@ It is two things:
 | [`release-publish.yml`](../.github/workflows/release-publish.yml) | publish each draft in order, wait for its Deploy, prove it live, retry a failed deploy, then report | publish + re-run of its own failed Deploy |
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v3.6.0
+- uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v3.6.1
 # and, as jobs:
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v3.6.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v3.6.1
 ```
 
 ## Why this exists
@@ -190,9 +190,12 @@ merge ──► plan ──► [caller: contracts, images…] ──► drafts �
 
 A service's live version comes from its deploy workflow's **successful** runs, newest started
 first. A run titled `Deploy vX.Y.Z` (from the deploy workflow's `run-name`) makes vX.Y.Z live; a
-run titled `Deploy DRYRUN…` is skipped; a hand-dispatched run with no version in its title fails
-the release, because then nobody knows what production runs. Tags and Releases are not used:
-older repos carry stale ones.
+run titled `Deploy DRYRUN…` is skipped. A hand-dispatched run with no version in its title
+(a deploy workflow from before `run-name`) counts as its ref when that ref is itself a `vX.Y.Z`
+tag, because such a workflow deploys the ref it runs on, the same way a legacy tag push does.
+For example, `Deploy` run on tag `v0.3.9` makes v0.3.9 live. Dispatched on a branch or a sha
+(`Deploy main`), it fails the release, because then nobody knows what production runs. Tags and
+Releases are not used: older repos carry stale ones.
 
 ## Safety properties (unchanged from the proven flow)
 
@@ -453,7 +456,7 @@ permissions: {}
 jobs:
   release-pr:
     permissions: {contents: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-pr-check.yml@v3.6.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-pr-check.yml@v3.6.1
     with:
       allowed: backend,webapp,desktop
 ```
@@ -473,7 +476,7 @@ permissions: {}
 jobs:
   plan:
     permissions: {contents: read, pull-requests: read, checks: read, actions: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v3.6.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v3.6.1
     with:
       allowed: backend,webapp,desktop
       app-id: ${{ vars.RELEASE_APP_ID }}
@@ -490,7 +493,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {contents: read}
     steps:
-      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v3.6.0
+      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v3.6.1
       # once per matrix entry; --pair + RELEASE_BREAKING apply the breaking-approved list
       - run: release-flow spec-compat baseline.yaml candidate.yaml --label "$PAIR" --pair "$PAIR" --consumer-side "$SIDE"
         shell: bash
@@ -503,7 +506,7 @@ jobs:
     needs: [plan, contracts]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     permissions: {contents: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-drafts.yml@v3.6.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-drafts.yml@v3.6.1
     with:
       needs: ${{ toJSON(needs) }}
       allowed: backend,webapp,desktop
@@ -522,7 +525,7 @@ jobs:
     needs: [plan, contracts, drafts, smoke]
     if: ${{ always() }}
     permissions: {contents: read, pull-requests: write}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-publish.yml@v3.6.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-publish.yml@v3.6.1
     with:
       needs: ${{ toJSON(needs) }}
       required-jobs: plan,drafts,smoke

@@ -112,6 +112,12 @@ class LiveRefTests(unittest.TestCase):
                                title=title)])
             self.assertIn("actions/runs/", str(cm.exception))
 
+    def test_legacy_dispatch_on_a_tag_without_title_is_that_tag(self):
+        # a deploy.yml from before run-name, hand-dispatched on tag v0.38.0: it deploys its ref
+        self.assertEqual(self.live([run("v0.37.0", "2026-09-01T00:00:00Z"),
+                                    run("v0.38.0", "2026-10-01T00:00:00Z",
+                                        event="workflow_dispatch", title="Deploy")]), "v0.38.0")
+
     def test_legacy_tag_push_run_without_title_is_used(self):
         self.assertEqual(self.live([run("v0.37.0", "2026-09-01T00:00:00Z", event="push",
                                         title="Release v0.37.0 (#12)")]), "v0.37.0")

@@ -9,10 +9,11 @@ Release said v0.5.0 while v0.131.0 was live). Walk the deploy workflow's success
 (events release, push, workflow_dispatch), newest CREATED first; the first decisive run wins:
   - run-name (API display_title) `Deploy DRYRUN ...`: skipped, a dry run deploys nothing;
   - `Deploy vX.Y.Z`: that version is live (a hand deploy of an older tag DOES make it live);
-  - release/push with no parseable title (legacy, before run-name): head_branch if it is
-    vX.Y.Z, else skipped (a build on push to main is not a deploy);
-  - workflow_dispatch with an unparseable title: FAIL naming the run URL, since prod then
-    runs something with no version and nothing may guess.
+  - no parseable title (legacy, before run-name), any of the three events: head_branch if it
+    is vX.Y.Z, since such a workflow deploys the ref it runs on;
+  - otherwise release/push is skipped (a build on push to main is not a deploy), and
+    workflow_dispatch FAILS naming the run URL, since prod then runs a branch or sha with no
+    version and nothing may guess.
 No qualifying run at all also fails loudly. This relies on each deploy.yml's `run-name`.
 
 tool (consumers_only) is non-flow: it releases by tag push and never gets drafts or deploy runs
@@ -76,12 +77,12 @@ def _live_from_deploys(reader, owner, svc, template):
         m = title_re.match(title)
         if m:
             return m.group(1)
+        if validate.semver(r.get("head_branch")) is not None:
+            return r["head_branch"]  # legacy tag push / release / dispatch, before run-name
         if r["event"] == "workflow_dispatch":
             raise ResolveError(
                 f"{svc.repo}: a successful hand-dispatched deploy ({title!r}) has no version "
                 f"in its title, so what prod runs is unknowable: {r.get('html_url')}")
-        if validate.semver(r.get("head_branch")) is not None:
-            return r["head_branch"]  # legacy tag push / release, before run-name existed
         # push to a branch (core/gateway build on main): not a deploy
     raise ResolveError(f"{svc.repo}: no successful {svc.deploy_workflow} run found that "
                        "deployed a vX.Y.Z, so its live version is unknown")
