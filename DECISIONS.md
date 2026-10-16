@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-16` — [`v3.6.1` released (release-flow: untitled dispatch on a tag resolves to that tag)](#2026-10-16--v361-released-release-flow-untitled-dispatch-on-a-tag-resolves-to-that-tag)
 - `2026-10-16` — [release-flow: an untitled dispatch on a vX.Y.Z tag resolves to that tag](#2026-10-16--release-flow-an-untitled-dispatch-on-a-vxyz-tag-resolves-to-that-tag)
 - `2026-10-15` — [`v3.6.0` released (`cleanup-gar-images` opt-in `fail_on_inert`)](#2026-10-15--v360-released-cleanup-gar-images-opt-in-fail_on_inert)
 - `2026-10-15` — [`cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run](#2026-10-15--cleanup-gar-images-opt-in-fail_on_inert-makes-an-inert-sweep-fail-the-run)
@@ -117,6 +118,17 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-16 — `v3.6.1` released (release-flow: untitled dispatch on a tag resolves to that tag)
+
+**What.** `v3.6.1` carries the 2026-10-16 change "release-flow: an untitled dispatch on a vX.Y.Z
+tag resolves to that tag". It is a patch: no input changes, and the only behaviour change is that
+`plan / resolve` accepts a case it used to fail. Since `v3.5.2` the release workflows changed
+only their `WORKFLOW_VERSION` stamps (checked with `git diff v3.5.2 v3.6.0 -- actions/
+.github/workflows/release*.yml`), so a caller on `v3.5.2` can move straight to `v3.6.1`.
+
+**Why now.** Consumer A's release rehearsal was blocked by this case. The owner approved the
+spec change and the release on 2026-10-16.
 
 ## 2026-10-16 — release-flow: an untitled dispatch on a vX.Y.Z tag resolves to that tag
 
