@@ -300,9 +300,10 @@ class ResolveOptionsTests(unittest.TestCase):
 
     def test_default_dryrun_marker_is_not_the_custom_one(self):
         f = r_world()
-        f.repo("gateway").live_runs = [run("v0.37.0", "2026-09-02T00:00:00Z",
+        f.repo("gateway").live_runs = [run("main", "2026-09-02T00:00:00Z",
                                        title="Deploy DRYRUN v0.37.0")]
         # under the custom template this title is not a dry run and not a version title either
+        # (dispatched on a branch: on a vX.Y.Z tag the legacy head_branch rule would apply)
         with self.assertRaises(resolve.ResolveError):
             f.repo("gateway").live_runs[0]["event"] = "workflow_dispatch"
             res(f, [manifest.Entry("core", "v0.132.0", SHA_A)], deploy_run_name="Ship {tag} now")

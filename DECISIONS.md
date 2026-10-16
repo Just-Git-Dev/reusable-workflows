@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-16` — [release-flow: an untitled dispatch on a vX.Y.Z tag resolves to that tag](#2026-10-16--release-flow-an-untitled-dispatch-on-a-vxyz-tag-resolves-to-that-tag)
 - `2026-10-15` — [`v3.6.0` released (`cleanup-gar-images` opt-in `fail_on_inert`)](#2026-10-15--v360-released-cleanup-gar-images-opt-in-fail_on_inert)
 - `2026-10-15` — [`cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run](#2026-10-15--cleanup-gar-images-opt-in-fail_on_inert-makes-an-inert-sweep-fail-the-run)
 - `2026-10-15` — [`v3.5.2` released (neutral service names, older `ops-subset` alias removed)](#2026-10-15--v352-released-neutral-service-names-older-ops-subset-alias-removed)
@@ -116,6 +117,36 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-16 — release-flow: an untitled dispatch on a vX.Y.Z tag resolves to that tag
+
+**What:** `release-flow` resolve: a successful `workflow_dispatch` deploy whose title carries no
+version now counts as its `head_branch` when that ref is itself a `vX.Y.Z` tag, the same rule
+legacy `release`/`push` runs already had. A dispatch on a branch or sha still fails the release.
+Spec: `docs/release-flow.md` § "Live" means a successful deploy.
+
+**Why:** A deploy workflow from before `run-name` deploys the ref it runs on (consumer A's
+website `deploy.yml` at v0.3.9: `workflow_dispatch: {}`, no inputs, checks out `github.ref`).
+Dispatched on a tag, what prod runs is known exactly; failing it blocked a release over
+information we had. The "nothing may guess" intent stands: a branch/sha dispatch is still a FAIL.
+
+**RCA**
+- *Symptom:* consumer A's release rehearsal failed in `plan / resolve`: "website: a successful
+  hand-dispatched deploy ('Deploy') has no version in its title". The run was a hand dispatch on
+  tag v0.3.9, made to prove a re-minted Pages token.
+- *Root cause:* the spec and `_live_from_deploys` treated every untitled dispatch as unknowable
+  and checked the event before the ref. That was correct for branch dispatches. The case of a
+  pre-`run-name` workflow dispatched on a tag was never considered.
+- *Why it wasn't caught:* the tests covered untitled dispatches on `main` only. One test
+  (`test_default_dryrun_marker_is_not_the_custom_one`) used a tag ref by accident and passed for
+  the branch reason.
+- *Fix:* check the `head_branch` semver before the dispatch FAIL; new test
+  `test_legacy_dispatch_on_a_tag_without_title_is_that_tag`; the accidental fixture moved to `main`.
+- *Prevention:* the rule is now written per ref kind (tag vs branch/sha) in the spec, and each
+  kind has a test.
+
+**Trade-off:** a pre-`run-name` deploy workflow that took a version INPUT overriding its ref
+would be misread. None is known: every flow deploy.yml with a version input carries `run-name`.
 
 ## 2026-10-15 — `v3.6.0` released (`cleanup-gar-images` opt-in `fail_on_inert`)
 
