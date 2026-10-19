@@ -176,8 +176,8 @@ class ManifestStagingTests(unittest.TestCase):
             self.assertEqual(dl[0]["with"], {"name": "release-manifest", "path": "release-manifest"})
 
     def test_artifact_actions_are_the_repos_existing_pins(self):
-        up = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-        down = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+        up = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+        down = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
         uses = {s["uses"] for _, _, _, s in wf.all_steps() if "artifact" in str(s.get("uses", ""))}
         self.assertEqual(uses, {up, down})
 

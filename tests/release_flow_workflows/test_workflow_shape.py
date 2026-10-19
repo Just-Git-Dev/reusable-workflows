@@ -218,7 +218,7 @@ class PlanTests(unittest.TestCase):
         steps = self.jobs["service-gates"]["steps"]
         gate = steps[-1]
         self.assertEqual(gate["uses"], "Just-Git-Dev/reusable-workflows/actions/check-release-gate"
-                                       "@08b6f7260a8e17d8bceff7744c0408bac06001f9")
+                                       "@14620ac3d914d99b55eb90a92495a147f29a0337")
         self.assertEqual(gate["with"]["services"], "${{ steps.s.outputs.services }}")
         self.assertEqual(gate["with"]["token"], "${{ steps.app.outputs.token }}")
         _, s = wf.step_by_id(self.jobs["service-gates"], "s")
