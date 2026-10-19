@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-19` — [CI pins actionlint and shellcheck](#2026-10-19--ci-pins-actionlint-and-shellcheck)
 - `2026-10-16` — [`v3.6.1` released (release-flow: untitled dispatch on a tag resolves to that tag)](#2026-10-16--v361-released-release-flow-untitled-dispatch-on-a-tag-resolves-to-that-tag)
 - `2026-10-16` — [release-flow: an untitled dispatch on a vX.Y.Z tag resolves to that tag](#2026-10-16--release-flow-an-untitled-dispatch-on-a-vxyz-tag-resolves-to-that-tag)
 - `2026-10-15` — [`v3.6.0` released (`cleanup-gar-images` opt-in `fail_on_inert`)](#2026-10-15--v360-released-cleanup-gar-images-opt-in-fail_on_inert)
@@ -118,6 +119,26 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-19 — CI pins actionlint and shellcheck
+
+**Context.** `raven-actions/actionlint` is SHA-pinned, but its `version` input defaults to
+`latest`, so each run fetched the newest actionlint. The action passes no shellcheck version at all:
+it runs whatever `shellcheck` is on PATH, which is the runner image's copy and moves with each
+image update. So lint rules could change with no commit here. Owner decision, 2026-10-19: pin both
+everywhere in the fleet, starting with the devops repos.
+
+**Decision.** `version: 1.7.12` on both actionlint steps. A step before each one downloads the
+shellcheck v0.11.0 release, checks its SHA-256, which matches GitHub's published asset digest,
+asserts `--version`, and puts it first on PATH. actionlint also gets that path explicitly
+(`flags: -shellcheck=…`). A wrong path does not fail: actionlint prints `Rule "shellcheck" was
+disabled` and exits 0 (reproduced locally). So a canary step after the action runs the same
+actionlint binary and shellcheck path on a one-step workflow with a known SC2086, and fails unless
+SC2086 is reported. Tested both ways locally. The versions match what the maintainers' laptops run
+(actionlint 1.7.12, shellcheck 0.11.0), so a local lint and CI agree. A rule change now arrives only
+by bumping these values.
+
+**Not changed.** No workflow_call body changes, so no release.
 
 ## 2026-10-16 — `v3.6.1` released (release-flow: untitled dispatch on a tag resolves to that tag)
 
