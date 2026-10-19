@@ -130,7 +130,11 @@ everywhere in the fleet, starting with the devops repos.
 
 **Decision.** `version: 1.7.12` on both actionlint steps. A step before each one downloads the
 shellcheck v0.11.0 release, checks its SHA-256, which matches GitHub's published asset digest,
-asserts `--version`, and puts it first on PATH. The versions match what the maintainers' laptops run
+asserts `--version`, and puts it first on PATH. actionlint also gets that path explicitly
+(`flags: -shellcheck=…`). A wrong path does not fail: actionlint prints `Rule "shellcheck" was
+disabled` and exits 0 (reproduced locally). So a canary step after the action runs the same
+actionlint binary and shellcheck path on a one-step workflow with a known SC2086, and fails unless
+SC2086 is reported. Tested both ways locally. The versions match what the maintainers' laptops run
 (actionlint 1.7.12, shellcheck 0.11.0), so a local lint and CI agree. A rule change now arrives only
 by bumping these values.
 
