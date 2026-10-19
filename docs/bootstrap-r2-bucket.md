@@ -15,7 +15,7 @@ uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-r2-bucket.yml@
 | Ensure the bucket | `GET` then `POST /accounts/{id}/r2/buckets` | Created only if `GET` answers 404 |
 | Ensure the custom domain | `GET` then `POST .../buckets/{name}/domains/custom` | Attached only if absent; re-enabled if attached but disabled; **fails** if already attached under a different zone |
 | Ensure `r2.dev` is off | `GET` then `PUT .../buckets/{name}/domains/managed` | Switched off only if on |
-| Probe | `PUT`/`DELETE .../buckets/{name}/objects/{key}` + a public `GET` | See below |
+| Probe | `PUT`/`DELETE .../buckets/{name}/objects/{key}` + public `GET`s | See below; also fails if `GET /` answers `200` (a public listing) |
 
 Every call is checked for `success: true`; a failed call stops the run and prints
 Cloudflare's own error text. Bucket and domain endpoints carry the `cf-r2-jurisdiction`
@@ -35,7 +35,11 @@ same objects at a second, uncontrolled address.
    **with the bytes just uploaded**. A fresh custom domain needs time for ownership checks and
    its certificate, so the poll retries every `probe_poll_seconds` up to
    `probe_timeout_seconds`, then fails.
-3. Delete the probe — on success **and** on failure, because a probe left behind is public.
+3. `GET https://<custom_domain>/` and assert it does **not** answer `200`. A bucket must not
+   publish a listing of its objects; a `200` at the root is treated as a public listing and
+   fails the run. Any other status (`403`, `404`, ...) passes. The check runs once the domain
+   is serving, in the same poll window.
+4. Delete the probe — on success **and** on failure, because a probe left behind is public.
 
 The REST upload endpoint is capped at 300 MB per object; a probe is a few bytes.
 
