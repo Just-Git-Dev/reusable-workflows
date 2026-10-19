@@ -37,8 +37,9 @@ same objects at a second, uncontrolled address.
    `probe_timeout_seconds`, then fails.
 3. `GET https://<custom_domain>/` and assert it does **not** answer `200`. A bucket must not
    publish a listing of its objects; a `200` at the root is treated as a public listing and
-   fails the run. Any other status (`403`, `404`, ...) passes. The check runs once the domain
-   is serving, in the same poll window.
+   fails the run. Any other status (`403`, `404`, ...) passes; no answer or a `5xx` fails
+   because the absence of a listing could not be verified. The check runs once, after the
+   domain is serving.
 4. Delete the probe — on success **and** on failure, because a probe left behind is public.
 
 The REST upload endpoint is capped at 300 MB per object; a probe is a few bytes.
