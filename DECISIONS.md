@@ -139,6 +139,23 @@ it is overwritten only when the new version is strictly higher semver than `late
 with `version.txt` written last, under a bucket+prefix concurrency group. Re-publishing an old patch
 therefore never rolls the channel back.
 
+**Review amendments (PR #135).** (1) The concurrency group moved off the upload onto a second job
+(`latest`: decide, verify, advance). With `cancel-in-progress: false` GitHub keeps one pending run
+per group, so a third queued run cancels the pending second and a locked upload job would drop that
+release; version uploads are immutable and idempotent and need no lock, while a cancelled
+latest-move is harmless because the next run re-decides. Output names are unchanged
+(`version_url` from `upload`, `latest_moved` from `latest`). (2) `latest/` advances only after the
+version objects are read back through `public_base_url` (cache-busted) and their sha256 matches;
+the read-back of `latest/` after the move is an extra check, not the gate. (3) Semver is compared
+part by part as integers (the packed-integer compare mis-ordered `v1.0.1000000` against `v1.1.0`);
+the regex rejects leading zeros and caps each part at 9 digits so bash arithmetic cannot overflow.
+(4) The S3 key secrets are scoped to the steps that call `aws`, not the job env. (5) The bootstrap
+probe arms its delete before the PUT, so a lost response still cleans up; a 404 on delete counts as
+deleted. (6) The "R2 rejects the CRC headers" comment was reworded to what is documented:
+Cloudflare's aws-cli guidance sets `when_required`. Not fixed, and documented under Limits: the
+head-then-put is not atomic across repositories or manual uploads. The tests that asserted only
+`"app.zip" in out` (always printed by the inventory) now assert the specific error text.
+
 **Pins.** Docs and the `WORKFLOW_VERSION` stamp use the current release (`v3.6.1`), not the next
 one: `stamp_version.py --check` requires every pin to agree, and the release sweep moves them all.
 

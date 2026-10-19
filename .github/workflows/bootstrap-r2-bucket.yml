@@ -266,6 +266,8 @@ jobs:
               code=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 60 -X DELETE "${hdr[@]}" "$obj") || code=000
               if [[ "$code" == 2* ]]; then
                 echo "Deleted the probe object."
+              elif [ "$code" = 404 ]; then
+                echo "The probe object is not there: nothing to delete."
               else
                 echo "::error::Could not delete the public probe object $key (HTTP $code) - remove it by hand." >&2
                 rc=1
@@ -275,6 +277,9 @@ jobs:
           }
           trap cleanup EXIT
 
+          # Armed BEFORE the PUT: if the response is lost the object may still have been stored,
+          # and deleting an object that is not there is fine.
+          uploaded=true
           code=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 60 -X PUT "${hdr[@]}" \
                    -H "Content-Type: text/plain" --data-binary "@$work/probe.txt" "$obj") || code=000
           if [[ "$code" != 2* ]] || [ "$(jq -r '.success // false' "$RESP" 2>/dev/null)" != true ]; then
@@ -282,7 +287,6 @@ jobs:
             jq -c '.errors // .' "$RESP" >&2 2>/dev/null || cat "$RESP" >&2
             exit 1
           fi
-          uploaded=true
 
           deadline=$(( $(date +%s) + PROBE_TIMEOUT ))
           while :; do

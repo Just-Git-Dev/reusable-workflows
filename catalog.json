@@ -2804,7 +2804,11 @@
         }
       },
       "jobs": {
-        "publish": {
+        "latest": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        },
+        "upload": {
           "conditional": false,
           "declared_permissions": "inherits-caller"
         }

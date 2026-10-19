@@ -41,6 +41,9 @@ same objects at a second, uncontrolled address.
    because the absence of a listing could not be verified. The check runs once, after the
    domain is serving.
 4. Delete the probe — on success **and** on failure, because a probe left behind is public.
+   The delete is armed *before* the upload is sent, so it also runs when the upload's response
+   is lost (a timeout after the object was stored). Deleting an object that is not there
+   (`404`) counts as deleted.
 
 The REST upload endpoint is capped at 300 MB per object; a probe is a few bytes.
 

@@ -1631,7 +1631,8 @@ R2_PUBLISH = ROOT / ".github" / "workflows" / "publish-r2-artifact.yml"
 # A curl stand-in for the R2 workflows. Responses are keyed "METHOD path" (Cloudflare API
 # prefix and query string stripped; a public URL keeps its host). Each key holds a sequence of
 # [status, body]; the last entry repeats. "@UPLOADED" in a body is the last PUT payload. A
-# request with no configured answer gets HTTP 599, so an unexpected call is loud.
+# request with no configured answer gets HTTP 599, so an unexpected call is loud. Status 0
+# simulates a transport failure: curl prints 000 for %{http_code} and exits 7.
 R2_CURL_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
 d = os.environ["STUB_DIR"]
@@ -1674,6 +1675,9 @@ elif os.environ.get("SERVE_BASE") and bare.startswith(os.environ["SERVE_BASE"]):
     p = d + "/store/" + os.environ["SERVE_BUCKET"] + "/" + bare[len(os.environ["SERVE_BASE"]):].lstrip("/")
     if os.path.isfile(p): status, body = 200, open(p).read()
     else: status, body = 404, ""
+if status == 0:
+    if wfmt: sys.stdout.write(wfmt.replace("%{http_code}", "000"))
+    sys.exit(7)
 if out: open(out, "w").write(body)
 else: sys.stdout.write(body)
 if wfmt: sys.stdout.write(wfmt.replace("%{http_code}", str(status)))
@@ -1696,6 +1700,9 @@ with open(d + "/aws.jsonl", "a") as f:
     f.write(json.dumps({"cmd": cmd, "key": k, "cache": opts.get("cache-control"),
                         "metadata": opts.get("metadata"), "endpoint": opts.get("endpoint-url"),
                         "region": opts.get("region")}) + "\n")
+if cmd in os.environ.get("STUB_DENY", "").split(","):
+    sys.stderr.write("An error occurred (403) when calling the %s operation: Forbidden\n" % cmd)
+    sys.exit(254)
 if cmd == "put-object":
     os.makedirs(os.path.dirname(path), exist_ok=True)
     os.makedirs(os.path.dirname(meta), exist_ok=True)
@@ -1725,7 +1732,9 @@ def run_r2_steps(workflow, job, steps, *, responses=None, store=None, artifact=N
                  serve=None):
     """Run named steps of an R2 workflow in order, in ONE working directory.
 
-    steps    -- [(step name, env dict)]; the run stops at the first non-zero step.
+    steps    -- [(step name, env dict)]; the run stops at the first non-zero step. A step name
+                is a string (looked up in `job`) or a (job, name) pair. A missing step ends the
+                run with rc 99, so it is a failed case rather than a crash.
     responses-- curl stub table (see R2_CURL_STUB).
     store    -- {"bucket/key": (content, {meta})} pre-seeded into the aws stub's bucket.
     artifact -- {relative path: content} written to $ART_DIR before the first step.
@@ -1763,7 +1772,12 @@ def run_r2_steps(workflow, job, steps, *, responses=None, store=None, artifact=N
             env["SERVE_BASE"], env["SERVE_BUCKET"] = serve
         res = {"rc": 0, "out": ""}
         for name, extra in steps:
-            body = extract_step(workflow, job, name)
+            sj, sn = name if isinstance(name, tuple) else (job, name)
+            try:
+                body = extract_step(workflow, sj, sn)
+            except (SystemExit, KeyError) as exc:
+                res["rc"], res["out"] = 99, res["out"] + f"STEP NOT FOUND {sj}:{sn} ({exc})\n"
+                break
             e = dict(env)
             e.update({k: str(v) for k, v in extra.items()})
             proc = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
@@ -1931,12 +1945,23 @@ def r2_bootstrap_cases():
           len(sent(r, "DELETE")) == 1, r["curl"])
     r = step(p, {**good, f"GET {pub}/": [[403, ""]]})
     check("a 403 at the root passes", r["rc"] == 0, r["out"])
-    r = step(p, {**good, f"GET {pub}/": [[599, ""]]})
-    check("an unreachable root (no answer) is not read as a pass",
-          r["rc"] != 0, r["out"])
-    r = step(p, {f"PUT {ok_obj}": [[403, '{"success":false,"errors":[{"message":"denied"}]}']]})
+    r = step(p, {**good, f"GET {pub}/": [[0, ""]]})
+    check("an unreachable root (curl transport failure, HTTP 000) is not read as a pass",
+          r["rc"] != 0 and "Could not verify" in r["out"] and "HTTP 000" in r["out"], r["out"])
+    r = step(p, {**good, f"GET {pub}/": [[503, ""]]})
+    check("a 5xx at the root is not read as a pass",
+          r["rc"] != 0 and "Could not verify" in r["out"] and "HTTP 503" in r["out"], r["out"])
+    r = step(p, {f"PUT {ok_obj}": [[403, '{"success":false,"errors":[{"message":"denied"}]}']],
+                 f"DELETE {ok_obj}": [[404, ""]]})
     check("a failed probe upload fails the run and names the error",
           r["rc"] != 0 and "denied" in r["out"], r["out"])
+    check("deleting a probe that is not there is not an error",
+          "remove it by hand" not in r["out"], r["out"])
+    r = step(p, {f"PUT {ok_obj}": [[0, ""]], f"DELETE {ok_obj}": [[404, ""]]})
+    check("a lost upload response fails the run",
+          r["rc"] != 0 and "Uploading the probe object failed" in r["out"], r["out"])
+    check("and the probe is still deleted (the object may have been stored)",
+          len(sent(r, "DELETE")) == 1, r["curl"])
 
     print("bootstrap-r2-bucket · Summary")
     s = "Summary"
@@ -1958,15 +1983,19 @@ def r2_publish_cases():
             "READBACK_SLEEP": "1", "RUN_ID": "9", "RUN_ATTEMPT": "1"}
     files = {"app.zip": "ZIPBYTES", "docs/guide.txt": "GUIDE"}
     sha = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in files.items()}
-    V, INV, PUB, DEC, ADV, RB = ("Validate the inputs", "Inventory the artifact",
-                                 "Publish the version objects", "Decide whether latest moves",
-                                 "Advance latest", "Read back through the public URL")
+    # upload job: V, INV, PUB. latest job: L_INV, DEC, VFY (gate), ADV, RB (extra check).
+    V, INV, PUB = ("Validate the inputs", "Inventory the artifact", "Publish the version objects")
+    L_INV = ("latest", INV)
+    DEC = ("latest", "Decide whether latest moves")
+    VFY = ("latest", "Verify the version objects through the public URL")
+    ADV = ("latest", "Advance latest")
+    RB = ("latest", "Read back latest through the public URL")
 
     def run(names, *, store=None, artifact=files, serve=True, responses=None, **env):
         e = dict(base)
         e.update(env)
         steps = [(n, e) for n in names]
-        return run_r2_steps(R2_PUBLISH, "publish", steps, store=store, artifact=artifact,
+        return run_r2_steps(R2_PUBLISH, "upload", steps, store=store, artifact=artifact,
                             serve=(pub, "bkt") if serve else None, responses=responses)
 
     print("publish-r2-artifact · Validate the inputs")
@@ -1974,6 +2003,10 @@ def r2_publish_cases():
     for label, over in (("a two-part version", {"VERSION": "v1.2"}),
                         ("a version without the v", {"VERSION": "1.2.3"}),
                         ("a pre-release version", {"VERSION": "v1.2.3-rc1"}),
+                        ("a leading zero in the major", {"VERSION": "v01.2.3"}),
+                        ("a leading zero in the minor", {"VERSION": "v1.02.3"}),
+                        ("a leading zero in the patch", {"VERSION": "v1.2.03"}),
+                        ("a 10-digit version part", {"VERSION": "v1234567890.0.0"}),
                         ("an empty prefix", {"PREFIX": ""}),
                         ("a leading slash in the prefix", {"PREFIX": "/a"}),
                         ("a trailing slash in the prefix", {"PREFIX": "a/"}),
@@ -1988,6 +2021,8 @@ def r2_publish_cases():
         check(f"rejects {label}", r["rc"] != 0 and "::error::" in r["out"], r["out"])
     r = run([V], PREFIX="tools/cli")
     check("a nested prefix is accepted", r["rc"] == 0, r["out"])
+    for ok in ("v0.0.0", "v20261019.0.0", "v999999999.999999999.999999999"):
+        check(f"{ok} is an accepted version", run([V], VERSION=ok)["rc"] == 0, ok)
 
     print("publish-r2-artifact · Inventory the artifact")
     r = run([V, INV])
@@ -2034,14 +2069,19 @@ def r2_publish_cases():
           r["rc"] == 0 and not [c for c in r["aws"] if c["cmd"] == "put-object"], r["out"])
     r = run([V, INV, PUB], store={"bkt/downloads/v1.2.3/app.zip": ("OLD", {"sha256": "0" * 64})})
     check("a present object with a different sha256 fails the run",
-          r["rc"] != 0 and "app.zip" in r["out"], r["out"])
+          r["rc"] != 0 and "already exists with different bytes" in r["out"], r["out"])
     check("and is not overwritten", r["store"].get("bkt/downloads/v1.2.3/app.zip") == "OLD",
           r["store"])
     r = run([V, INV, PUB], store={"bkt/downloads/v1.2.3/app.zip": ("ZIPBYTES", {})})
     check("a present object with no recorded sha256 fails the run (not provably identical)",
-          r["rc"] != 0 and "app.zip" in r["out"], r["out"])
+          r["rc"] != 0 and "no recorded sha256" in r["out"], r["out"])
     check("and the check never downloads the object",
           not [c for c in r["aws"] if c["cmd"] == "get-object"], r["aws"])
+    r = run([V, INV, PUB], store={"bkt/downloads/v1.2.3/app.zip": ("ZIPBYTES", {"sha256": sha["app.zip"]})},
+            STUB_DENY="head-object")
+    check("a 403 on HeadObject fails closed (no upload attempted)",
+          r["rc"] != 0 and "HeadObject on" in r["out"] and "failed" in r["out"]
+          and not [c for c in r["aws"] if c["cmd"] == "put-object"], (r["out"], r["aws"]))
 
     print("publish-r2-artifact · Decide whether latest moves")
     ver = "bkt/downloads/latest/version.txt"
@@ -2051,9 +2091,28 @@ def r2_publish_cases():
         r = run([V, INV, DEC], store={ver: (content, {})} if content else None)
         check(f"latest/version.txt {label}: moves={moves}",
               r["rc"] == 0 and r["outputs"].get("move") == moves, (r["out"], r["outputs"]))
+    ver_cases = (("a part-by-part compare: v1.0.1000000 is not newer than v1.1.0",
+                  "v1.0.1000000", "v1.1.0\n", "false"),
+                 ("a part-by-part compare: v1.1.0 is newer than v1.0.1000000",
+                  "v1.1.0", "v1.0.1000000\n", "true"),
+                 ("a big major moves past v1.0.0", "v20261019.0.0", "v1.0.0\n", "true"),
+                 ("a big latest major is not rolled back", "v1.0.0", "v20261019.0.0\n", "false"),
+                 ("a patch bump moves", "v1.2.4", "v1.2.3\n", "true"),
+                 ("a minor bump beats a larger patch", "v1.3.0", "v1.2.999999999\n", "true"))
+    for label, newv, cur, moves in ver_cases:
+        r = run([V, INV, DEC], store={ver: (cur, {})}, VERSION=newv)
+        check(f"{label}: moves={moves}",
+              r["rc"] == 0 and r["outputs"].get("move") == moves, (r["out"], r["outputs"]))
+    r = run([V, INV, DEC], store={ver: ("v01.2.3", {})})
+    check("a latest/version.txt with a leading zero is corrupt",
+          r["rc"] != 0 and "not vX.Y.Z" in r["out"], r["out"])
+    r = run([V, INV, DEC], store={ver: ("v1.2.3", {})}, STUB_DENY="get-object")
+    check("a 403 on GetObject of latest/version.txt fails closed (latest/ is not written)",
+          r["rc"] != 0 and "Reading downloads/latest/version.txt failed" in r["out"]
+          and r["outputs"].get("move") is None, (r["out"], r["outputs"]))
     r = run([V, INV, DEC], store={ver: ("not-a-version", {})})
-    check("a corrupt latest/version.txt fails the run", r["rc"] != 0 and "::error::" in r["out"],
-          r["out"])
+    check("a corrupt latest/version.txt fails the run",
+          r["rc"] != 0 and "not vX.Y.Z" in r["out"], r["out"])
     r = run([V, INV, DEC], UPDATE_LATEST="never")
     check("update_latest: never skips latest and does not read it",
           r["outputs"].get("move") == "false" and not r["aws"], r["aws"])
@@ -2083,9 +2142,14 @@ def r2_publish_cases():
     check("files only an older release put in latest/ are left in place",
           r["rc"] == 0 and r["store"].get("bkt/downloads/latest/old-only.txt") == "OLD", r["out"])
 
-    print("publish-r2-artifact · Read back through the public URL")
-    full = [V, INV, PUB, DEC, ADV, RB]
+    print("publish-r2-artifact · Verify the version objects / read back latest")
+    full = [V, INV, PUB, L_INV, DEC, VFY, ADV, RB]
+    app = f"GET {pub}/downloads/v1.2.3/app.zip"
+    old = ("v1.0.0\n", {})
     r = run(full)
+    check("latest moved after the version objects verified",
+          r["rc"] == 0 and r["outputs"].get("latest_moved") == "true"
+          and r["store"].get(ver) == "v1.2.3\n", (r["out"], r["outputs"]))
     gets = [c["key"] for c in r["curl"]]
     check("a published release reads back clean", r["rc"] == 0, r["out"])
     check("version and latest files are both fetched",
@@ -2094,19 +2158,61 @@ def r2_publish_cases():
     check("every read-back carries a cache-buster",
           r["curl"] and all("?cb=9-1" in c["url"] for c in r["curl"]), r["curl"][:2])
     r = run(full, UPDATE_LATEST="never")
-    check("when latest did not move, latest/ is not read back",
-          r["rc"] == 0 and not any("/latest/" in c["key"] for c in r["curl"]), r["out"])
-    r = run([V, INV, PUB, DEC, ADV, RB], store={ver: ("v9.0.0\n", {})})
+    check("when latest did not move, latest/ is not read back (version objects still are)",
+          r["rc"] == 0 and not any("/latest/" in c["key"] for c in r["curl"])
+          and any("/v1.2.3/app.zip" in c["key"] for c in r["curl"]), r["out"])
+    r = run(full, store={ver: ("v9.0.0\n", {})})
     check("a latest that is higher is not read back",
           r["rc"] == 0 and not any("/latest/" in c["key"] for c in r["curl"]), r["out"])
 
-
-    r = run(full, responses={f"GET {pub}/downloads/v1.2.3/app.zip": [[200, "TAMPERED"]]})
-    check("bytes that differ from what was published fail the read-back",
-          r["rc"] != 0 and "app.zip" in r["out"], r["out"])
-    r = run(full, responses={f"GET {pub}/downloads/v1.2.3/app.zip": [[404, ""]]})
+    r = run(full, store={ver: old}, responses={app: [[200, "TAMPERED"]]})
+    check("bytes that differ from what was published fail the version read-back",
+          r["rc"] != 0 and "served different bytes" in r["out"] and "/v1.2.3/app.zip" in r["out"],
+          r["out"])
+    check("and a read-back mismatch leaves latest/version.txt untouched",
+          r["store"].get(ver) == "v1.0.0\n"
+          and not [c for c in r["aws"] if c["cmd"] == "put-object" and "/latest/" in c["key"]],
+          (r["store"], r["aws"]))
+    r = run(full, store={ver: old}, responses={app: [[404, ""]]})
     check("a file that never becomes public fails the read-back after the timeout",
-          r["rc"] != 0 and "app.zip" in r["out"], r["out"])
+          r["rc"] != 0 and "answered HTTP 404" in r["out"], r["out"])
+    check("and latest/ stays where it was", r["store"].get(ver) == "v1.0.0\n", r["store"])
+    r = run(full, store={ver: old}, responses={app: [[0, ""]]})
+    check("a transport failure (HTTP 000) fails the read-back",
+          r["rc"] != 0 and "answered HTTP 000" in r["out"], r["out"])
+    check("and latest/ stays where it was (transport failure)",
+          r["store"].get(ver) == "v1.0.0\n", r["store"])
+    r = run(full, store={ver: old}, responses={app: [[503, ""]]})
+    check("a 5xx fails the read-back",
+          r["rc"] != 0 and "answered HTTP 503" in r["out"], r["out"])
+    r = run(full, responses={f"GET {pub}/downloads/latest/app.zip": [[200, "TAMPERED"]]})
+    check("a latest/ mismatch after the move is reported by the extra check",
+          r["rc"] != 0 and "served different bytes" in r["out"] and "/latest/app.zip" in r["out"],
+          r["out"])
+
+    print("publish-r2-artifact · Workflow shape")
+    doc = yaml.safe_load(R2_PUBLISH.read_text())
+    jobs = doc["jobs"]
+    key = "publish-r2-${{ inputs.bucket }}-${{ inputs.prefix }}"
+    check("the upload job takes no concurrency lock", "concurrency" not in jobs["upload"], jobs["upload"].keys())
+    check("the latest job holds the bucket+prefix group without cancel-in-progress",
+          jobs["latest"].get("concurrency") == {"group": key, "cancel-in-progress": False},
+          jobs["latest"].get("concurrency"))
+    check("latest waits for upload", jobs["latest"].get("needs") == "upload", jobs["latest"].get("needs"))
+    check("the S3 key secrets are not in any job-level env",
+          not any("secrets." in str(j.get("env", {})) for j in jobs.values()),
+          [j.get("env") for j in jobs.values()])
+    scoped = {sn for jn, j in jobs.items() for st in j["steps"]
+              if any("secrets." in str(v) for v in st.get("env", {}).values())
+              for sn in [st["name"]]}
+    check("the secrets reach exactly the steps that call aws",
+          scoped == {"Publish the version objects", "Decide whether latest moves", "Advance latest"},
+          scoped)
+    outs = (doc.get("on") or doc[True])["workflow_call"]["outputs"]
+    check("workflow outputs keep their names, wired from the right jobs",
+          outs["version_url"]["value"] == "${{ jobs.upload.outputs.version_url }}"
+          and outs["latest_moved"]["value"] == "${{ jobs.latest.outputs.latest_moved }}",
+          outs)
 
 
 def check(name, cond, detail=""):

@@ -4,6 +4,10 @@ name: Publish an artifact to Cloudflare R2 (reusable)
 # advances <prefix>/latest/ - only forward. Version objects are immutable: a present object is
 # never overwritten, and a re-run of the same release is a no-op. Spec: docs/publish-r2-artifact.md.
 #
+# Two jobs. `upload` writes the immutable version objects and takes no lock (idempotent).
+# `latest` decides, verifies the version objects through the public URL and only then advances
+# latest/; it alone holds the concurrency group, because latest/ is read, compared and rewritten.
+#
 # Talks to R2's S3-compatible API (aws s3api, endpoint https://<account_id>.r2.cloudflarestorage.com,
 # region auto) with an S3 access key pair: Object Read & Write on the bucket.
 
@@ -59,10 +63,10 @@ on:
     outputs:
       version_url:
         description: '<public_base_url>/<prefix>/<version>/'
-        value: ${{ jobs.publish.outputs.version_url }}
+        value: ${{ jobs.upload.outputs.version_url }}
       latest_moved:
         description: 'true if this run advanced latest/, else false.'
-        value: ${{ jobs.publish.outputs.latest_moved }}
+        value: ${{ jobs.latest.outputs.latest_moved }}
 
 permissions:
   contents: read
@@ -73,27 +77,22 @@ env:
   WORKFLOW_VERSION: v3.6.1
 
 jobs:
-  publish:
+  upload:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
-    # On the JOB, keyed on bucket and prefix: latest/ is read, compared and then rewritten, so
-    # two publishers must not interleave.
-    concurrency:
-      group: publish-r2-${{ inputs.bucket }}-${{ inputs.prefix }}
-      cancel-in-progress: false
+    # No concurrency group: version uploads are immutable and idempotent (head, then put only
+    # when absent), so concurrent uploads cannot conflict. A lock here would let GitHub cancel
+    # a pending run and drop its release.
     defaults:
       run:
         shell: bash
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.r2_access_key_id }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
       AWS_EC2_METADATA_DISABLED: 'true'
-      # R2 rejects the CRC checksum headers recent AWS CLIs add by default.
+      # Cloudflare's R2 aws-cli guidance sets when_required (aws-cli >=2.23 defaults to when_supported).
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
       AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
     outputs:
       version_url: ${{ inputs.public_base_url }}/${{ inputs.prefix }}/${{ inputs.version }}/
-      latest_moved: ${{ steps.advance.outputs.latest_moved }}
     steps:
       - name: Validate the inputs
         env:
@@ -106,9 +105,12 @@ jobs:
           READBACK_TIMEOUT: ${{ inputs.readback_timeout_seconds }}
         run: |
           fail() { echo "::error::$1" >&2; exit 1; }
+          # Each part: 0 or no leading zero, at most 9 digits (bash arithmetic cannot overflow).
+          semver='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
           [[ "$ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]] || fail "account_id must be 32 hex characters."
           [[ "$BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || fail "bucket is not a valid R2 bucket name."
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must be vX.Y.Z (no pre-release suffix), got '$VERSION'."
+          [[ "$VERSION" =~ $semver ]] \
+            || fail "version must be vX.Y.Z (no pre-release suffix, no leading zeros, at most 9 digits per part), got '$VERSION'."
           [[ "$PREFIX" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] \
             || fail "prefix must be non-empty, with no leading or trailing slash, no empty segment and only A-Za-z0-9._- in each segment."
           IFS=/ read -ra segs <<<"$PREFIX"
@@ -147,7 +149,11 @@ jobs:
               *.sha256)    fail "'$rel': artifacts may not contain .sha256 files; the workflow produces them." ;;
               version.txt) fail "'version.txt' at the artifact root is reserved; the workflow writes it in latest/." ;;
             esac
-            printf '%s\t%s\n' "$rel" "$(sha "$f")" >> "$inv"
+            sum=$(sha "$f")
+            printf '%s\t%s\n' "$rel" "$sum" >> "$inv"
+            # The <file>.sha256 companion, in sha256sum format.
+            mkdir -p "$state/sums/$(dirname "$rel")"
+            printf '%s  %s\n' "$sum" "$(basename "$rel")" > "$state/sums/$rel.sha256"
             n=$((n + 1))
           done < <(find . -type f -print0 | sort -z)
           echo "examined $n file(s)"
@@ -156,6 +162,8 @@ jobs:
 
       - name: Publish the version objects
         env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.r2_access_key_id }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
           ACCOUNT_ID: ${{ inputs.account_id }}
           BUCKET:     ${{ inputs.bucket }}
           PREFIX:     ${{ inputs.prefix }}
@@ -168,7 +176,6 @@ jobs:
           s3() { local c=$1; shift; aws s3api "$c" --endpoint-url "$EP" --region auto "$@"; }
           state="$RUNNER_TEMP/r2"
           err="$state/err"
-          : > "$state/published.tsv"
           cache='public, max-age=31536000, immutable'
 
           # put_immutable KEY FILE: HeadObject (no download) decides; a present object is never replaced.
@@ -187,20 +194,79 @@ jobs:
                 || fail "Uploading $key failed."
               echo "uploaded   $key"
             fi
-            printf '%s\t%s\n' "$key" "$sum" >> "$state/published.tsv"
           }
 
           while IFS=$'\t' read -r rel sum; do
             [ -n "$rel" ] || continue
-            mkdir -p "$state/sums/$(dirname "$rel")"
-            printf '%s  %s\n' "$sum" "$(basename "$rel")" > "$state/sums/$rel.sha256"
             put_immutable "$PREFIX/$VERSION/$rel" "$ART_DIR/$rel"
             put_immutable "$PREFIX/$VERSION/$rel.sha256" "$state/sums/$rel.sha256"
           done < "$state/inventory.tsv"
 
+  latest:
+    needs: upload
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    # The lock is HERE, keyed on bucket and prefix: latest/ is read, compared and then rewritten,
+    # so two publishers must not interleave. GitHub keeps one pending run per group, so a third
+    # run cancels the pending second; that only drops a latest/ move (its version objects are
+    # already uploaded) and the next run re-decides.
+    concurrency:
+      group: publish-r2-${{ inputs.bucket }}-${{ inputs.prefix }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    env:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      # Cloudflare's R2 aws-cli guidance sets when_required (aws-cli >=2.23 defaults to when_supported).
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    outputs:
+      latest_moved: ${{ steps.advance.outputs.latest_moved }}
+    steps:
+      - name: Download the artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/r2-artifact
+
+      # The same inventory as the upload job (a job cannot read another runner's files). The inputs
+      # were validated there and this job needs it.
+      - name: Inventory the artifact
+        env:
+          ART_DIR: ${{ runner.temp }}/r2-artifact
+        run: |
+          fail() { echo "::error::$1" >&2; exit 1; }
+          sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+          state="$RUNNER_TEMP/r2"
+          mkdir -p "$state"
+          inv="$state/inventory.tsv"
+          : > "$inv"
+          cd "$ART_DIR"
+          n=0
+          while IFS= read -r -d '' f; do
+            rel=${f#./}
+            [[ "$rel" =~ ^[A-Za-z0-9._/-]+$ ]] \
+              || fail "File name '$rel' has characters outside A-Za-z0-9._/- (the key and the URL must be the same string)."
+            case "$rel" in
+              *.sha256)    fail "'$rel': artifacts may not contain .sha256 files; the workflow produces them." ;;
+              version.txt) fail "'version.txt' at the artifact root is reserved; the workflow writes it in latest/." ;;
+            esac
+            sum=$(sha "$f")
+            printf '%s\t%s\n' "$rel" "$sum" >> "$inv"
+            mkdir -p "$state/sums/$(dirname "$rel")"
+            printf '%s  %s\n' "$sum" "$(basename "$rel")" > "$state/sums/$rel.sha256"
+            n=$((n + 1))
+          done < <(find . -type f -print0 | sort -z)
+          echo "examined $n file(s)"
+          [ "$n" -gt 0 ] || fail "The artifact contains no files; refusing to publish nothing."
+          cat "$inv"
+
       - name: Decide whether latest moves
         id: decide
         env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.r2_access_key_id }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
           ACCOUNT_ID:    ${{ inputs.account_id }}
           BUCKET:        ${{ inputs.bucket }}
           PREFIX:        ${{ inputs.prefix }}
@@ -216,13 +282,14 @@ jobs:
             emit false
             exit 0
           fi
+          semver='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
           EP="https://${ACCOUNT_ID}.r2.cloudflarestorage.com"
           err="$state/err"
           cur_file="$state/latest-version.txt"
           if aws s3api get-object --bucket "$BUCKET" --key "$PREFIX/latest/version.txt" \
                --endpoint-url "$EP" --region auto "$cur_file" >/dev/null 2>"$err"; then
             cur=$(tr -d '[:space:]' < "$cur_file")
-            [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            [[ "$cur" =~ $semver ]] \
               || fail "$PREFIX/latest/version.txt holds '$cur', which is not vX.Y.Z. The file is corrupt; fix or delete it by hand. Nothing was guessed."
           else
             grep -qE '404|Not Found|NoSuchKey' "$err" || { cat "$err" >&2; fail "Reading $PREFIX/latest/version.txt failed."; }
@@ -230,14 +297,20 @@ jobs:
             emit true
             exit 0
           fi
+          # Part by part as integers (never one packed number). Each part is at most 9 digits.
           IFS=. read -r n1 n2 n3 <<<"${VERSION#v}"
           IFS=. read -r c1 c2 c3 <<<"${cur#v}"
-          new=$(( 10#$n1 * 1000000000000 + 10#$n2 * 1000000 + 10#$n3 ))
-          old=$(( 10#$c1 * 1000000000000 + 10#$c2 * 1000000 + 10#$c3 ))
-          if [ "$new" -gt "$old" ]; then
+          new=("$n1" "$n2" "$n3")
+          old=("$c1" "$c2" "$c3")
+          cmp=0
+          for i in 0 1 2; do
+            if (( 10#${new[i]} > 10#${old[i]} )); then cmp=1; break; fi
+            if (( 10#${new[i]} < 10#${old[i]} )); then cmp=-1; break; fi
+          done
+          if [ "$cmp" -gt 0 ]; then
             echo "latest is $cur, publishing $VERSION: latest/ moves."
             emit true
-          elif [ "$new" -eq "$old" ]; then
+          elif [ "$cmp" -eq 0 ]; then
             echo "latest is already $cur: nothing to move."
             emit false
           else
@@ -245,9 +318,59 @@ jobs:
             emit false
           fi
 
+      # The gate: latest/ only advances once the version objects are served, byte for byte.
+      - name: Verify the version objects through the public URL
+        env:
+          PUBLIC_BASE_URL:  ${{ inputs.public_base_url }}
+          PREFIX:           ${{ inputs.prefix }}
+          VERSION:          ${{ inputs.version }}
+          READBACK_TIMEOUT: ${{ inputs.readback_timeout_seconds }}
+          RUN_ID:           ${{ github.run_id }}
+          RUN_ATTEMPT:      ${{ github.run_attempt }}
+        run: |
+          sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+          state="$RUNNER_TEMP/r2"
+          got="$state/readback.bin"
+          list="$state/version-objects.tsv"
+          : > "$list"
+          # key<TAB>sha256 of every version object (each file and its .sha256 companion).
+          while IFS=$'\t' read -r rel sum; do
+            [ -n "$rel" ] || continue
+            printf '%s\t%s\n' "$PREFIX/$VERSION/$rel" "$sum" >> "$list"
+            printf '%s\t%s\n' "$PREFIX/$VERSION/$rel.sha256" "$(sha "$state/sums/$rel.sha256")" >> "$list"
+          done < "$state/inventory.tsv"
+          n=0
+          while IFS=$'\t' read -r key want; do
+            [ -n "$key" ] || continue
+            url="${PUBLIC_BASE_URL}/${key}?cb=${RUN_ID}-${RUN_ATTEMPT}"
+            deadline=$(( $(date +%s) + READBACK_TIMEOUT ))
+            while :; do
+              code=$(curl -sS -o "$got" -w '%{http_code}' --max-time 60 "$url") || code=000
+              have=""
+              [ "$code" != 200 ] || have=$(sha "$got")
+              if [ "$code" = 200 ] && [ "$have" = "$want" ]; then
+                break
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                if [ "$code" = 200 ]; then
+                  echo "::error::${PUBLIC_BASE_URL}/${key} served different bytes (sha256 $have, published $want). latest/ was not moved." >&2
+                else
+                  echo "::error::${PUBLIC_BASE_URL}/${key} answered HTTP $code within ${READBACK_TIMEOUT}s. latest/ was not moved." >&2
+                fi
+                exit 1
+              fi
+              sleep "${READBACK_SLEEP:-5}"
+            done
+            n=$((n + 1))
+          done < "$list"
+          [ "$n" -gt 0 ] || { echo "::error::Nothing to read back." >&2; exit 1; }
+          echo "Read back $n version object(s) through ${PUBLIC_BASE_URL}: all match."
+
       - name: Advance latest
         id: advance
         env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.r2_access_key_id }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
           ACCOUNT_ID: ${{ inputs.account_id }}
           BUCKET:     ${{ inputs.bucket }}
           PREFIX:     ${{ inputs.prefix }}
@@ -264,6 +387,7 @@ jobs:
           fi
           EP="https://${ACCOUNT_ID}.r2.cloudflarestorage.com"
           cache='public, max-age=300'
+          : > "$state/latest-objects.tsv"
           put_latest() {
             local key=$1 file=$2 sum
             sum=$(sha "$file")
@@ -271,7 +395,7 @@ jobs:
               --cache-control "$cache" --metadata "sha256=$sum" \
               --endpoint-url "$EP" --region auto >/dev/null || fail "Uploading $key failed."
             echo "uploaded   $key"
-            printf '%s\t%s\n' "$key" "$sum" >> "$state/published.tsv"
+            printf '%s\t%s\n' "$key" "$sum" >> "$state/latest-objects.tsv"
           }
           while IFS=$'\t' read -r rel sum; do
             [ -n "$rel" ] || continue
@@ -283,7 +407,8 @@ jobs:
           put_latest "$PREFIX/latest/version.txt" "$state/version.txt"
           echo "latest_moved=true" >> "$GITHUB_OUTPUT"
 
-      - name: Read back through the public URL
+      # An extra check after the move; the gate is the version read-back above.
+      - name: Read back latest through the public URL
         env:
           PUBLIC_BASE_URL:  ${{ inputs.public_base_url }}
           READBACK_TIMEOUT: ${{ inputs.readback_timeout_seconds }}
@@ -293,8 +418,12 @@ jobs:
           sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
           state="$RUNNER_TEMP/r2"
           got="$state/readback.bin"
+          if [ "$(cat "$state/move" 2>/dev/null)" != true ]; then
+            echo "latest/ did not move: nothing to read back."
+            exit 0
+          fi
           n=0
-          # published.tsv lists every object this run wrote or verified: key<TAB>sha256.
+          # latest-objects.tsv lists every latest/ object this run wrote: key<TAB>sha256.
           while IFS=$'\t' read -r key want; do
             [ -n "$key" ] || continue
             url="${PUBLIC_BASE_URL}/${key}?cb=${RUN_ID}-${RUN_ATTEMPT}"
@@ -317,6 +446,6 @@ jobs:
               sleep "${READBACK_SLEEP:-5}"
             done
             n=$((n + 1))
-          done < "$state/published.tsv"
+          done < "$state/latest-objects.tsv"
           [ "$n" -gt 0 ] || { echo "::error::Nothing to read back." >&2; exit 1; }
-          echo "Read back $n object(s) through ${PUBLIC_BASE_URL}: all match."
+          echo "Read back $n latest/ object(s) through ${PUBLIC_BASE_URL}: all match."
