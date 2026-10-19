@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
 - `2026-10-19` — [CI pins actionlint and shellcheck](#2026-10-19--ci-pins-actionlint-and-shellcheck)
 - `2026-10-16` — [`v3.6.1` released (release-flow: untitled dispatch on a tag resolves to that tag)](#2026-10-16--v361-released-release-flow-untitled-dispatch-on-a-tag-resolves-to-that-tag)
 - `2026-10-16` — [release-flow: an untitled dispatch on a vX.Y.Z tag resolves to that tag](#2026-10-16--release-flow-an-untitled-dispatch-on-a-vxyz-tag-resolves-to-that-tag)
@@ -119,6 +120,29 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-19 — R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest
+
+**Context.** A first consumer needed to serve release files from a Cloudflare R2 bucket on a custom
+domain. Both halves are generic ops bodies with nothing project-specific in them, so they belong
+here as shared `workflow_call` workflows rather than as copies in each app repo.
+
+**Decision.** Two workflows. `bootstrap-r2-bucket` converges the bucket, its custom domain and the
+`r2.dev` switch (off: a second, uncached public address for the same objects), and proves the public
+path with an upload / public GET / delete probe. The probe uploads through the Cloudflare REST API
+(`PUT .../r2/buckets/{name}/objects/{key}`, 300 MB cap), so the one API token suffices and no S3 keys
+are needed. `publish-r2-artifact` publishes an Actions artifact over the S3 API. Two rules are
+binding. Version objects are immutable: each upload records its sha256 in object metadata, and a
+re-run compares by HeadObject (same hash = no-op, different or unrecorded hash = fail), so a re-run
+is safe and a changed release cannot silently replace shipped bytes. `latest/` only moves forward:
+it is overwritten only when the new version is strictly higher semver than `latest/version.txt`,
+with `version.txt` written last, under a bucket+prefix concurrency group. Re-publishing an old patch
+therefore never rolls the channel back.
+
+**Pins.** Docs and the `WORKFLOW_VERSION` stamp use the current release (`v3.6.1`), not the next
+one: `stamp_version.py --check` requires every pin to agree, and the release sweep moves them all.
+
+**Release.** New workflows, so a minor release; none is cut here.
 
 ## 2026-10-19 — CI pins actionlint and shellcheck
 
