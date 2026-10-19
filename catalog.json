@@ -405,6 +405,85 @@
       "secrets": {},
       "workflow": "bootstrap-dashboards.yml"
     },
+    "bootstrap-r2-bucket": {
+      "inputs": {
+        "account_id": {
+          "default": null,
+          "description": "Cloudflare account id (32 hex characters).",
+          "required": true,
+          "type": "string"
+        },
+        "bucket_name": {
+          "default": null,
+          "description": "Bucket name: 3-63 chars, lower-case letters, digits, hyphens.",
+          "required": true,
+          "type": "string"
+        },
+        "custom_domain": {
+          "default": null,
+          "description": "Hostname to serve the bucket on, e.g. downloads.example.com.",
+          "required": true,
+          "type": "string"
+        },
+        "jurisdiction": {
+          "default": "default",
+          "description": "default | eu | us | fedramp | fedramp-high. Fixed at bucket creation.",
+          "required": false,
+          "type": "string"
+        },
+        "location_hint": {
+          "default": "",
+          "description": "apac | eeur | enam | weur | wnam | oc, or empty. Used only when the bucket is created.",
+          "required": false,
+          "type": "string"
+        },
+        "probe_poll_seconds": {
+          "default": 15,
+          "description": "Seconds between probe attempts.",
+          "required": false,
+          "type": "number"
+        },
+        "probe_timeout_seconds": {
+          "default": 300,
+          "description": "How long to wait for the custom domain to start serving.",
+          "required": false,
+          "type": "number"
+        },
+        "timeout_minutes": {
+          "default": 15,
+          "description": "Job timeout.",
+          "required": false,
+          "type": "number"
+        },
+        "zone_id": {
+          "default": null,
+          "description": "Id of the zone that owns custom_domain (32 hex characters).",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "bootstrap": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Bootstrap Cloudflare R2 public bucket (reusable)",
+      "outputs": {
+        "bucket_created": "true if this run created the bucket.",
+        "changed": "true if the run created or modified anything, else false.",
+        "domain_attached": "true if this run attached or re-enabled the custom domain.",
+        "public_url": "https://<custom_domain>"
+      },
+      "path": ".github/workflows/bootstrap-r2-bucket.yml",
+      "secrets": {
+        "cloudflare_api_token": {
+          "description": "Cloudflare API token - see the permissions in this file\u2019s header.",
+          "required": true
+        }
+      },
+      "workflow": "bootstrap-r2-bucket.yml"
+    },
     "ci-go": {
       "inputs": {
         "badge_branch": {
@@ -2666,6 +2745,91 @@
         }
       },
       "workflow": "promote-image.yml"
+    },
+    "publish-r2-artifact": {
+      "inputs": {
+        "account_id": {
+          "default": null,
+          "description": "Cloudflare account id (32 hex characters); builds the S3 endpoint.",
+          "required": true,
+          "type": "string"
+        },
+        "artifact_name": {
+          "default": null,
+          "description": "Name of the Actions artifact to publish.",
+          "required": true,
+          "type": "string"
+        },
+        "bucket": {
+          "default": null,
+          "description": "R2 bucket name.",
+          "required": true,
+          "type": "string"
+        },
+        "prefix": {
+          "default": null,
+          "description": "Key prefix, e.g. downloads or tools/cli. No leading or trailing slash.",
+          "required": true,
+          "type": "string"
+        },
+        "public_base_url": {
+          "default": null,
+          "description": "Public https:// root that serves the bucket, no path, e.g. https://downloads.example.com.",
+          "required": true,
+          "type": "string"
+        },
+        "readback_timeout_seconds": {
+          "default": 120,
+          "description": "Per-file budget for the public read-back.",
+          "required": false,
+          "type": "number"
+        },
+        "timeout_minutes": {
+          "default": 20,
+          "description": "Job timeout.",
+          "required": false,
+          "type": "number"
+        },
+        "update_latest": {
+          "default": "auto",
+          "description": "auto (move latest/ only forward) or never.",
+          "required": false,
+          "type": "string"
+        },
+        "version": {
+          "default": null,
+          "description": "Release version, vX.Y.Z (no pre-releases).",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "latest": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        },
+        "upload": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Publish an artifact to Cloudflare R2 (reusable)",
+      "outputs": {
+        "latest_moved": "true if this run advanced latest/, else false.",
+        "version_url": "<public_base_url>/<prefix>/<version>/"
+      },
+      "path": ".github/workflows/publish-r2-artifact.yml",
+      "secrets": {
+        "r2_access_key_id": {
+          "description": "R2 S3 API token id, Object Read & Write on the bucket.",
+          "required": true
+        },
+        "r2_secret_access_key": {
+          "description": "The matching secret access key.",
+          "required": true
+        }
+      },
+      "workflow": "publish-r2-artifact.yml"
     },
     "release-drafts": {
       "inputs": {

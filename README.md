@@ -98,6 +98,8 @@ Composite actions under `actions/`, used as a **step** (`uses: Just-Git-Dev/reus
 | [`cloud-run-update.yml`](docs/cloud-run-update.md) | Apply config to an existing Cloud Run service — identity, sizing, scaling, env, secrets — with a health gate; never deploys an image |
 | [`bootstrap-cf-dns.yml`](docs/bootstrap-cf-dns.md) | Converge a Cloudflare zone's DNS records and Origin Rules, preserving rules other writers own |
 | [`bootstrap-cf-service.yml`](docs/bootstrap-cf-service.md) | Give a Cloud Run service a public hostname — Cloud Run domain mapping + DNS-only CNAME, or a proxied CNAME + Origin Rule host override |
+| [`bootstrap-r2-bucket.yml`](docs/bootstrap-r2-bucket.md) | Converge a Cloudflare R2 bucket for public downloads — bucket, custom domain, `r2.dev` off — and prove it with an upload / public-GET / delete probe |
+| [`publish-r2-artifact.yml`](docs/publish-r2-artifact.md) | Publish a build artifact to R2 as an immutable `<prefix>/<version>/` and advance `<prefix>/latest/` forward-only, with sha256 sidecars and a public read-back |
 
 Each workflow has a `docs/<name>.md` page with its full input/secret contract and
 copy-paste caller examples. The **release model** these deploy/promote workflows

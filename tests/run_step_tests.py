@@ -17,6 +17,7 @@ backoff schedule is asserted exactly and the suite runs instantly.
 Usage:  python3 tests/run_step_tests.py
 """
 
+import hashlib
 import json
 import os
 import re
@@ -1622,6 +1623,596 @@ def run_logs_step(body: str, *, serving="rev-002", traffic=None,
                             if "=" in l),
             "filter": lf.read_text() if lf.exists() else "",
         }
+
+
+R2_BOOTSTRAP = ROOT / ".github" / "workflows" / "bootstrap-r2-bucket.yml"
+R2_PUBLISH = ROOT / ".github" / "workflows" / "publish-r2-artifact.yml"
+
+# A curl stand-in for the R2 workflows. Responses are keyed "METHOD path" (Cloudflare API
+# prefix and query string stripped; a public URL keeps its host). Each key holds a sequence of
+# [status, body]; the last entry repeats. "@UPLOADED" in a body is the last PUT payload. A
+# request with no configured answer gets HTTP 599, so an unexpected call is loud. Status 0
+# simulates a transport failure: curl prints 000 for %{http_code} and exits 7.
+R2_CURL_STUB = r'''#!/usr/bin/env python3
+import json, os, sys
+d = os.environ["STUB_DIR"]
+a = sys.argv[1:]
+method, data, out, wfmt, url, hdrs = "GET", None, None, None, None, []
+i = 0
+while i < len(a):
+    x = a[i]
+    if x == "-X": method = a[i + 1]; i += 2
+    elif x in ("-H", "--header"): hdrs.append(a[i + 1]); i += 2
+    elif x in ("--max-time", "--connect-timeout", "-m", "--retry"): i += 2
+    elif x in ("-d", "--data", "--data-binary", "--data-raw"):
+        v = a[i + 1]
+        data = open(v[1:]).read() if v.startswith("@") else v
+        i += 2
+    elif x == "-o": out = a[i + 1]; i += 2
+    elif x == "-w": wfmt = a[i + 1]; i += 2
+    elif x.startswith("-"): i += 1
+    else: url = x; i += 1
+bare = url.split("?")[0]
+key = bare.replace("https://api.cloudflare.com/client/v4", "")
+with open(d + "/curl.jsonl", "a") as f:
+    f.write(json.dumps({"method": method, "key": key, "url": url, "data": data,
+                        "headers": hdrs}) + "\n")
+if method == "PUT":
+    open(d + "/uploaded", "w").write(data or "")
+resp = json.load(open(d + "/responses.json"))
+rk = method + " " + key
+status, body = 599, ""
+if rk in resp:
+    st = json.load(open(d + "/n.json")) if os.path.exists(d + "/n.json") else {}
+    n = st.get(rk, 0)
+    seq = resp[rk]
+    status, body = seq[min(n, len(seq) - 1)]
+    st[rk] = n + 1
+    json.dump(st, open(d + "/n.json", "w"))
+    if body == "@UPLOADED":
+        body = open(d + "/uploaded").read()
+elif os.environ.get("SERVE_BASE") and bare.startswith(os.environ["SERVE_BASE"]):
+    p = d + "/store/" + os.environ["SERVE_BUCKET"] + "/" + bare[len(os.environ["SERVE_BASE"]):].lstrip("/")
+    if os.path.isfile(p): status, body = 200, open(p).read()
+    else: status, body = 404, ""
+if status == 0:
+    if wfmt: sys.stdout.write(wfmt.replace("%{http_code}", "000"))
+    sys.exit(7)
+if out: open(out, "w").write(body)
+else: sys.stdout.write(body)
+if wfmt: sys.stdout.write(wfmt.replace("%{http_code}", str(status)))
+'''
+
+# An `aws s3api` stand-in backed by a directory: head-object / get-object / put-object over
+# <STUB_DIR>/store/<bucket>/<key>, user metadata and cache-control kept beside it.
+R2_AWS_STUB = r'''#!/usr/bin/env python3
+import json, os, shutil, sys
+d = os.environ["STUB_DIR"]
+a = sys.argv[1:]
+assert a[0] == "s3api", a
+cmd, opts, pos, i = a[1], {}, [], 2
+while i < len(a):
+    if a[i].startswith("--"): opts[a[i][2:]] = a[i + 1]; i += 2
+    else: pos.append(a[i]); i += 1
+b, k = opts["bucket"], opts["key"]
+path, meta = f"{d}/store/{b}/{k}", f"{d}/meta/{b}/{k}.json"
+with open(d + "/aws.jsonl", "a") as f:
+    f.write(json.dumps({"cmd": cmd, "key": k, "cache": opts.get("cache-control"),
+                        "metadata": opts.get("metadata"), "endpoint": opts.get("endpoint-url"),
+                        "region": opts.get("region")}) + "\n")
+if cmd in os.environ.get("STUB_DENY", "").split(","):
+    sys.stderr.write("An error occurred (403) when calling the %s operation: Forbidden\n" % cmd)
+    sys.exit(254)
+if cmd == "put-object":
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(meta), exist_ok=True)
+    shutil.copy(opts["body"], path)
+    md = dict(p.split("=", 1) for p in opts.get("metadata", "").split(",") if p)
+    json.dump({"Metadata": md, "CacheControl": opts.get("cache-control", "")}, open(meta, "w"))
+    print("{}")
+elif not os.path.isfile(path):
+    sys.stderr.write("An error occurred (%s) when calling the %s operation: not found\n"
+                     % ("404" if cmd == "head-object" else "NoSuchKey",
+                        "HeadObject" if cmd == "head-object" else "GetObject"))
+    sys.exit(254)
+elif cmd == "head-object":
+    print(open(meta).read() if os.path.exists(meta) else '{"Metadata":{}}')
+elif cmd == "get-object":
+    shutil.copy(path, pos[0]); print("{}")
+else:
+    sys.stderr.write("unexpected aws command " + cmd + "\n"); sys.exit(2)
+'''
+
+
+def _jsonl(path):
+    return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+
+def run_r2_steps(workflow, job, steps, *, responses=None, store=None, artifact=None,
+                 serve=None):
+    """Run named steps of an R2 workflow in order, in ONE working directory.
+
+    steps    -- [(step name, env dict)]; the run stops at the first non-zero step. A step name
+                is a string (looked up in `job`) or a (job, name) pair. A missing step ends the
+                run with rc 99, so it is a failed case rather than a crash.
+    responses-- curl stub table (see R2_CURL_STUB).
+    store    -- {"bucket/key": (content, {meta})} pre-seeded into the aws stub's bucket.
+    artifact -- {relative path: content} written to $ART_DIR before the first step.
+    serve    -- (public base url, bucket): curl GETs under it are answered from the store.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        sd = tmp / "stub"
+        sd.mkdir()
+        (sd / "responses.json").write_text(json.dumps(responses or {}))
+        for bk, (content, meta) in (store or {}).items():
+            p = sd / "store" / bk
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+            m = sd / "meta" / (bk + ".json")
+            m.parent.mkdir(parents=True, exist_ok=True)
+            m.write_text(json.dumps({"Metadata": meta, "CacheControl": ""}))
+        art = tmp / "artifact"
+        art.mkdir()
+        for rel, content in (artifact or {}).items():
+            (art / rel).parent.mkdir(parents=True, exist_ok=True)
+            (art / rel).write_text(content)
+        bin_ = tmp / "bin"
+        bin_.mkdir()
+        for name, script in (("curl", R2_CURL_STUB), ("aws", R2_AWS_STUB)):
+            (bin_ / name).write_text(script)
+            (bin_ / name).chmod(0o755)
+        env = dict(os.environ)
+        env.update({"PATH": f"{bin_}:{env['PATH']}", "STUB_DIR": str(sd),
+                    "GITHUB_OUTPUT": str(tmp / "out.txt"), "RUNNER_TEMP": str(tmp / "rt"),
+                    "ART_DIR": str(art), "GITHUB_STEP_SUMMARY": str(tmp / "summary.md"),
+                    "AWS_ACCESS_KEY_ID": "AKID", "AWS_SECRET_ACCESS_KEY": "SECRET"})
+        (tmp / "rt").mkdir()
+        if serve:
+            env["SERVE_BASE"], env["SERVE_BUCKET"] = serve
+        res = {"rc": 0, "out": ""}
+        for name, extra in steps:
+            sj, sn = name if isinstance(name, tuple) else (job, name)
+            try:
+                body = extract_step(workflow, sj, sn)
+            except (SystemExit, KeyError) as exc:
+                res["rc"], res["out"] = 99, res["out"] + f"STEP NOT FOUND {sj}:{sn} ({exc})\n"
+                break
+            e = dict(env)
+            e.update({k: str(v) for k, v in extra.items()})
+            proc = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+                                  capture_output=True, text=True, env=e, cwd=tmp)
+            res["rc"], res["out"] = proc.returncode, res["out"] + proc.stdout + proc.stderr
+            if proc.returncode:
+                break
+        o = tmp / "out.txt"
+        res["outputs"] = dict(l.split("=", 1) for l in o.read_text().splitlines()
+                              if "=" in l) if o.exists() else {}
+        res["curl"] = _jsonl(sd / "curl.jsonl")
+        res["aws"] = _jsonl(sd / "aws.jsonl")
+        res["store"] = {str(p.relative_to(sd / "store")): p.read_text()
+                        for p in (sd / "store").rglob("*") if p.is_file()} \
+            if (sd / "store").exists() else {}
+        res["meta"] = {str(p.relative_to(sd / "meta"))[:-5]: json.loads(p.read_text())
+                       for p in (sd / "meta").rglob("*.json")} if (sd / "meta").exists() else {}
+        res["summary"] = (tmp / "summary.md").read_text() if (tmp / "summary.md").exists() else ""
+        return res
+
+
+def ok_json(result):
+    return [200, json.dumps({"success": True, "errors": [], "result": result})]
+
+
+def r2_bootstrap_cases():
+    acct, zone = "a" * 32, "b" * 32
+    bk = f"/accounts/{acct}/r2/buckets/bkt"
+    base_env = {"ACCOUNT_ID": acct, "BUCKET": "bkt", "DOMAIN": "downloads.example.com",
+                "ZONE_ID": zone, "JURISDICTION": "default", "LOCATION_HINT": "",
+                "CF_API_TOKEN": "tok", "PROBE_TIMEOUT": "2", "PROBE_POLL": "0",
+                "RUN_ID": "77", "RUN_ATTEMPT": "2"}
+
+    def step(name, responses=None, **env):
+        e = dict(base_env)
+        e.update(env)
+        return run_r2_steps(R2_BOOTSTRAP, "bootstrap", [(name, e)], responses=responses)
+
+    def sent(r, method):
+        return [c for c in r["curl"] if c["method"] == method]
+
+    def sent_body(r, method):
+        c = sent(r, method)
+        return json.loads(c[0]["data"]) if c and c[0]["data"] else {}
+
+    print("bootstrap-r2-bucket · Validate the inputs")
+    v = "Validate the inputs"
+    check("valid inputs pass", step(v)["rc"] == 0)
+    for label, over in (("a short account id", {"ACCOUNT_ID": "abc"}),
+                        ("an upper-case bucket name", {"BUCKET": "Bad_Name"}),
+                        ("a 2-char bucket name", {"BUCKET": "ab"}),
+                        ("an unknown jurisdiction", {"JURISDICTION": "mars"}),
+                        ("an unknown location hint", {"LOCATION_HINT": "moon"}),
+                        ("a domain with a scheme", {"DOMAIN": "https://downloads.example.com"}),
+                        ("a domain with a path", {"DOMAIN": "downloads.example.com/x"}),
+                        ("a short zone id", {"ZONE_ID": "zz"}),
+                        ("a non-numeric probe timeout", {"PROBE_TIMEOUT": "soon"})):
+        r = step(v, **over)
+        check(f"rejects {label}", r["rc"] != 0 and "::error::" in r["out"], r["out"])
+
+    print("bootstrap-r2-bucket · Ensure the bucket")
+    b = "Ensure the bucket"
+    created = {f"GET {bk}": [[404, '{"success":false,"errors":[{"code":10006}]}']],
+               f"POST /accounts/{acct}/r2/buckets": [ok_json({"name": "bkt"})]}
+    r = step(b, created)
+    check("a missing bucket is created", r["rc"] == 0 and len(sent(r, "POST")) == 1, r["out"])
+    check("and reported as created", r["outputs"].get("bucket_created") == "true", r["outputs"])
+    check("the create body names the bucket and sends no location hint",
+          sent_body(r, "POST") == {"name": "bkt"}, sent(r, "POST"))
+    r = step(b, created, LOCATION_HINT="weur", JURISDICTION="eu")
+    check("a location hint rides in the create body",
+          sent_body(r, "POST").get("locationHint") == "weur", r["curl"])
+    check("a non-default jurisdiction sets cf-r2-jurisdiction on every call",
+          all("cf-r2-jurisdiction: eu" in c["headers"] for c in r["curl"]), r["curl"])
+    r = step(b, created)
+    check("the default jurisdiction sends no jurisdiction header",
+          not any("jurisdiction" in " ".join(c["headers"]) for c in r["curl"]), r["curl"])
+    r = step(b, {f"GET {bk}": [ok_json({"name": "bkt"})]})
+    check("an existing bucket is left alone", r["rc"] == 0 and not sent(r, "POST"), r["out"])
+    check("and reported as not created", r["outputs"].get("bucket_created") == "false",
+          r["outputs"])
+    r = step(b, {f"GET {bk}": [[500, '{"success":false,"errors":[{"message":"boom"}]}']]})
+    check("a 500 on the lookup stops the run without creating",
+          r["rc"] != 0 and not sent(r, "POST") and "boom" in r["out"], r["out"])
+    r = step(b, {**created, f"POST /accounts/{acct}/r2/buckets": [
+        [200, '{"success":false,"errors":[{"message":"no permission"}]}']]})
+    check("success:false on a call fails and prints Cloudflare's text",
+          r["rc"] != 0 and "no permission" in r["out"], r["out"])
+
+    print("bootstrap-r2-bucket · Ensure the custom domain")
+    d = "Ensure the custom domain"
+    dk = f"{bk}/domains/custom"
+    dom = {"domain": "downloads.example.com", "enabled": True, "zoneId": zone}
+    r = step(d, {f"GET {dk}": [ok_json({"domains": []})], f"POST {dk}": [ok_json(dom)]})
+    body = sent_body(r, "POST")
+    check("an absent domain is attached", r["rc"] == 0 and len(sent(r, "POST")) == 1, r["out"])
+    check("with domain, zoneId and enabled in the body",
+          body == {"domain": "downloads.example.com", "zoneId": zone, "enabled": True}, body)
+    check("and reported as attached", r["outputs"].get("domain_attached") == "true", r["outputs"])
+    r = step(d, {f"GET {dk}": [ok_json({"domains": [dom]})]})
+    check("an attached enabled domain changes nothing",
+          r["rc"] == 0 and not sent(r, "POST") and not sent(r, "PUT"), r["out"])
+    check("and is reported as not attached", r["outputs"].get("domain_attached") == "false",
+          r["outputs"])
+    off = dict(dom, enabled=False)
+    r = step(d, {f"GET {dk}": [ok_json({"domains": [off]})],
+                 f"PUT {dk}/downloads.example.com": [ok_json(dom)]})
+    check("a disabled domain is re-enabled",
+          r["rc"] == 0 and len(sent(r, "PUT")) == 1
+          and sent_body(r, "PUT") == {"enabled": True}, r["out"])
+    check("and counts as changed", r["outputs"].get("domain_attached") == "true", r["outputs"])
+    other = dict(dom, zoneId="c" * 32)
+    r = step(d, {f"GET {dk}": [ok_json({"domains": [other]})]})
+    check("a domain attached under another zone fails",
+          r["rc"] != 0 and "zone" in r["out"] and not sent(r, "POST") and not sent(r, "PUT"),
+          r["out"])
+    r = step(d, {f"GET {dk}": [ok_json({"domains": [dict(dom, domain="Downloads.Example.com")]})]})
+    check("domain names compare case-insensitively",
+          r["rc"] == 0 and not sent(r, "POST"), r["out"])
+
+    print("bootstrap-r2-bucket · Ensure r2.dev is off")
+    m = "Ensure r2.dev is off"
+    mk = f"{bk}/domains/managed"
+    r = step(m, {f"GET {mk}": [ok_json({"enabled": True, "domain": "pub-x.r2.dev"})],
+                 f"PUT {mk}": [ok_json({"enabled": False})]})
+    check("an enabled r2.dev URL is switched off",
+          r["rc"] == 0 and len(sent(r, "PUT")) == 1
+          and sent_body(r, "PUT") == {"enabled": False}, r["out"])
+    check("and counts as changed", r["outputs"].get("managed_changed") == "true", r["outputs"])
+    r = step(m, {f"GET {mk}": [ok_json({"enabled": False, "domain": "pub-x.r2.dev"})]})
+    check("an r2.dev URL already off is not touched",
+          r["rc"] == 0 and not sent(r, "PUT")
+          and r["outputs"].get("managed_changed") == "false", r["out"])
+
+    print("bootstrap-r2-bucket · Probe the public path")
+    p = "Probe the public path"
+    ok_obj = f"{bk}/objects/_probe-77-2.txt"
+    pub = "https://downloads.example.com"
+    good = {f"PUT {ok_obj}": [ok_json({})], f"DELETE {ok_obj}": [ok_json({})],
+            f"GET {pub}/_probe-77-2.txt": [[200, "@UPLOADED"]],
+            f"GET {pub}/": [[404, ""]]}
+    r = step(p, good)
+    check("a serving domain passes the probe", r["rc"] == 0, r["out"])
+    check("the probe is deleted afterwards", len(sent(r, "DELETE")) == 1, r["curl"])
+    check("the public GET carries a cache-buster",
+          any("?cb=77-2" in c["url"] for c in r["curl"] if c["key"].endswith(".txt")
+              and c["method"] == "GET"), r["curl"])
+    r = step(p, {**good, f"GET {pub}/_probe-77-2.txt": [[404, ""], [404, ""], [200, "@UPLOADED"]]},
+             PROBE_TIMEOUT="30", PROBE_POLL="0")
+    check("a domain that is not ready yet is retried until it serves",
+          r["rc"] == 0 and len(sent(r, "DELETE")) == 1, r["out"])
+    r = step(p, {**good, f"GET {pub}/_probe-77-2.txt": [[404, ""]]},
+             PROBE_TIMEOUT="2", PROBE_POLL="1")
+    check("a domain that never serves fails the run",
+          r["rc"] != 0 and "::error::" in r["out"], r["out"])
+    check("and the probe is still deleted", len(sent(r, "DELETE")) == 1, r["curl"])
+    r = step(p, {**good, f"GET {pub}/_probe-77-2.txt": [[200, "something else"]]},
+             PROBE_TIMEOUT="2", PROBE_POLL="1")
+    check("a 200 with the wrong bytes is not a pass",
+          r["rc"] != 0 and len(sent(r, "DELETE")) == 1, r["out"])
+    r = step(p, {**good, f"GET {pub}/": [[200, "<ListBucketResult></ListBucketResult>"]]})
+    check("a public bucket listing at the root fails the run",
+          r["rc"] != 0 and "listing" in r["out"], r["out"])
+    check("and the probe is still deleted after a listing failure",
+          len(sent(r, "DELETE")) == 1, r["curl"])
+    r = step(p, {**good, f"GET {pub}/": [[403, ""]]})
+    check("a 403 at the root passes", r["rc"] == 0, r["out"])
+    r = step(p, {**good, f"GET {pub}/": [[0, ""]]})
+    check("an unreachable root (curl transport failure, HTTP 000) is not read as a pass",
+          r["rc"] != 0 and "Could not verify" in r["out"] and "HTTP 000" in r["out"], r["out"])
+    r = step(p, {**good, f"GET {pub}/": [[503, ""]]})
+    check("a 5xx at the root is not read as a pass",
+          r["rc"] != 0 and "Could not verify" in r["out"] and "HTTP 503" in r["out"], r["out"])
+    r = step(p, {f"PUT {ok_obj}": [[403, '{"success":false,"errors":[{"message":"denied"}]}']],
+                 f"DELETE {ok_obj}": [[404, ""]]})
+    check("a failed probe upload fails the run and names the error",
+          r["rc"] != 0 and "denied" in r["out"], r["out"])
+    check("deleting a probe that is not there is not an error",
+          "remove it by hand" not in r["out"], r["out"])
+    r = step(p, {f"PUT {ok_obj}": [[0, ""]], f"DELETE {ok_obj}": [[404, ""]]})
+    check("a lost upload response fails the run",
+          r["rc"] != 0 and "Uploading the probe object failed" in r["out"], r["out"])
+    check("and the probe is still deleted (the object may have been stored)",
+          len(sent(r, "DELETE")) == 1, r["curl"])
+
+    print("bootstrap-r2-bucket · Summary")
+    s = "Summary"
+    r = step(s, BUCKET_CREATED="false", DOMAIN_ATTACHED="false", MANAGED_CHANGED="false")
+    check("a converged bucket reports changed=false",
+          r["rc"] == 0 and r["outputs"].get("changed") == "false", r["out"])
+    r = step(s, BUCKET_CREATED="false", DOMAIN_ATTACHED="true", MANAGED_CHANGED="false")
+    check("any change reports changed=true",
+          r["outputs"].get("changed") == "true", r["outputs"])
+    check("the public url is an output",
+          r["outputs"].get("public_url") == "https://downloads.example.com", r["outputs"])
+
+
+def r2_publish_cases():
+    acct = "a" * 32
+    pub = "https://downloads.example.com"
+    base = {"ACCOUNT_ID": acct, "BUCKET": "bkt", "PREFIX": "downloads", "VERSION": "v1.2.3",
+            "PUBLIC_BASE_URL": pub, "UPDATE_LATEST": "auto", "READBACK_TIMEOUT": "2",
+            "READBACK_SLEEP": "1", "RUN_ID": "9", "RUN_ATTEMPT": "1"}
+    files = {"app.zip": "ZIPBYTES", "docs/guide.txt": "GUIDE"}
+    sha = {k: hashlib.sha256(v.encode()).hexdigest() for k, v in files.items()}
+    # upload job: V, INV, PUB. latest job: L_INV, DEC, VFY (gate), ADV, RB (extra check).
+    V, INV, PUB = ("Validate the inputs", "Inventory the artifact", "Publish the version objects")
+    L_INV = ("latest", INV)
+    DEC = ("latest", "Decide whether latest moves")
+    VFY = ("latest", "Verify the version objects through the public URL")
+    ADV = ("latest", "Advance latest")
+    RB = ("latest", "Read back latest through the public URL")
+
+    def run(names, *, store=None, artifact=files, serve=True, responses=None, **env):
+        e = dict(base)
+        e.update(env)
+        steps = [(n, e) for n in names]
+        return run_r2_steps(R2_PUBLISH, "upload", steps, store=store, artifact=artifact,
+                            serve=(pub, "bkt") if serve else None, responses=responses)
+
+    print("publish-r2-artifact · Validate the inputs")
+    check("valid inputs pass", run([V])["rc"] == 0)
+    for label, over in (("a two-part version", {"VERSION": "v1.2"}),
+                        ("a version without the v", {"VERSION": "1.2.3"}),
+                        ("a pre-release version", {"VERSION": "v1.2.3-rc1"}),
+                        ("a leading zero in the major", {"VERSION": "v01.2.3"}),
+                        ("a leading zero in the minor", {"VERSION": "v1.02.3"}),
+                        ("a leading zero in the patch", {"VERSION": "v1.2.03"}),
+                        ("a 10-digit version part", {"VERSION": "v1234567890.0.0"}),
+                        ("an empty prefix", {"PREFIX": ""}),
+                        ("a leading slash in the prefix", {"PREFIX": "/a"}),
+                        ("a trailing slash in the prefix", {"PREFIX": "a/"}),
+                        ("an empty prefix segment", {"PREFIX": "a//b"}),
+                        ("a .. prefix segment", {"PREFIX": "a/../b"}),
+                        ("an unknown update_latest", {"UPDATE_LATEST": "sometimes"}),
+                        ("a plain-http public url", {"PUBLIC_BASE_URL": "http://x.example.com"}),
+                        ("a public url with a path", {"PUBLIC_BASE_URL": pub + "/files"}),
+                        ("a short account id", {"ACCOUNT_ID": "abc"}),
+                        ("a non-numeric readback timeout", {"READBACK_TIMEOUT": "soon"})):
+        r = run([V], **over)
+        check(f"rejects {label}", r["rc"] != 0 and "::error::" in r["out"], r["out"])
+    r = run([V], PREFIX="tools/cli")
+    check("a nested prefix is accepted", r["rc"] == 0, r["out"])
+    for ok in ("v0.0.0", "v20261019.0.0", "v999999999.999999999.999999999"):
+        check(f"{ok} is an accepted version", run([V], VERSION=ok)["rc"] == 0, ok)
+
+    print("publish-r2-artifact · Inventory the artifact")
+    r = run([V, INV])
+    check("an artifact is inventoried and the count printed",
+          r["rc"] == 0 and "examined 2 file(s)" in r["out"], r["out"])
+    r = run([V, INV], artifact={})
+    check("an empty artifact fails (0 files)",
+          r["rc"] != 0 and "examined 0 file(s)" in r["out"], r["out"])
+    for label, art in (("a file name with a space", {"my file.zip": "x"}),
+                       ("a file name with a plus", {"a+b.zip": "x"}),
+                       ("a bundled .sha256 file", {"app.zip": "x", "app.zip.sha256": "y"}),
+                       ("a top-level version.txt", {"app.zip": "x", "version.txt": "v1.0.0"})):
+        r = run([V, INV], artifact=art)
+        check(f"rejects {label}", r["rc"] != 0 and "::error::" in r["out"], r["out"])
+    r = run([V, INV], artifact={"app.zip": "x", "docs/version.txt": "y"})
+    check("a nested version.txt is allowed", r["rc"] == 0, r["out"])
+
+    print("publish-r2-artifact · Publish the version objects")
+    r = run([V, INV, PUB])
+    keys = sorted(r["store"])
+    want = sorted(f"bkt/downloads/v1.2.3/{n}{s}" for n in files for s in ("", ".sha256"))
+    check("every file and its .sha256 are uploaded under prefix/version/",
+          r["rc"] == 0 and keys == want, (r["out"], keys))
+    check("the sha256 object is in sha256sum format",
+          r["store"].get("bkt/downloads/v1.2.3/app.zip.sha256") == f"{sha['app.zip']}  app.zip\n",
+          r["store"])
+    puts = [c for c in r["aws"] if c["cmd"] == "put-object"]
+    check("version objects are cached immutable",
+          puts and all(c["cache"] == "public, max-age=31536000, immutable" for c in puts), puts)
+    check("each upload records its sha256 in metadata",
+          r["meta"].get("bkt/downloads/v1.2.3/app.zip", {}).get("Metadata", {}).get("sha256") == sha["app.zip"],
+          r["meta"])
+    check("the S3 endpoint is built from the account id, region auto",
+          all(c["endpoint"] == f"https://{acct}.r2.cloudflarestorage.com"
+              and c["region"] == "auto" for c in r["aws"]), r["aws"][:2])
+    seeded = {}
+    for n, v in files.items():
+        line = f"{sha[n]}  {n.split('/')[-1]}\n"
+        seeded[f"bkt/downloads/v1.2.3/{n}"] = (v, {"sha256": sha[n]})
+        seeded[f"bkt/downloads/v1.2.3/{n}.sha256"] = (
+            line, {"sha256": hashlib.sha256(line.encode()).hexdigest()})
+    r = run([V, INV, PUB], store=seeded)
+    check("re-running a published version is a no-op (no uploads)",
+          r["rc"] == 0 and not [c for c in r["aws"] if c["cmd"] == "put-object"], r["out"])
+    r = run([V, INV, PUB], store={"bkt/downloads/v1.2.3/app.zip": ("OLD", {"sha256": "0" * 64})})
+    check("a present object with a different sha256 fails the run",
+          r["rc"] != 0 and "already exists with different bytes" in r["out"], r["out"])
+    check("and is not overwritten", r["store"].get("bkt/downloads/v1.2.3/app.zip") == "OLD",
+          r["store"])
+    r = run([V, INV, PUB], store={"bkt/downloads/v1.2.3/app.zip": ("ZIPBYTES", {})})
+    check("a present object with no recorded sha256 fails the run (not provably identical)",
+          r["rc"] != 0 and "no recorded sha256" in r["out"], r["out"])
+    check("and the check never downloads the object",
+          not [c for c in r["aws"] if c["cmd"] == "get-object"], r["aws"])
+    r = run([V, INV, PUB], store={"bkt/downloads/v1.2.3/app.zip": ("ZIPBYTES", {"sha256": sha["app.zip"]})},
+            STUB_DENY="head-object")
+    check("a 403 on HeadObject fails closed (no upload attempted)",
+          r["rc"] != 0 and "HeadObject on" in r["out"] and "failed" in r["out"]
+          and not [c for c in r["aws"] if c["cmd"] == "put-object"], (r["out"], r["aws"]))
+
+    print("publish-r2-artifact · Decide whether latest moves")
+    ver = "bkt/downloads/latest/version.txt"
+    for label, content, moves in (("absent", None, "true"), ("lower", "v1.2.2\n", "true"),
+                                  ("lower across a numeric boundary", "v1.2.10\n", "false"),
+                                  ("equal", "v1.2.3\n", "false"), ("higher", "v2.0.0\n", "false")):
+        r = run([V, INV, DEC], store={ver: (content, {})} if content else None)
+        check(f"latest/version.txt {label}: moves={moves}",
+              r["rc"] == 0 and r["outputs"].get("move") == moves, (r["out"], r["outputs"]))
+    ver_cases = (("a part-by-part compare: v1.0.1000000 is not newer than v1.1.0",
+                  "v1.0.1000000", "v1.1.0\n", "false"),
+                 ("a part-by-part compare: v1.1.0 is newer than v1.0.1000000",
+                  "v1.1.0", "v1.0.1000000\n", "true"),
+                 ("a big major moves past v1.0.0", "v20261019.0.0", "v1.0.0\n", "true"),
+                 ("a big latest major is not rolled back", "v1.0.0", "v20261019.0.0\n", "false"),
+                 ("a patch bump moves", "v1.2.4", "v1.2.3\n", "true"),
+                 ("a minor bump beats a larger patch", "v1.3.0", "v1.2.999999999\n", "true"))
+    for label, newv, cur, moves in ver_cases:
+        r = run([V, INV, DEC], store={ver: (cur, {})}, VERSION=newv)
+        check(f"{label}: moves={moves}",
+              r["rc"] == 0 and r["outputs"].get("move") == moves, (r["out"], r["outputs"]))
+    r = run([V, INV, DEC], store={ver: ("v01.2.3", {})})
+    check("a latest/version.txt with a leading zero is corrupt",
+          r["rc"] != 0 and "not vX.Y.Z" in r["out"], r["out"])
+    r = run([V, INV, DEC], store={ver: ("v1.2.3", {})}, STUB_DENY="get-object")
+    check("a 403 on GetObject of latest/version.txt fails closed (latest/ is not written)",
+          r["rc"] != 0 and "Reading downloads/latest/version.txt failed" in r["out"]
+          and r["outputs"].get("move") is None, (r["out"], r["outputs"]))
+    r = run([V, INV, DEC], store={ver: ("not-a-version", {})})
+    check("a corrupt latest/version.txt fails the run",
+          r["rc"] != 0 and "not vX.Y.Z" in r["out"], r["out"])
+    r = run([V, INV, DEC], UPDATE_LATEST="never")
+    check("update_latest: never skips latest and does not read it",
+          r["outputs"].get("move") == "false" and not r["aws"], r["aws"])
+
+    print("publish-r2-artifact · Advance latest")
+    r = run([V, INV, PUB, DEC, ADV])
+    lkeys = sorted(k for k in r["store"] if "/latest/" in k)
+    check("latest/ gets every file, its .sha256 and version.txt",
+          r["rc"] == 0 and lkeys == sorted(
+              ["bkt/downloads/latest/app.zip", "bkt/downloads/latest/app.zip.sha256",
+               "bkt/downloads/latest/docs/guide.txt", "bkt/downloads/latest/docs/guide.txt.sha256",
+               ver]), (r["out"], lkeys))
+    check("version.txt holds the version", r["store"].get(ver) == "v1.2.3\n", r["store"])
+    lputs = [c["key"] for c in r["aws"] if c["cmd"] == "put-object" and "/latest/" in c["key"]]
+    check("version.txt is written LAST", lputs and lputs[-1].endswith("latest/version.txt"),
+          lputs)
+    check("latest/ objects use the short cache",
+          all(c["cache"] == "public, max-age=300" for c in r["aws"]
+              if c["cmd"] == "put-object" and "/latest/" in c["key"]), r["aws"])
+    check("latest_moved is reported true", r["outputs"].get("latest_moved") == "true", r["outputs"])
+    r = run([V, INV, PUB, DEC, ADV], store={ver: ("v9.0.0\n", {})})
+    check("a higher latest is left alone and latest_moved is false",
+          r["rc"] == 0 and r["store"].get(ver) == "v9.0.0\n"
+          and r["outputs"].get("latest_moved") == "false", (r["out"], r["outputs"]))
+    r = run([V, INV, PUB, DEC, ADV], store={"bkt/downloads/latest/old-only.txt": ("OLD", {}),
+                                            ver: ("v1.0.0\n", {})})
+    check("files only an older release put in latest/ are left in place",
+          r["rc"] == 0 and r["store"].get("bkt/downloads/latest/old-only.txt") == "OLD", r["out"])
+
+    print("publish-r2-artifact · Verify the version objects / read back latest")
+    full = [V, INV, PUB, L_INV, DEC, VFY, ADV, RB]
+    app = f"GET {pub}/downloads/v1.2.3/app.zip"
+    old = ("v1.0.0\n", {})
+    r = run(full)
+    check("latest moved after the version objects verified",
+          r["rc"] == 0 and r["outputs"].get("latest_moved") == "true"
+          and r["store"].get(ver) == "v1.2.3\n", (r["out"], r["outputs"]))
+    gets = [c["key"] for c in r["curl"]]
+    check("a published release reads back clean", r["rc"] == 0, r["out"])
+    check("version and latest files are both fetched",
+          any("/v1.2.3/app.zip" in g for g in gets) and any("/latest/app.zip" in g for g in gets),
+          gets)
+    check("every read-back carries a cache-buster",
+          r["curl"] and all("?cb=9-1" in c["url"] for c in r["curl"]), r["curl"][:2])
+    r = run(full, UPDATE_LATEST="never")
+    check("when latest did not move, latest/ is not read back (version objects still are)",
+          r["rc"] == 0 and not any("/latest/" in c["key"] for c in r["curl"])
+          and any("/v1.2.3/app.zip" in c["key"] for c in r["curl"]), r["out"])
+    r = run(full, store={ver: ("v9.0.0\n", {})})
+    check("a latest that is higher is not read back",
+          r["rc"] == 0 and not any("/latest/" in c["key"] for c in r["curl"]), r["out"])
+
+    r = run(full, store={ver: old}, responses={app: [[200, "TAMPERED"]]})
+    check("bytes that differ from what was published fail the version read-back",
+          r["rc"] != 0 and "served different bytes" in r["out"] and "/v1.2.3/app.zip" in r["out"],
+          r["out"])
+    check("and a read-back mismatch leaves latest/version.txt untouched",
+          r["store"].get(ver) == "v1.0.0\n"
+          and not [c for c in r["aws"] if c["cmd"] == "put-object" and "/latest/" in c["key"]],
+          (r["store"], r["aws"]))
+    r = run(full, store={ver: old}, responses={app: [[404, ""]]})
+    check("a file that never becomes public fails the read-back after the timeout",
+          r["rc"] != 0 and "answered HTTP 404" in r["out"], r["out"])
+    check("and latest/ stays where it was", r["store"].get(ver) == "v1.0.0\n", r["store"])
+    r = run(full, store={ver: old}, responses={app: [[0, ""]]})
+    check("a transport failure (HTTP 000) fails the read-back",
+          r["rc"] != 0 and "answered HTTP 000" in r["out"], r["out"])
+    check("and latest/ stays where it was (transport failure)",
+          r["store"].get(ver) == "v1.0.0\n", r["store"])
+    r = run(full, store={ver: old}, responses={app: [[503, ""]]})
+    check("a 5xx fails the read-back",
+          r["rc"] != 0 and "answered HTTP 503" in r["out"], r["out"])
+    r = run(full, responses={f"GET {pub}/downloads/latest/app.zip": [[200, "TAMPERED"]]})
+    check("a latest/ mismatch after the move is reported by the extra check",
+          r["rc"] != 0 and "served different bytes" in r["out"] and "/latest/app.zip" in r["out"],
+          r["out"])
+
+    print("publish-r2-artifact · Workflow shape")
+    doc = yaml.safe_load(R2_PUBLISH.read_text())
+    jobs = doc["jobs"]
+    key = "publish-r2-${{ inputs.bucket }}-${{ inputs.prefix }}"
+    check("the upload job takes no concurrency lock", "concurrency" not in jobs["upload"], jobs["upload"].keys())
+    check("the latest job holds the bucket+prefix group without cancel-in-progress",
+          jobs["latest"].get("concurrency") == {"group": key, "cancel-in-progress": False},
+          jobs["latest"].get("concurrency"))
+    check("latest waits for upload", jobs["latest"].get("needs") == "upload", jobs["latest"].get("needs"))
+    check("the S3 key secrets are not in any job-level env",
+          not any("secrets." in str(j.get("env", {})) for j in jobs.values()),
+          [j.get("env") for j in jobs.values()])
+    scoped = {sn for jn, j in jobs.items() for st in j["steps"]
+              if any("secrets." in str(v) for v in st.get("env", {}).values())
+              for sn in [st["name"]]}
+    check("the secrets reach exactly the steps that call aws",
+          scoped == {"Publish the version objects", "Decide whether latest moves", "Advance latest"},
+          scoped)
+    outs = (doc.get("on") or doc[True])["workflow_call"]["outputs"]
+    check("workflow outputs keep their names, wired from the right jobs",
+          outs["version_url"]["value"] == "${{ jobs.upload.outputs.version_url }}"
+          and outs["latest_moved"]["value"] == "${{ jobs.latest.outputs.latest_moved }}",
+          outs)
 
 
 def check(name, cond, detail=""):
@@ -3411,6 +4002,9 @@ def main():
     r = run_logs_step(logs, traffic=[])
     check("no revision carrying traffic is cannot-verify",
           r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
+
+    r2_bootstrap_cases()
+    r2_publish_cases()
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

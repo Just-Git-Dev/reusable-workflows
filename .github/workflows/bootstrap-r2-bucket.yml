@@ -1,0 +1,343 @@
+name: Bootstrap Cloudflare R2 public bucket (reusable)
+
+# Converges ONE Cloudflare R2 bucket for public downloads: the bucket exists, a custom domain
+# on the caller's zone serves it, the r2.dev managed public URL is OFF, and a real object round
+# trip through the public address proves the path works. Idempotent: a second run changes
+# nothing and says so. Spec: docs/bootstrap-r2-bucket.md.
+#
+# Cloudflare API token (account-scoped):
+#   Workers R2 Storage: Edit                      (bucket, its domains, the probe object)
+#   Zone:Zone:Read + Zone:DNS:Edit on zone_id     (attaching a custom domain writes DNS)
+
+on:
+  workflow_call:
+    inputs:
+      account_id:
+        description: 'Cloudflare account id (32 hex characters).'
+        type: string
+        required: true
+      bucket_name:
+        description: 'Bucket name: 3-63 chars, lower-case letters, digits, hyphens.'
+        type: string
+        required: true
+      custom_domain:
+        description: 'Hostname to serve the bucket on, e.g. downloads.example.com.'
+        type: string
+        required: true
+      zone_id:
+        description: 'Id of the zone that owns custom_domain (32 hex characters).'
+        type: string
+        required: true
+      jurisdiction:
+        description: 'default | eu | us | fedramp | fedramp-high. Fixed at bucket creation.'
+        type: string
+        required: false
+        default: 'default'
+      location_hint:
+        description: 'apac | eeur | enam | weur | wnam | oc, or empty. Used only when the bucket is created.'
+        type: string
+        required: false
+        default: ''
+      probe_timeout_seconds:
+        description: 'How long to wait for the custom domain to start serving.'
+        type: number
+        required: false
+        default: 300
+      probe_poll_seconds:
+        description: 'Seconds between probe attempts.'
+        type: number
+        required: false
+        default: 15
+      timeout_minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 15
+    secrets:
+      cloudflare_api_token:
+        description: 'Cloudflare API token - see the permissions in this file’s header.'
+        required: true
+    outputs:
+      changed:
+        description: 'true if the run created or modified anything, else false.'
+        value: ${{ jobs.bootstrap.outputs.changed }}
+      bucket_created:
+        description: 'true if this run created the bucket.'
+        value: ${{ jobs.bootstrap.outputs.bucket_created }}
+      domain_attached:
+        description: 'true if this run attached or re-enabled the custom domain.'
+        value: ${{ jobs.bootstrap.outputs.domain_attached }}
+      public_url:
+        description: 'https://<custom_domain>'
+        value: ${{ jobs.bootstrap.outputs.public_url }}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two runs against one bucket would race on the create and the domain attach.
+  group: bootstrap-r2-bucket-${{ inputs.account_id }}-${{ inputs.bucket_name }}
+  cancel-in-progress: false
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.6.1
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      changed: ${{ steps.summary.outputs.changed }}
+      bucket_created: ${{ steps.bucket.outputs.bucket_created }}
+      domain_attached: ${{ steps.domain.outputs.domain_attached }}
+      public_url: ${{ steps.summary.outputs.public_url }}
+    steps:
+      - name: Validate the inputs
+        env:
+          ACCOUNT_ID:    ${{ inputs.account_id }}
+          BUCKET:        ${{ inputs.bucket_name }}
+          DOMAIN:        ${{ inputs.custom_domain }}
+          ZONE_ID:       ${{ inputs.zone_id }}
+          JURISDICTION:  ${{ inputs.jurisdiction }}
+          LOCATION_HINT: ${{ inputs.location_hint }}
+          PROBE_TIMEOUT: ${{ inputs.probe_timeout_seconds }}
+          PROBE_POLL:    ${{ inputs.probe_poll_seconds }}
+        run: |
+          fail() { echo "::error::$1" >&2; exit 1; }
+          [[ "$ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]] || fail "account_id must be 32 hex characters."
+          [[ "$ZONE_ID" =~ ^[0-9a-f]{32}$ ]]    || fail "zone_id must be 32 hex characters."
+          [[ "$BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] \
+            || fail "bucket_name must be 3-63 chars: lower-case letters, digits, hyphens, not starting or ending with a hyphen."
+          [[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ && "$DOMAIN" == *.* ]] \
+            || fail "custom_domain must be a bare hostname (no scheme, path or port), e.g. downloads.example.com."
+          case "$JURISDICTION" in default|eu|us|fedramp|fedramp-high) ;;
+            *) fail "jurisdiction must be default, eu, us, fedramp or fedramp-high." ;; esac
+          case "$LOCATION_HINT" in ''|apac|eeur|enam|weur|wnam|oc) ;;
+            *) fail "location_hint must be empty or one of apac, eeur, enam, weur, wnam, oc." ;; esac
+          [[ "$PROBE_TIMEOUT" =~ ^[0-9]+$ ]] || fail "probe_timeout_seconds must be a whole number."
+          [[ "$PROBE_POLL" =~ ^[0-9]+$ ]]    || fail "probe_poll_seconds must be a whole number."
+          echo "Bucket $BUCKET on $DOMAIN (jurisdiction $JURISDICTION) validated."
+
+      - name: Ensure the bucket
+        id: bucket
+        env:
+          ACCOUNT_ID:    ${{ inputs.account_id }}
+          BUCKET:        ${{ inputs.bucket_name }}
+          JURISDICTION:  ${{ inputs.jurisdiction }}
+          LOCATION_HINT: ${{ inputs.location_hint }}
+          CF_API_TOKEN:  ${{ secrets.cloudflare_api_token }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets"
+          RESP=$(mktemp)
+          hdr=(-H "Authorization: Bearer $CF_API_TOKEN")
+          [ "$JURISDICTION" = default ] || hdr+=(-H "cf-r2-jurisdiction: $JURISDICTION")
+          # cf METHOD URL [JSON-BODY]: sets CODE, leaves the response body in $RESP.
+          cf() {
+            local m=$1 u=$2; shift 2
+            local extra=(); [ $# -eq 0 ] || extra=(-H "Content-Type: application/json" --data "$1")
+            CODE=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 60 -X "$m" "${hdr[@]}" "${extra[@]}" "$u") || CODE=000
+          }
+          ok() { [[ "$CODE" == 2* ]] && [ "$(jq -r '.success // false' "$RESP" 2>/dev/null)" = true ]; }
+          die() { echo "::error::$1 (HTTP $CODE)" >&2; jq -c '.errors // .' "$RESP" >&2 2>/dev/null || cat "$RESP" >&2; exit 1; }
+
+          cf GET "$api/$BUCKET"
+          if ok; then
+            echo "Bucket $BUCKET exists."
+            echo "bucket_created=false" >> "$GITHUB_OUTPUT"
+          elif [ "$CODE" = 404 ]; then
+            body=$(jq -nc --arg n "$BUCKET" --arg l "$LOCATION_HINT" \
+                     '{name: $n} + (if $l == "" then {} else {locationHint: $l} end)')
+            cf POST "$api" "$body"
+            ok || die "Creating bucket $BUCKET failed"
+            echo "Created bucket $BUCKET."
+            echo "bucket_created=true" >> "$GITHUB_OUTPUT"
+          else
+            die "Looking up bucket $BUCKET failed"
+          fi
+
+      - name: Ensure the custom domain
+        id: domain
+        env:
+          ACCOUNT_ID:   ${{ inputs.account_id }}
+          BUCKET:       ${{ inputs.bucket_name }}
+          DOMAIN:       ${{ inputs.custom_domain }}
+          ZONE_ID:      ${{ inputs.zone_id }}
+          JURISDICTION: ${{ inputs.jurisdiction }}
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/domains/custom"
+          RESP=$(mktemp)
+          dom=$(tr '[:upper:]' '[:lower:]' <<<"$DOMAIN")
+          hdr=(-H "Authorization: Bearer $CF_API_TOKEN")
+          [ "$JURISDICTION" = default ] || hdr+=(-H "cf-r2-jurisdiction: $JURISDICTION")
+          cf() {
+            local m=$1 u=$2; shift 2
+            local extra=(); [ $# -eq 0 ] || extra=(-H "Content-Type: application/json" --data "$1")
+            CODE=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 60 -X "$m" "${hdr[@]}" "${extra[@]}" "$u") || CODE=000
+          }
+          ok() { [[ "$CODE" == 2* ]] && [ "$(jq -r '.success // false' "$RESP" 2>/dev/null)" = true ]; }
+          die() { echo "::error::$1 (HTTP $CODE)" >&2; jq -c '.errors // .' "$RESP" >&2 2>/dev/null || cat "$RESP" >&2; exit 1; }
+
+          cf GET "$api"
+          ok || die "Listing custom domains of $BUCKET failed"
+          cur=$(jq -c --arg d "$dom" '[.result.domains[]? | select((.domain | ascii_downcase) == $d)][0] // empty' "$RESP")
+          if [ -z "$cur" ]; then
+            cf POST "$api" "$(jq -nc --arg d "$dom" --arg z "$ZONE_ID" '{domain: $d, zoneId: $z, enabled: true}')"
+            ok || die "Attaching $dom to $BUCKET failed"
+            echo "Attached $dom to $BUCKET."
+            echo "domain_attached=true" >> "$GITHUB_OUTPUT"
+          elif [ "$(jq -r '.zoneId' <<<"$cur")" != "$ZONE_ID" ]; then
+            echo "::error::$dom is already attached to $BUCKET under zone $(jq -r '.zoneId' <<<"$cur"), not $ZONE_ID. Detach it first; this workflow will not move a domain between zones." >&2
+            exit 1
+          elif [ "$(jq -r '.enabled' <<<"$cur")" != true ]; then
+            cf PUT "$api/$dom" '{"enabled":true}'
+            ok || die "Re-enabling $dom on $BUCKET failed"
+            echo "Re-enabled $dom on $BUCKET."
+            echo "domain_attached=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$dom is already attached and enabled."
+            echo "domain_attached=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ensure r2.dev is off
+        id: managed
+        env:
+          ACCOUNT_ID:   ${{ inputs.account_id }}
+          BUCKET:       ${{ inputs.bucket_name }}
+          JURISDICTION: ${{ inputs.jurisdiction }}
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/domains/managed"
+          RESP=$(mktemp)
+          hdr=(-H "Authorization: Bearer $CF_API_TOKEN")
+          [ "$JURISDICTION" = default ] || hdr+=(-H "cf-r2-jurisdiction: $JURISDICTION")
+          cf() {
+            local m=$1 u=$2; shift 2
+            local extra=(); [ $# -eq 0 ] || extra=(-H "Content-Type: application/json" --data "$1")
+            CODE=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 60 -X "$m" "${hdr[@]}" "${extra[@]}" "$u") || CODE=000
+          }
+          ok() { [[ "$CODE" == 2* ]] && [ "$(jq -r '.success // false' "$RESP" 2>/dev/null)" = true ]; }
+          die() { echo "::error::$1 (HTTP $CODE)" >&2; jq -c '.errors // .' "$RESP" >&2 2>/dev/null || cat "$RESP" >&2; exit 1; }
+
+          cf GET "$api"
+          ok || die "Reading the r2.dev setting of $BUCKET failed"
+          if [ "$(jq -r '.result.enabled // false' "$RESP")" = true ]; then
+            cf PUT "$api" '{"enabled":false}'
+            ok || die "Switching r2.dev off for $BUCKET failed"
+            echo "Switched the r2.dev public URL off."
+            echo "managed_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The r2.dev public URL is already off."
+            echo "managed_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Probe the public path
+        env:
+          ACCOUNT_ID:    ${{ inputs.account_id }}
+          BUCKET:        ${{ inputs.bucket_name }}
+          DOMAIN:        ${{ inputs.custom_domain }}
+          JURISDICTION:  ${{ inputs.jurisdiction }}
+          PROBE_TIMEOUT: ${{ inputs.probe_timeout_seconds }}
+          PROBE_POLL:    ${{ inputs.probe_poll_seconds }}
+          RUN_ID:        ${{ github.run_id }}
+          RUN_ATTEMPT:   ${{ github.run_attempt }}
+          CF_API_TOKEN:  ${{ secrets.cloudflare_api_token }}
+        run: |
+          dom=$(tr '[:upper:]' '[:lower:]' <<<"$DOMAIN")
+          key="_probe-${RUN_ID}-${RUN_ATTEMPT}.txt"
+          obj="https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/objects/${key}"
+          pub="https://${dom}"
+          work=$(mktemp -d)
+          RESP="$work/resp"
+          hdr=(-H "Authorization: Bearer $CF_API_TOKEN")
+          [ "$JURISDICTION" = default ] || hdr+=(-H "cf-r2-jurisdiction: $JURISDICTION")
+          printf 'r2 probe %s-%s\n' "$RUN_ID" "$RUN_ATTEMPT" > "$work/probe.txt"
+
+          uploaded=false
+          # A probe left in the bucket is public, so it is deleted on success AND failure.
+          cleanup() {
+            local rc=$?
+            if [ "$uploaded" = true ]; then
+              code=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 60 -X DELETE "${hdr[@]}" "$obj") || code=000
+              if [[ "$code" == 2* ]]; then
+                echo "Deleted the probe object."
+              elif [ "$code" = 404 ]; then
+                echo "The probe object is not there: nothing to delete."
+              else
+                echo "::error::Could not delete the public probe object $key (HTTP $code) - remove it by hand." >&2
+                rc=1
+              fi
+            fi
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          # Armed BEFORE the PUT: if the response is lost the object may still have been stored,
+          # and deleting an object that is not there is fine.
+          uploaded=true
+          code=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 60 -X PUT "${hdr[@]}" \
+                   -H "Content-Type: text/plain" --data-binary "@$work/probe.txt" "$obj") || code=000
+          if [[ "$code" != 2* ]] || [ "$(jq -r '.success // false' "$RESP" 2>/dev/null)" != true ]; then
+            echo "::error::Uploading the probe object failed (HTTP $code)" >&2
+            jq -c '.errors // .' "$RESP" >&2 2>/dev/null || cat "$RESP" >&2
+            exit 1
+          fi
+
+          deadline=$(( $(date +%s) + PROBE_TIMEOUT ))
+          while :; do
+            code=$(curl -sS -o "$work/got" -w '%{http_code}' --max-time 30 "${pub}/${key}?cb=${RUN_ID}-${RUN_ATTEMPT}") || code=000
+            if [ "$code" = 200 ] && cmp -s "$work/got" "$work/probe.txt"; then
+              echo "$pub is serving the probe object."
+              break
+            fi
+            echo "Not serving yet (HTTP $code)."
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::${pub}/${key} did not serve the uploaded bytes within ${PROBE_TIMEOUT}s (last HTTP $code). Check the custom domain's status and certificate in the Cloudflare dashboard." >&2
+              exit 1
+            fi
+            sleep "$PROBE_POLL"
+          done
+
+          # The bucket must not publish a listing of its objects.
+          code=$(curl -sS -o "$work/root" -w '%{http_code}' --max-time 30 "${pub}/") || code=000
+          if [ "$code" = 200 ]; then
+            echo "::error::GET ${pub}/ answered 200: the bucket is publishing a listing of its objects." >&2
+            exit 1
+          elif [ "$code" = 000 ] || [[ "$code" == 5* ]]; then
+            echo "::error::Could not verify that ${pub}/ is not a public listing (HTTP $code)." >&2
+            exit 1
+          fi
+          echo "GET ${pub}/ answered $code - no public listing."
+
+      - name: Summary
+        id: summary
+        env:
+          DOMAIN:         ${{ inputs.custom_domain }}
+          BUCKET:         ${{ inputs.bucket_name }}
+          BUCKET_CREATED: ${{ steps.bucket.outputs.bucket_created }}
+          DOMAIN_ATTACHED: ${{ steps.domain.outputs.domain_attached }}
+          MANAGED_CHANGED: ${{ steps.managed.outputs.managed_changed }}
+        run: |
+          changed=false
+          { [ "$BUCKET_CREATED" = true ] || [ "$DOMAIN_ATTACHED" = true ] || [ "$MANAGED_CHANGED" = true ]; } && changed=true
+          dom=$(tr '[:upper:]' '[:lower:]' <<<"$DOMAIN")
+          {
+            echo "changed=$changed"
+            echo "public_url=https://${dom}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### R2 bucket \`$BUCKET\`"
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Bucket | $([ "$BUCKET_CREATED" = true ] && echo created || echo 'already present') |"
+            echo "| Custom domain \`$dom\` | $([ "$DOMAIN_ATTACHED" = true ] && echo 'attached or re-enabled' || echo 'already attached') |"
+            echo "| r2.dev public URL | $([ "$MANAGED_CHANGED" = true ] && echo 'switched off' || echo 'already off') |"
+            echo "| Public probe | served, no listing |"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          if [ "$changed" = true ]; then echo "Converged: changes were made."; else echo "Nothing changed."; fi
