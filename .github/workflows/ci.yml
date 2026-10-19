@@ -28,8 +28,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Lint rules change only with a commit: actionlint is pinned by `version:` below, and
+      # shellcheck here. The action runs whatever `shellcheck` is on PATH (the runner image's,
+      # which moves with every image update), so a checksummed release goes first on PATH.
+      - name: install pinned shellcheck
+        shell: bash
+        env:
+          SC_VERSION: v0.11.0
+          SC_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/sc.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/${SC_VERSION}/shellcheck-${SC_VERSION}.linux.x86_64.tar.xz"
+          echo "${SC_SHA256}  $RUNNER_TEMP/sc.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/sc.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/shellcheck-${SC_VERSION}/shellcheck" --version | grep -qx "version: ${SC_VERSION#v}"
+          echo "$RUNNER_TEMP/shellcheck-${SC_VERSION}" >> "$GITHUB_PATH"
+
       - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
         with:
+          version: 1.7.12
           fail-on-error: true
 
       # actionlint only reads .github/workflows/, so a composite action's script
@@ -168,8 +185,21 @@ jobs:
               raise SystemExit("::error::no complete examples found — the extractor is broken")
           PY
 
+      - name: install pinned shellcheck  # same pin as the lint job
+        env:
+          SC_VERSION: v0.11.0
+          SC_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/sc.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/${SC_VERSION}/shellcheck-${SC_VERSION}.linux.x86_64.tar.xz"
+          echo "${SC_SHA256}  $RUNNER_TEMP/sc.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/sc.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/shellcheck-${SC_VERSION}/shellcheck" --version | grep -qx "version: ${SC_VERSION#v}"
+          echo "$RUNNER_TEMP/shellcheck-${SC_VERSION}" >> "$GITHUB_PATH"
+
       - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
         with:
+          version: 1.7.12
           files: /tmp/examples/.github/workflows/*.yml
           fail-on-error: true
 
