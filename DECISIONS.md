@@ -2,8 +2,7 @@
 
 ## Index
 
-Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
-archived by age only; nothing is deleted, and both files are greppable.
+101 entries total — 91 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
 - `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
 - `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
@@ -76,7 +75,7 @@ archived by age only; nothing is deleted, and both files are greppable.
 - `2026-08-11` — [`deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check](#2026-08-11--deploy-cloudflare-pages-gains-an-opt-in-blocking-post-deploy-smoke-check)
 - `2026-08-11` — [`cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends](#2026-08-11--cleanup-gar-images-unlocks-and-relocks-immutable-tags-and-fails-closed-on-both-ends)
 - `2026-08-11` — [Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest](#2026-08-11--onboarding-retrospective-a-generated-contract-file-an-agent-guide-and-ci-that-keeps-both-honest)
-- `2026-08-11` — [The `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
+- `2026-08-11` — [the `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
 - `2026-08-11` — [Default-on badges must not fail CI for callers without a coverage report (bug fix)](#2026-08-11--default-on-badges-must-not-fail-ci-for-callers-without-a-coverage-report-bug-fix)
 - `2026-08-11` — [README badges on by default; the badge job stops dictating caller permissions](#2026-08-11--readme-badges-on-by-default-the-badge-job-stops-dictating-caller-permissions)
 - `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11--private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
@@ -96,31 +95,16 @@ archived by age only; nothing is deleted, and both files are greppable.
 - `2026-07-15` — [live-commit stamping across deploy/promote (phase 2 of the release-process plan)](#2026-07-15--live-commit-stamping-across-deploypromote-phase-2-of-the-release-process-plan)
 - `2026-07-15` — [`rollback-service` built; no pin (push-based, not GitOps); triggers stay caller-owned](#2026-07-15--rollback-service-built-no-pin-push-based-not-gitops-triggers-stay-caller-owned)
 - `2026-07-15` — [release-process model documented; transient rollback fenced out-of-band](#2026-07-15--release-process-model-documented-transient-rollback-fenced-out-of-band)
-
-<details><summary>Archived — 10 earlier entries in <code>DECISIONS-ARCHIVE.md</code></summary>
-
-- `2026-07-14` — [key-based auth for `promote-image` (quizzing-pro prod parity)](DECISIONS-ARCHIVE.md#2026-07-14-key-based-auth-for-promote-image-quizzing-pro-prod-parity)
-- `2026-07-14` — [quizzing-pro convergence: parity audit + `manage-config-secrets`](DECISIONS-ARCHIVE.md#2026-07-14-quizzing-pro-convergence-parity-audit-manage-config-secrets)
+- `2026-07-14` — [key-based auth for `promote-image` (quizzing-pro prod parity)](DECISIONS-ARCHIVE.md#2026-07-14--key-based-auth-for-promote-image-quizzing-pro-prod-parity)
+- `2026-07-14` — [quizzing-pro convergence: parity audit + `manage-config-secrets`](DECISIONS-ARCHIVE.md#2026-07-14--quizzing-pro-convergence-parity-audit--manage-config-secrets)
 - `2026-07-14` — [Deploy-reusable gaps surfaced by the consumer B/A caller migration (v1.5.0)](DECISIONS-ARCHIVE.md#2026-07-14--deploy-reusable-gaps-surfaced-by-the-consumer-ba-caller-migration-v150)
-- `2026-07-14` — [Capability parity with `zopsmart/workflows`, verified from live callers (v1.4.0)](DECISIONS-ARCHIVE.md#2026-07-14-capability-parity-with-zopsmartworkflows-verified-from-live-callers-v140)
-- `2026-07-14` — [Fleet-wide audit; reverse the "deploy/CI kept per-repo" call](DECISIONS-ARCHIVE.md#2026-07-14-fleet-wide-audit-reverse-the-deployci-kept-per-repo-call)
-- `2026-07-13` — [Add `rotate-signing-keypair` (v1.2.0, with `rotate-worker-signing-secret`)](DECISIONS-ARCHIVE.md#2026-07-13-add-rotate-signing-keypair-v120-with-rotate-worker-signing-secret)
-- `2026-07-13` — [Add `rotate-worker-signing-secret` (v1.2.0)](DECISIONS-ARCHIVE.md#2026-07-13-add-rotate-worker-signing-secret-v120)
-- `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10-make-the-library-genuinely-public-de-brand-harden-release-properly)
-- `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10-sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
-- `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01-create-shared-cross-org-reusable-workflows-host)
-
-</details>
-
-
-> **Release note (2026-07-15): the entries below dated 2026-07-15 all ship in a single
-> tag, `v1.11.0`.** Nothing was tagged between `v1.7.0` and this release. The per-phase
-> version numbers in the individual entries (`v1.8.0` rollback-service, `v1.9.0`
-> live-commit stamping, `v1.10.0` prod forward-only, `v1.11.0` stage forward-only) are
-> **logical phase markers**, not separate published tags — they were developed in
-> sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
-> fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
-> series.
+- `2026-07-14` — [Capability parity with `zopsmart/workflows`, verified from live callers (v1.4.0)](DECISIONS-ARCHIVE.md#2026-07-14--capability-parity-with-zopsmartworkflows-verified-from-live-callers-v140)
+- `2026-07-14` — [Fleet-wide audit; reverse the "deploy/CI kept per-repo" call](DECISIONS-ARCHIVE.md#2026-07-14--fleet-wide-audit-reverse-the-deployci-kept-per-repo-call)
+- `2026-07-13` — [Add `rotate-signing-keypair` (v1.2.0, with `rotate-worker-signing-secret`)](DECISIONS-ARCHIVE.md#2026-07-13--add-rotate-signing-keypair-v120-with-rotate-worker-signing-secret)
+- `2026-07-13` — [Add `rotate-worker-signing-secret` (v1.2.0)](DECISIONS-ARCHIVE.md#2026-07-13--add-rotate-worker-signing-secret-v120)
+- `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
+- `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
+- `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
 
 ## 2026-10-19 — Local gate is CI: one make target per check, a committed pre-push hook
 
@@ -3895,6 +3879,15 @@ into the next tag.
 they only failed to help here because this skipped the PR path). Consider setting
 `enforce_admins: true` on `main` so admins can't push past the gate, and run `actionlint`
 locally before pushing. Logged to TODO.
+
+> **Release note (2026-07-15): the entries below dated 2026-07-15 all ship in a single
+> tag, `v1.11.0`.** Nothing was tagged between `v1.7.0` and this release. The per-phase
+> version numbers in the individual entries (`v1.8.0` rollback-service, `v1.9.0`
+> live-commit stamping, `v1.10.0` prod forward-only, `v1.11.0` stage forward-only) are
+> **logical phase markers**, not separate published tags — they were developed in
+> sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
+> fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
+> series.
 
 ## 2026-07-15 — `ci-go` secret renamed `github_token` → `go_private_token` (bug fix)
 
