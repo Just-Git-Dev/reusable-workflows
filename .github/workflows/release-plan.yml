@@ -530,7 +530,7 @@ jobs:
           permission-contents: read
 
       - name: Every listed service's release gate is green on its tagged sha
-        uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@b784fade1e06ce1408d0cd644e3878f9f59297fe # v3.6.1
+        uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@14620ac3d914d99b55eb90a92495a147f29a0337 # v3.7.0
         with:
           token: ${{ steps.app.outputs.token }}
           services: ${{ steps.s.outputs.services }}

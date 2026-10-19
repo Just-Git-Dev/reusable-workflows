@@ -60,7 +60,7 @@ class KeyConfinementTests(unittest.TestCase):
 
     def test_the_mint_action_is_pinned_to_the_proven_sha(self):
         for n, jn, _, st in wf.mint_steps():
-            self.assertEqual(st["uses"], "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+            self.assertEqual(st["uses"], "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
                              f"{n}:{jn}")
 
     def test_every_minting_job_runs_in_the_input_environment(self):
