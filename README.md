@@ -246,16 +246,29 @@ tag-push CI run still fires as belt-and-braces.
 
 ## Contributing
 
-`.github/workflows/ci.yml` runs `actionlint` (which includes `shellcheck` over
-every `run:` body), a check that every third-party action is SHA-pinned, and the
-version-sweep check above. Run these locally before pushing:
+### Local gate
 
-```bash
-actionlint
-python3 scripts/gen_catalog.py --check
-python3 scripts/stamp_version.py --check
-python3 tests/run_stamp_tests.py && python3 tests/run_step_tests.py
-```
+`make ci` runs exactly the checks `.github/workflows/ci.yml` runs, in CI's order; `ci.yml` calls
+the same make targets, so the two cannot drift (`tests/run_ci_make_tests.py` fails if they do).
+
+- `make hooks` once per clone: installs the committed pre-push hook (`core.hooksPath=.githooks`).
+- `make ci` before pushing (the hook runs it for you). It stops at the first failing check, names
+  the target, and prints how many checks ran (26 of 26 today).
+- What it runs: `tools` (local shellcheck and actionlint must equal CI's pinned versions, else it
+  prints the install hint), `actionlint`, `canary`, `shellcheck`, `venv` (`.venv` built from
+  `requirements-ci.txt`, the same file CI installs), the catalog, docs, version-sweep, v1-alias and
+  doc-example checks, the fixture and step-body test suites, `tools-promtool` (promtool must be the
+  pinned 3.13.1, the alertgen oracle), `alertgen`, `pinned` and the gate's own tests.
+- The hook checks the commit being pushed, not just the tree: it refuses a dirty tree, or a pushed
+  ref whose sha is not `HEAD`, and says what to do. It scrubs git's env before running checks.
+- Needs on the laptop: shellcheck 0.11.0, actionlint 1.7.12, promtool 3.13.1 on `PATH`, and
+  `python3.12` or `python3.13`. The `v1` tag must be present locally (`git fetch --tags`).
+- Over ssh GitHub can drop the idle connection while the hook runs (rc 141/128); then push over
+  HTTPS with the global git config skipped:
+  `GIT_CONFIG_GLOBAL=/dev/null git push https://github.com/Just-Git-Dev/reusable-workflows.git <branch>`.
+- Emergency bypass only: `git push --no-verify`. CI still runs the same checks.
+
+Run `make ci` before pushing; it is what CI runs.
 
 Changes here run in other people's production. Open a pull request, and record
 the reasoning in [DECISIONS.md](DECISIONS.md).

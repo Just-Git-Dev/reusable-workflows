@@ -5,6 +5,7 @@
 Newest first. Entries below the split live in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md) —
 archived by age only; nothing is deleted, and both files are greppable.
 
+- `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
 - `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
 - `2026-10-19` — [CI pins actionlint and shellcheck](#2026-10-19--ci-pins-actionlint-and-shellcheck)
 - `2026-10-16` — [`v3.6.1` released (release-flow: untitled dispatch on a tag resolves to that tag)](#2026-10-16--v361-released-release-flow-untitled-dispatch-on-a-tag-resolves-to-that-tag)
@@ -120,6 +121,16 @@ archived by age only; nothing is deleted, and both files are greppable.
 > sequence and cut together as `v1.11.0`, which also folds in the `ci-go` secret-rename
 > fix. Intermediate numbers `v1.8.0`–`v1.10.0` are intentionally skipped in the tag
 > series.
+
+## 2026-10-19 — Local gate is CI: one make target per check, a committed pre-push hook
+
+**Context.** In the sibling provisioning repo four PR runs went red on 2026-10-19 for checks the local run had skipped: local checks were retyped by hand and drifted from `ci.yml`. This repo had the same shape: 16 CI jobs of inline commands, and a README "run these locally" list that named four of them. One inline check was also wrong on a laptop: the SHA-pin check was `grep -rnP`, and BSD grep has no `-P`, so locally it errored and the step still read as passing. Owner decision, 2026-10-19: the local gate IS CI, by construction, in every repo.
+
+**Decision.** One definition per check: a make target. `make ci` runs all 26 in CI's order, stops at the first failure naming the target, and prints "N of N checks". `ci.yml` calls those same targets; only CI plumbing (checkout, the pinned shellcheck, actionlint and promtool installers) stays in YAML. `.githooks/pre-push`, installed by `make hooks`, runs `make ci`; it refuses a dirty tree or a pushed ref whose sha is not HEAD, scrubs git's env, and skips pure deletions. `tests/run_ci_make_tests.py` fails if a `run:` step is not `make <target>`, if a step and the Makefile's `CHECKS` disagree, or if a tool pin in `ci.yml` differs from the Makefile's; `tests/run_pre_push_hook_tests.py` covers the hook; both run in CI as `make ci-gate-tests`. Python deps are pinned in `requirements-ci.txt` (a repo-local `.venv`, the same file CI installs). `make tools` and `make tools-promtool` fail with an install hint unless shellcheck, actionlint and promtool equal CI's pins (0.11.0, 1.7.12, 3.13.1). Four mechanical changes keep the checks portable without changing what they check: the SHA-pin grep became `scripts/check_pinned_actions.py` (which also reports how many lines it examined); the doc-example extractor heredoc became `scripts/extract_doc_examples.py`; `mapfile` (absent from macOS bash 3.2) became `find | sort` into a variable; `raven-actions/actionlint` was replaced by a checksummed actionlint install plus `make actionlint`, since the action both installed and ran it. The version-sweep tag mode is `make version-sweep` with `EXPECT=<tag>` set from the workflow env.
+
+**Trade-offs.** The gate now fails on a laptop whose promtool is not 3.13.1 (a newer one is a different judge), so the first `make ci` needs that one install. The doc-example lint runs from a `mktemp` dir because actionlint resolves local `./.github/workflows/x.yml` refs against the enclosing git repo.
+
+**Not changed.** No `workflow_call` body or input contract changes, so no release. What each check checks is unchanged.
 
 ## 2026-10-19 — R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest
 
