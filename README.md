@@ -260,9 +260,13 @@ the same make targets, so the two cannot drift (`tests/run_ci_make_tests.py` fai
   doc-example checks, the fixture and step-body test suites, `tools-promtool` (promtool must be the
   pinned 3.13.1, the alertgen oracle), `alertgen`, `pinned` and the gate's own tests.
 - The hook checks the commit being pushed, not just the tree: it refuses a dirty tree, or a pushed
-  ref whose sha is not `HEAD`, and says what to do. It scrubs git's env before running checks.
-- Needs on the laptop: shellcheck 0.11.0, actionlint 1.7.12, promtool 3.13.1 on `PATH`, and
-  `python3.12` or `python3.13`. The `v1` tag must be present locally (`git fetch --tags`).
+  ref whose sha is not `HEAD` (an annotated tag is peeled to its commit first), and says what to
+  do. It scrubs git's env before running checks. No environment variable can replace its gate.
+- Needs on the laptop: shellcheck 0.11.0 and actionlint 1.7.12 on `PATH`, and `python3.12` or
+  `python3.13`. promtool is exact-pinned too (3.13.1): if `PATH` has another version,
+  `make tools-promtool` fetches the pinned release for your OS/arch into the gitignored `.tools/bin`,
+  verifies its sha256, and puts it first on `PATH`. The `v1` tag must be present locally
+  (`git fetch --tags`).
 - Over ssh GitHub can drop the idle connection while the hook runs (rc 141/128); then push over
   HTTPS with the global git config skipped:
   `GIT_CONFIG_GLOBAL=/dev/null git push https://github.com/Just-Git-Dev/reusable-workflows.git <branch>`.

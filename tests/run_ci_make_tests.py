@@ -96,6 +96,64 @@ def test_pinned_tool_versions_match_the_makefile():
             f"ci.yml pin differs from Makefile {var}={v}"
 
 
+def test_in_each_job_pinned_installers_come_before_every_make_step():
+    """A tool installed after the `make` step that needs it is a red first CI run, not a design."""
+    with open(CI_YML, encoding="utf-8") as fh:
+        wf = yaml.safe_load(fh)
+    examined = 0
+    for jname, job in wf["jobs"].items():
+        seen_make = None
+        for step in job["steps"]:
+            if "run" not in step:
+                continue
+            examined += 1
+            if MAKE_STEP.fullmatch(step["run"].strip()):
+                seen_make = seen_make or step["run"].strip()
+            elif step.get("name", "").startswith(PLUMBING_PREFIX) and seen_make:
+                raise AssertionError(
+                    f"job {jname}: {step['name']!r} comes after `{seen_make}`; install first")
+    assert examined, "no run: steps examined"
+
+
+def test_every_run_step_gets_bash_with_pipefail():
+    """The per-job `defaults: run: shell: bash` went away with the inline commands; keep one."""
+    with open(CI_YML, encoding="utf-8") as fh:
+        wf = yaml.safe_load(fh)
+    assert wf.get("defaults", {}).get("run", {}).get("shell") == "bash", \
+        "ci.yml needs a top-level `defaults: run: shell: bash` (GitHub's implicit shell has no pipefail)"
+
+
+def test_pinned_promtool_is_fetchable_and_checksummed_per_platform():
+    text = makefile_text()
+    with open(CI_YML, encoding="utf-8") as fh:
+        raw = fh.read()
+    m = re.search(r"PROM_SHA256:\s*([0-9a-f]{64})", raw)
+    assert m, "ci.yml has no PROM_SHA256"
+    for plat in ("darwin-arm64", "darwin-amd64", "linux-amd64"):
+        assert re.search(rf"{plat}\s*=\s*[0-9a-f]{{64}}", text) or re.search(
+            rf"{plat}[^\n]*[0-9a-f]{{64}}", text), f"Makefile has no sha256 for promtool {plat}"
+    assert m.group(1) in text, "Makefile's linux-amd64 promtool sha256 differs from ci.yml PROM_SHA256"
+    assert ".tools" in text, "Makefile does not fetch promtool into .tools/"
+
+
+def test_version_sweep_expands_expect_in_the_shell_not_in_make():
+    text = makefile_text()
+    assert "$(EXPECT)" not in text.split("version-sweep:")[1].split("\n\n")[0], \
+        "EXPECT is make-expanded into a shell string (injection); use `export EXPECT` and \"$$EXPECT\""
+
+
+def test_pinned_check_fails_on_a_missing_path():
+    script = os.path.join(ROOT, "scripts", "check_pinned_actions.py")
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "a.yml"), "w", encoding="utf-8") as fh:
+            fh.write("jobs:\n  a:\n    steps:\n      - uses: actions/checkout@" + "a" * 40 + "\n")
+        ok = subprocess.run([sys.executable, script, d], capture_output=True, text=True)
+        bad = subprocess.run([sys.executable, script, d, os.path.join(d, "no-such-dir")],
+                             capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stdout
+    assert bad.returncode == 1 and "no-such-dir" in bad.stdout, bad.stdout
+
+
 def test_checker_catches_a_retyped_step():
     """Self-test: a raw command step is not a make step, and CHECKS parses continuations."""
     assert MAKE_STEP.fullmatch("python3 -m pytest tests/ -q") is None

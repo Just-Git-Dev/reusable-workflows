@@ -43,10 +43,55 @@ def repo():
     return d
 
 
+def fake_make(gate):
+    """A dir holding a `make` that runs `gate` instead of the real suite. The hook has no env
+    seam for replacing its gate (a stray `PRE_PUSH_GATE=true git push` must not skip it), so the
+    tests put this first on PATH instead."""
+    b = tempfile.mkdtemp()
+    path = os.path.join(b, "make")
+    with open(path, "w") as fh:
+        fh.write(f"#!/usr/bin/env bash\n{gate}\n")
+    os.chmod(path, 0o755)
+    return b
+
+
 def hook(d, stdin, gate="true", **env):
     assert os.path.exists(HOOK), "no .githooks/pre-push"
-    return subprocess.run([HOOK], cwd=d, input=stdin, capture_output=True, text=True,
-                          env=_clean_env(PRE_PUSH_GATE=gate, **env))
+    e = _clean_env(**env)
+    e["PATH"] = fake_make(gate) + os.pathsep + e["PATH"]
+    return subprocess.run([HOOK], cwd=d, input=stdin, capture_output=True, text=True, env=e)
+
+
+def push(d, ref, gate="true"):
+    """A real `git push` of `ref` to a local bare remote with the hook installed."""
+    bare = tempfile.mkdtemp()
+    git(bare, "init", "-q", "--bare")
+    git(d, "config", "core.hooksPath", os.path.dirname(HOOK))
+    e = _clean_env(GIT_CONFIG_GLOBAL="/dev/null")
+    e["PATH"] = fake_make(gate) + os.pathsep + e["PATH"]
+    return subprocess.run(["git", "-C", d, "push", bare, ref], capture_output=True, text=True, env=e)
+
+
+def test_annotated_tag_at_head_passes():
+    """`git tag -a` pushes a tag OBJECT whose sha is never HEAD's; it must be peeled to its commit."""
+    d = repo()
+    git(d, "tag", "-a", "v1.0.0", "-m", "release")
+    r = push(d, "refs/tags/v1.0.0")
+    assert r.returncode == 0, r.stderr
+
+
+def test_annotated_tag_at_another_commit_is_refused():
+    d = repo()
+    git(d, "tag", "-a", "v0.9.0", "-m", "old", "HEAD~1")
+    r = push(d, "refs/tags/v0.9.0")
+    assert r.returncode != 0 and "HEAD is" in r.stderr
+
+
+def test_a_stray_pre_push_gate_env_var_does_not_replace_the_gate():
+    d = repo()
+    head = git(d, "rev-parse", "HEAD")
+    r = hook(d, f"refs/heads/main {head} refs/heads/main {ZERO}\n", gate="false", PRE_PUSH_GATE="true")
+    assert r.returncode == 1 and "gate FAILED" in r.stderr
 
 
 def test_passes_when_clean_head_and_gate_green():

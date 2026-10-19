@@ -18,6 +18,10 @@ SHA = re.compile(r'[0-9a-f]{40}\s*($|#)')
 
 def main(argv):
     roots = [pathlib.Path(a) for a in (argv[1:] or [".github/workflows", "actions"])]
+    missing = [str(r) for r in roots if not r.exists()]
+    if missing:
+        print(f"::error::path(s) not found: {', '.join(missing)}; a missing root must not pass silently")
+        return 1
     files = []
     for root in roots:
         files += list(root.rglob("*.yml")) + list(root.rglob("*.yaml"))

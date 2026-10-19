@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
 
+# Every run: step gets bash with -eo pipefail (GitHub's implicit shell has no pipefail).
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

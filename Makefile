@@ -7,6 +7,12 @@ SHELL := bash
 SHELLCHECK_VERSION := 0.11.0
 ACTIONLINT_VERSION := 1.7.12
 PROMTOOL_VERSION := 3.13.1
+# From the v3.13.1 release's sha256sums.txt; linux-amd64 must equal PROM_SHA256 in ci.yml.
+PROMTOOL_SHA256_darwin-arm64 := 28d1f1224b2a22f84c801487fad4b3bd58f94a8cb58cf9340557e787030c9703
+PROMTOOL_SHA256_darwin-amd64 := bc6cef4bdbeb3d0974ac161684dd2a0c4d4e341a13a4a634917b1c09d0f33fc5
+PROMTOOL_SHA256_linux-amd64 := 962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
+# A fetched promtool (see tools-promtool) goes first on PATH for every target.
+export PATH := $(CURDIR)/.tools/bin:$(PATH)
 
 # Order = CI's order. Add a check by adding a target and listing it here AND in ci.yml.
 CHECKS := tools actionlint canary shellcheck \
@@ -48,9 +54,31 @@ tools:
 
 # promtool is the alertgen oracle: a different version is a different judge. Separate from `tools`
 # because only the alertgen CI job installs it.
+#
+# When PATH has no promtool of exactly that version, the pinned release for this OS/arch is
+# fetched into the gitignored .tools/bin (first on PATH, see above), its sha256 verified against
+# the values from the release's sha256sums.txt. A checksum mismatch or an unsupported platform
+# fails loudly. CI installs promtool itself first, so this never downloads there.
 tools-promtool:
-	@got=$$(promtool --version 2>/dev/null | sed -n 's/^promtool, version \([^ ]*\).*/\1/p'); \
-	[ "$$got" = "$(PROMTOOL_VERSION)" ] || { echo "tools-promtool: promtool '$$got' != pinned $(PROMTOOL_VERSION); install: the prometheus-$(PROMTOOL_VERSION) release from github.com/prometheus/prometheus/releases (put its promtool first on PATH)"; exit 1; }; \
+	@have() { promtool --version 2>/dev/null | sed -n 's/^promtool, version \([^ ]*\).*/\1/p'; }; \
+	if [ "$$(have)" != "$(PROMTOOL_VERSION)" ]; then \
+	  arch=$$(uname -m); case "$$arch" in x86_64) arch=amd64;; aarch64) arch=arm64;; esac; \
+	  plat=$$(uname -s | tr 'A-Z' 'a-z')-$$arch; \
+	  case "$$plat" in \
+	    darwin-arm64) sha=$(PROMTOOL_SHA256_darwin-arm64);; \
+	    darwin-amd64) sha=$(PROMTOOL_SHA256_darwin-amd64);; \
+	    linux-amd64) sha=$(PROMTOOL_SHA256_linux-amd64);; \
+	    *) echo "tools-promtool: unsupported platform '$$plat' (have: darwin-arm64 darwin-amd64 linux-amd64); install promtool $(PROMTOOL_VERSION) by hand and put it first on PATH"; exit 1;; \
+	  esac; \
+	  echo "tools-promtool: '$$(have)' != pinned $(PROMTOOL_VERSION); fetching the $$plat release into .tools/"; \
+	  tb=prometheus-$(PROMTOOL_VERSION).$$plat.tar.gz; mkdir -p .tools/bin; \
+	  curl -sSfL -o ".tools/$$tb" "https://github.com/prometheus/prometheus/releases/download/v$(PROMTOOL_VERSION)/$$tb"; \
+	  got=$$( (sha256sum ".tools/$$tb" 2>/dev/null || shasum -a 256 ".tools/$$tb") | cut -d' ' -f1); \
+	  [ "$$got" = "$$sha" ] || { echo "tools-promtool: CHECKSUM MISMATCH for $$tb: got $$got, want $$sha"; rm -f ".tools/$$tb"; exit 1; }; \
+	  tar -xzf ".tools/$$tb" -C .tools --strip-components=1 "prometheus-$(PROMTOOL_VERSION).$$plat/promtool"; \
+	  mv .tools/promtool .tools/bin/promtool; rm -f ".tools/$$tb"; \
+	fi; \
+	[ "$$(have)" = "$(PROMTOOL_VERSION)" ] || { echo "tools-promtool: promtool '$$(have)' != pinned $(PROMTOOL_VERSION) after fetch"; exit 1; }; \
 	echo "tools-promtool: promtool $(PROMTOOL_VERSION)"
 
 # Build .venv from the pinned requirements on first run; rebuild when the file changes.
@@ -95,7 +123,8 @@ doc-anchors: venv
 
 # On a PR this only asserts the tree agrees with ITSELF; with EXPECT set (tag push) also with the tag.
 version-sweep: venv
-	$(PY) scripts/stamp_version.py --check $(if $(EXPECT),--expect "$(EXPECT)")
+	@export EXPECT; \
+	$(PY) scripts/stamp_version.py --check $${EXPECT:+--expect "$$EXPECT"}
 
 stamp-tests: venv
 	$(PY) tests/run_stamp_tests.py
