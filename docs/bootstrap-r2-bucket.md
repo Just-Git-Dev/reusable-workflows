@@ -5,7 +5,7 @@ on your zone serves it, the `r2.dev` managed public URL is **off**, and a real o
 trip proves the public path works. Idempotent: a second run changes nothing and says so.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-r2-bucket.yml@v3.6.1
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-r2-bucket.yml@v3.7.0
 ```
 
 ## What a run does
@@ -102,7 +102,7 @@ permissions:
 
 jobs:
   bucket:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-r2-bucket.yml@v3.6.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-r2-bucket.yml@v3.7.0
     with:
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       bucket_name: my-bucket

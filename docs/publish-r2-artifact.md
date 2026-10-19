@@ -5,7 +5,7 @@ Publish the files of a GitHub Actions **artifact** to an R2 bucket under
 immutable; a re-run of the same release is a safe no-op.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/publish-r2-artifact.yml@v3.6.1
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/publish-r2-artifact.yml@v3.7.0
 ```
 
 Talks to R2 through its S3-compatible API (`aws s3api`, endpoint
@@ -160,7 +160,7 @@ jobs:
 
   publish:
     needs: build
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/publish-r2-artifact.yml@v3.6.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/publish-r2-artifact.yml@v3.7.0
     with:
       artifact_name: release-files
       account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
