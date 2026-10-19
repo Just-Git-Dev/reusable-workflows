@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
+.ci-canary/
+.scratch/
+.tools/

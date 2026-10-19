@@ -3,6 +3,11 @@ name: CI
 # Every workflow here is called by other repositories, so a syntax error or a
 # bad expression ships straight into a consumer's production ops run. Lint on
 # the way in. actionlint also runs shellcheck over every `run:` body.
+#
+# Every check below is a make target (Makefile), and `make ci` runs exactly that set: one
+# definition per check, so the laptop gate and CI cannot drift. tests/run_ci_make_tests.py
+# fails if a `run:` step here is not `make <target>` (pinned-tool installers excepted) or if
+# a step and the Makefile's CHECKS list disagree. Each target's rationale is in the Makefile.
 
 on:
   push:
@@ -16,6 +21,11 @@ on:
 permissions:
   contents: read
 
+# Every run: step gets bash with -eo pipefail (GitHub's implicit shell has no pipefail).
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -28,9 +38,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Lint rules change only with a commit: actionlint is pinned by `version:` below, and
-      # shellcheck here. The action runs whatever `shellcheck` is on PATH (the runner image's,
-      # which moves with every image update), so a checksummed release goes first on PATH.
+      # Lint rules change only with a commit: actionlint and shellcheck are pinned here (and in
+      # the Makefile, which `make tools` checks locally; a test asserts the two agree). The
+      # runner image's shellcheck moves with every image update, so checksummed releases go
+      # first on PATH.
       - name: install pinned shellcheck
         shell: bash
         env:
@@ -44,65 +55,60 @@ jobs:
           "$RUNNER_TEMP/shellcheck-${SC_VERSION}/shellcheck" --version | grep -qx "version: ${SC_VERSION#v}"
           echo "$RUNNER_TEMP/shellcheck-${SC_VERSION}" >> "$GITHUB_PATH"
 
-      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
-        with:
-          version: 1.7.12
-          # explicit path: actionlint must not fall back to the runner image's shellcheck
-          flags: -shellcheck=${{ runner.temp }}/shellcheck-v0.11.0/shellcheck
-          fail-on-error: true
+      # Pinned and checksummed. This replaces raven-actions/actionlint, which installed AND ran
+      # actionlint; the run is now `make actionlint`, the same command `make ci` runs.
+      - name: install pinned actionlint
+        shell: bash
+        env:
+          AL_VERSION: 1.7.12
+          AL_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/al.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${AL_VERSION}/actionlint_${AL_VERSION}_linux_amd64.tar.gz"
+          echo "${AL_SHA256}  $RUNNER_TEMP/al.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/actionlint-${AL_VERSION}"
+          tar -xzf "$RUNNER_TEMP/al.tar.gz" -C "$RUNNER_TEMP/actionlint-${AL_VERSION}" actionlint
+          echo "$RUNNER_TEMP/actionlint-${AL_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Pinned linter versions match the gate
+        run: make tools
+
+      # explicit shellcheck path: actionlint must not fall back to the runner image's shellcheck
+      - name: actionlint
+        run: make actionlint
 
       # Positive control. A wrong -shellcheck path makes actionlint print 'Rule "shellcheck" was
       # disabled' and exit 0, so the step above can be green with no shellcheck at all. The same
       # actionlint binary and path must find a known SC2086 in a canary workflow.
       - name: shellcheck is live inside actionlint (canary)
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/canary/.github/workflows"
-          # shellcheck disable=SC2016  # the canary's $(ls) and $f are literal text, on purpose
-          printf 'on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          f=$(ls)\n          rm $f\n' \
-            > "$RUNNER_TEMP/canary/.github/workflows/canary.yml"
-          cd "$RUNNER_TEMP/canary"
-          out=$("$RUNNER_TEMP/actionlint-1.7.12/actionlint" -shellcheck="$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" .github/workflows/canary.yml 2>&1 || true)
-          grep -q SC2086 <<<"$out" || { echo "::error::canary SC2086 not reported; shellcheck is not running inside actionlint"; echo "$out"; exit 1; }
-          echo "canary: SC2086 reported (examined 1 canary workflow)"
+        run: make canary
 
       # actionlint only reads .github/workflows/, so a composite action's script
-      # under actions/ is never shellchecked by the step above. Fails on zero
-      # files once actions/ exists, so a moved script cannot silently drop out.
+      # under actions/ is never shellchecked by the step above.
       - name: shellcheck composite action scripts
-        shell: bash
-        run: |
-          mapfile -t scripts < <(find actions -name '*.sh' -type f | sort)
-          echo "shellchecking ${#scripts[@]} script(s) under actions/"
-          if [[ -d actions && ${#scripts[@]} -eq 0 ]]; then
-            echo "::error::actions/ exists but no *.sh found — the glob is broken"
-            exit 1
-          fi
-          shellcheck "${scripts[@]}"
+        run: make shellcheck
 
   catalog:
     name: catalog.json is current
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The venv is built from requirements-ci.txt, the same file `make ci` uses locally.
+      - name: Python venv from requirements-ci.txt
+        run: make venv
 
       # catalog.json is what a consuming repo's agent reads instead of parsing
       # ~7,500 lines of workflow YAML. It is generated, so the only way it stays
       # true is failing here when someone changes a contract without regenerating.
-      - run: pip install --quiet pyyaml
-      - run: python3 scripts/gen_catalog.py --check
+      - name: catalog.json is current
+        run: make catalog
 
   docs-coverage:
     name: every workflow is documented
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -110,47 +116,40 @@ jobs:
       # workflow appears there and looks fine while never reaching the README or
       # docs/. Three did exactly that. Absence from a hand-maintained list is the
       # one failure a generator structurally cannot see, so it needs its own gate.
-      - run: python3 scripts/check_docs_coverage.py
+      - name: Every workflow is documented
+        run: make docs-coverage
 
       # The DECISIONS.md index is hand-maintained and 17 of its 58 links pointed
       # at nothing: GitHub does NOT collapse the two spaces left when it strips an
       # em dash, so `## <date> — <title>` anchors as `<date>--<title>`. A dead
       # in-page anchor fails silently on click, which is why it survived a month.
-      - run: python3 scripts/check_doc_anchors.py
+      - name: DECISIONS.md anchors resolve
+        run: make doc-anchors
 
   version-sweep:
     name: version stamps and doc pins agree
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Two failure modes, one script. On a PR this only asserts the tree agrees
-      # with ITSELF, so an unrelated PR is never failed by a release happening.
-      # On a tag push it additionally asserts the tree agrees with the TAG — the
-      # moment a skipped sweep would otherwise ship docs pinned to the previous
-      # release and workflows stamped with a version nobody can use.
+      # Two failure modes, one script. On a PR this only asserts the tree agrees with
+      # ITSELF, so an unrelated PR is never failed by a release happening. On a tag push
+      # (EXPECT set) it additionally asserts the tree agrees with the TAG — the moment a
+      # skipped sweep would otherwise ship docs pinned to the previous release and
+      # workflows stamped with a version nobody can use.
       - name: Check the sweep
-        run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            python3 scripts/stamp_version.py --check --expect "${{ github.ref_name }}"
-          else
-            python3 scripts/stamp_version.py --check
-          fi
+        env:
+          EXPECT: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: make version-sweep
 
       - name: Run stamp-sweep tests
-        run: python3 tests/run_stamp_tests.py
+        run: make stamp-tests
 
   v1-alias-frozen:
     name: v1 alias has not moved off its original commit
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -165,44 +164,20 @@ jobs:
       # "helpfully" moving it. Fails loudly if `v1` moved, is missing, or
       # can't even be resolved — that is a failure, not a skip.
       - name: Check v1 alias is still frozen
-        run: python3 scripts/check_v1_frozen.py
+        run: make v1-frozen
 
       - name: Run self-test (proves the check can actually fail)
-        run: python3 scripts/check_v1_frozen.py --self-test
+        run: make v1-selftest
 
   doc-examples:
     name: doc examples are valid workflows
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Every ```yaml block in docs/ that looks like a complete workflow is
-      # extracted and linted. v1.20.0 shipped a copy-paste example that failed at
-      # startup for anyone who used it; nothing caught it because the example was
-      # prose, not code. Now it is code.
-      - name: Extract complete workflow examples
-        run: |
-          mkdir -p /tmp/examples/.github/workflows
-          python3 - <<'PY'
-          import re, pathlib
-          out = pathlib.Path("/tmp/examples/.github/workflows")
-          n = 0
-          for md in sorted(pathlib.Path("docs").glob("*.md")) + [pathlib.Path("README.md")]:
-              for i, block in enumerate(re.findall(r"```yaml\n(.*?)```", md.read_text(), re.S)):
-                  # A complete workflow has jobs and a trigger; fragments ("with:" only) do not.
-                  if re.search(r"^jobs:", block, re.M) and re.search(r"^on:", block, re.M):
-                      (out / f"{md.stem}-{i}.yml").write_text(block)
-                      n += 1
-          print(f"extracted {n} complete example workflow(s)")
-          if n == 0:
-              raise SystemExit("::error::no complete examples found — the extractor is broken")
-          PY
-
       - name: install pinned shellcheck  # same pin as the lint job
+        shell: bash
         env:
           SC_VERSION: v0.11.0
           SC_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
@@ -214,20 +189,30 @@ jobs:
           "$RUNNER_TEMP/shellcheck-${SC_VERSION}/shellcheck" --version | grep -qx "version: ${SC_VERSION#v}"
           echo "$RUNNER_TEMP/shellcheck-${SC_VERSION}" >> "$GITHUB_PATH"
 
-      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
-        with:
-          version: 1.7.12
-          flags: -shellcheck=${{ runner.temp }}/shellcheck-v0.11.0/shellcheck
-          files: /tmp/examples/.github/workflows/*.yml
-          fail-on-error: true
+      - name: install pinned actionlint  # same pin as the lint job
+        shell: bash
+        env:
+          AL_VERSION: 1.7.12
+          AL_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/al.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${AL_VERSION}/actionlint_${AL_VERSION}_linux_amd64.tar.gz"
+          echo "${AL_SHA256}  $RUNNER_TEMP/al.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/actionlint-${AL_VERSION}"
+          tar -xzf "$RUNNER_TEMP/al.tar.gz" -C "$RUNNER_TEMP/actionlint-${AL_VERSION}" actionlint
+          echo "$RUNNER_TEMP/actionlint-${AL_VERSION}" >> "$GITHUB_PATH"
+
+      # Every ```yaml block in docs/ that looks like a complete workflow is
+      # extracted (scripts/extract_doc_examples.py) and linted. v1.20.0 shipped a
+      # copy-paste example that failed at startup for anyone who used it; nothing
+      # caught it because the example was prose, not code. Now it is code.
+      - name: Doc examples are valid workflows
+        run: make doc-examples
 
   plan-fixtures:
     name: cleanup-gar-images delete-plan fixtures
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -237,15 +222,12 @@ jobs:
       # The runner extracts that heredoc from the workflow and executes it, so
       # this exercises the shipped code rather than a copy that can drift.
       - name: Run delete-plan fixtures
-        run: python3 tests/run_plan_tests.py
+        run: make plan-fixtures
 
   secret-plan-fixtures:
     name: cleanup-secret-versions sweep-plan fixtures
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -255,15 +237,12 @@ jobs:
       # version `latest` resolves to is never actioned, and no secret is ever
       # left without an ENABLED version.
       - name: Run sweep-plan fixtures
-        run: python3 tests/run_secret_plan_tests.py
+        run: make secret-plan-fixtures
 
   concurrency-groups:
     name: bundle writers share one lock
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -272,15 +251,12 @@ jobs:
       # actionlint cannot see that — a differently-spelled prefix is valid YAML
       # and a different lock, which is exactly how the lost-update bug shipped.
       - name: Run concurrency-group tests
-        run: python3 tests/run_concurrency_tests.py
+        run: make concurrency-groups
 
   step-bodies:
     name: step bodies (stubbed commands)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -289,53 +265,44 @@ jobs:
       # `run:` script from the workflow and executes it against stubbed commands
       # and a fake clock, so retry/backoff logic is asserted, not assumed.
       - name: Run step-body tests
-        run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
-          python3 tests/run_step_tests.py
+        run: make step-bodies
 
       # The composite action's script, run as shipped against a `gh` stub that
       # serves fixture JSON — every verdict, the newest-run rule, tag peeling.
       - name: Run check-release-gate tests
-        run: python3 tests/run_check_release_gate_tests.py
+        run: make release-gate
 
       # The composite action's script, run as shipped with real curl against a
       # local HTTP server, a temp repo pushing to a bare remote, and a `gh` stub —
       # unchanged / changed+pass (merged) / changed+fail (not merged) / refusals.
       - name: Run refresh-api-spec tests
-        run: python3 tests/run_refresh_api_spec_tests.py
+        run: make refresh-api-spec
 
       # The release-flow CLI's unit tests (an in-memory fake GitHub) and the shape tests of the
       # four release-flow workflows (token scopes, SHA pins, shell bash, the tree-pinned CLI
       # load). Fails on a skip or on zero tests; PyYAML is needed to run them all.
       - name: Run release-flow tests
-        run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
-          python3 tests/run_release_flow_tests.py
+        run: make release-flow
 
       # Every Python file under actions/ must at least compile; counts what it examined.
       - name: Compile actions/**/*.py
-        run: |
-          mapfile -t pyfiles < <(find actions -name '*.py' -not -path '*/testdata/*' | sort)
-          [ "${#pyfiles[@]}" -gt 0 ] || { echo "::error::no Python files under actions/ (the glob is broken)"; exit 1; }
-          python3 -m py_compile "${pyfiles[@]}"
-          echo "compiled ${#pyfiles[@]} file(s)"
+        run: make compile-actions
 
   alertgen:
     name: alertgen compiler + service-alerts (promtool oracle)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
     env:
       # Pinned by checksum, not just version: the oracle binary judges whether rendered
       # alerts fire, so a swapped tarball is a swapped judge. From the release's sha256sums.txt.
+      # PROM_VERSION must equal the Makefile's PROMTOOL_VERSION (`make tools-promtool`).
       PROM_VERSION: 3.13.1
       PROM_SHA256: 962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install promtool (checksum-verified)
+      - name: install pinned promtool (checksum-verified)
+        shell: bash
         run: |
           TARBALL="prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
           curl -sSfL -o "$RUNNER_TEMP/$TARBALL" \
@@ -345,36 +312,39 @@ jobs:
           sudo install "$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
           promtool --version
 
+      - name: Pinned promtool version matches the gate
+        run: make tools-promtool
+
       # Spec validation, golden renders, `promtool test rules` over synthetic series (the
       # semantic oracle — it fails, not skips, without promtool), conformance with
       # validate-alerts' shipped lint, and service-alerts' step bodies against stubs.
       - name: Run alertgen tests
-        run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
-          python3 tests/run_alertgen_tests.py
+        run: make alertgen
 
       - name: Catalog table in docs/alertspec.md is current
-        run: python3 scripts/gen_alert_catalog.py --check
+        run: make alert-catalog
 
   pinned-actions:
     name: third-party actions are SHA-pinned
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Matches `uses: owner/repo@ref` where ref is not a 40-char hex SHA (local `./...` refs are
+      # excluded). actions/ holds composite actions, whose steps run in the CALLER's job with the
+      # caller's token — a mutable ref there is the same risk. A Python script, not `grep -P`.
       - name: Reject mutable action refs
-        run: |
-          # Matches `uses: owner/repo@ref` where ref is not a 40-char hex SHA.
-          # Local (`./...`) and reusable-workflow refs are excluded by `[^./]`.
-          # actions/ holds composite actions, whose steps run in the CALLER's job
-          # with the caller's token — a mutable ref there is the same risk.
-          if grep -rnP '^\s*(-\s*)?uses:\s*[^./][^@]+@(?![0-9a-f]{40}\s*($|#))' \
-               --include='*.yml' --include='*.yaml' .github/workflows actions; then
-            echo "::error::Third-party actions must be pinned to a full commit SHA."
-            exit 1
-          fi
-          echo "All third-party action references are SHA-pinned."
+        run: make pinned
+
+  ci-gate:
+    name: local gate matches CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # `make ci` must run exactly the checks above, and the pre-push hook must gate the commit
+      # being pushed (see README "Local gate").
+      - name: ci.yml and make ci agree; pre-push hook guards
+        run: make ci-gate-tests
