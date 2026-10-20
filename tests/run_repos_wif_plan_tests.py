@@ -43,7 +43,7 @@ PLANNER = Path(os.environ.get("PLANNER") or ROOT / "scripts" / "repos_wif_plan.p
 ROLE = "roles/iam.workloadIdentityUser"
 POOL = "example-pool"
 NUM = "123456789"
-ALLOWED_VERBS = {"add-wif-binding", "in-sync", "skip", "drift"}
+ALLOWED_VERBS = {"add-wif-binding", "in-sync", "skip", "drift", "unregistered-binding"}
 
 
 def member(repo, org="Example-Org", pool=POOL, num=NUM):
@@ -84,6 +84,11 @@ def drift(r, s, mem=None):
 
 def insync(r):
     return {"feature": "wif-link", "repo": r, "action": "in-sync", "details": {}}
+
+
+def unreg(r, s, role, m):
+    return {"feature": "wif-link", "repo": r, "action": "unregistered-binding",
+            "details": {"service_account": s, "role": role, "member": m}}
 
 
 def run(reg, st, tmp, reg_is_path=False):
@@ -170,7 +175,10 @@ def main():
     # 4. linked among several members of the role
     many = [{"role": ROLE, "members": [member("other-repo"), member("payments-api")]}]
     expect("linked among many members", register([repo("payments-api", [D])]),
-           state({D: sa(many)}), [insync("payments-api")])
+           state({D: sa(many)}), [unreg("payments-api", D, ROLE, member("other-repo"))])
+    only = [{"role": ROLE, "members": [member("payments-api")]}]
+    expect("linked, nothing else -> in-sync", register([repo("payments-api", [D])]),
+           state({D: sa(only)}), [insync("payments-api")])
 
     # 5. partial: one SA linked, one not -> only the missing pair, no in-sync
     expect("partial link", register([repo("payments-api", [D, "ledger-run-sa"])]),
@@ -184,8 +192,11 @@ def main():
         ("other org", [{"role": ROLE, "members": [member("payments-api", org="Other-Org")]}]),
         ("other pool", [{"role": ROLE, "members": [member("payments-api", pool="p2")]}]),
     ]:
+        # the near-miss binding is itself unregistered: reported after the repo's add
         expect("near-miss: " + label, register([repo("payments-api", [D])]),
-               state({D: sa(b)}), [add("payments-api", D)])
+               state({D: sa(b)}),
+               [add("payments-api", D),
+                unreg("payments-api", D, b[0]["role"], b[0]["members"][0])])
 
     # 7. same SA for two repos; register order across repos and SAs
     reg = register([repo("repo-b", ["sa-two-x", D]), repo("repo-a", [D])])
@@ -213,7 +224,7 @@ def main():
 
     # 10. NEVER list: no removal, no other role, nothing for repos not in the register
     stale = [
-        {"role": ROLE, "members": [member("removed-repo"), member("payments-api")]},
+        {"role": ROLE, "members": [member("old-repo"), member("payments-api")]},
         {"role": "roles/iam.serviceAccountUser", "members": ["user:someone@example.com"]},
     ]
     for mode in ("enforce", "report"):
@@ -228,7 +239,8 @@ def main():
               not any("remove" in json.dumps(a).lower() or "delete" in json.dumps(a).lower()
                       for a in acts), json.dumps(acts))
         check("never-list role " + mode,
-              all(a["details"].get("role", ROLE) == ROLE for a in acts), json.dumps(acts))
+              all(a["details"].get("role", ROLE) == ROLE for a in acts
+                  if a["action"] in ("add-wif-binding", "drift")), json.dumps(acts))
         check("never-list no project grant " + mode,
               not any(a["details"].get("scope") == "project" or
                       a["details"].get("resource_type") == "project" for a in acts),
@@ -239,7 +251,24 @@ def main():
               all(list(a) == ["feature", "repo", "action", "details"] for a in acts),
               json.dumps(acts))
     expect("repo removed from register -> no action for it",
-           register([repo("payments-api", [D])]), state({D: sa(stale)}), [insync("payments-api")])
+           register([repo("payments-api", [D])]), state({D: sa(linked)}), [insync("payments-api")])
+
+    # 10b. unregistered-binding (docs 7.2): any binding on a registered SA that the register does
+    # not list is reported (both modes), never removed. Attached to the first repo listing the SA,
+    # after that repo's other actions, in policy order; it suppresses that repo's in-sync.
+    def ub(r, role, m):
+        return unreg(r, D, role, m)
+    UB = [ub("payments-api", ROLE, member("old-repo")),
+          ub("payments-api", "roles/iam.serviceAccountUser", "user:someone@example.com")]
+    expect("unregistered bindings (enforce)",
+           register([repo("payments-api", [D]), repo("ledger-worker", [D])]), state({D: sa(stale)}),
+           UB + [add("ledger-worker", D)])
+    expect("unregistered bindings (report)",
+           register([repo("payments-api", [D]), repo("ledger-worker", [D])], mode="report"),
+           state({D: sa(stale)}), UB + [drift("ledger-worker", D)])
+    expect("unregistered binding on an SA no repo lists is not examined",
+           register([repo("payments-api", [D])]), state({D: sa(linked), "other-sa-xx": sa(stale)}),
+           [insync("payments-api")])
 
     # 11. unknown keys ignored at every level, and repos without our key are not our business
     reg = register([repo("payments-api", [D], future_key={"x": 1}, kind="go-service")],
