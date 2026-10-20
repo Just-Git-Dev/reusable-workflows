@@ -1,0 +1,7 @@
+version: 1
+org: Example-Org
+defaults:
+  mode: enforce
+repos:
+  - name: payments-api
+    gcp: {service_accounts: [payments-api-deployer]}

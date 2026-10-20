@@ -1,0 +1,3 @@
+[{"feature": "service-accounts", "repo": null, "action": "create-service-account",
+  "details": {"name": "payments-api-deployer", "display_name": "Payments deployer",
+   "description": "CI deployer for payments-api only (owner: payments team)"}}]

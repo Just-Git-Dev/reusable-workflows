@@ -1,0 +1,3 @@
+[{"feature": "wif-link", "repo": "payments-api", "action": "add-wif-binding",
+  "details": {"service_account": "payments-api-deployer", "role": "roles/iam.workloadIdentityUser",
+   "member": "principalSet://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/example-pool/attribute.repository/Example-Org/payments-api"}}]

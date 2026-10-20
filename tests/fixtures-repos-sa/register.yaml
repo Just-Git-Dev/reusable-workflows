@@ -1,0 +1,9 @@
+version: 1
+org: Example-Org
+defaults:
+  mode: enforce
+service_accounts:
+  - name: payments-api-deployer
+    display_name: Payments deployer
+    description: "CI deployer for payments-api only (owner: payments team)"
+repos: []
