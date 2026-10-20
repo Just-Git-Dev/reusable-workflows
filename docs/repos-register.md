@@ -262,8 +262,11 @@ shared access-provisioning CI identity is that side's `wif_repos`, not this regi
 **F6 — the project's own service accounts.** Creates each listed SA that does not exist, with its
 required description. Never deletes one, never creates a key, never grants it a project-level
 role, and refuses (error, exit `1`, no plan) a register entry whose name is not a `-deployer`
-account (`... is not a project SA`): it creates and updates only the project's own deployers and
-never adopts any other account, even one that already exists. The access-provisioning config owns
+account (`... is not a project SA`) or is not `<d>-deployer` for a `cloud_run: <d>` that some repo
+in the register deploys (`github-deployer` with no `github` deployable is refused): it creates and
+updates only the project's own deployers and never adopts any other account, even one that already
+exists. F5 and F6 also refuse a register that lists a deployable under two repos, as F1-F4 and F7
+do, and their apply steps re-check the `-deployer` suffix on the whole plan before any write. The access-provisioning config owns
 those accounts and their descriptions. A listed SA that exists is `in-sync`, or `drift` if its
 description or display name differ (enforce updates them).
 
@@ -283,6 +286,14 @@ a service name like `--ingress=all` never reaches `gcloud`). Then, per `deploys:
   needs}` for each line that is not live (`needs` is `deployed_by: <deployable>-deployer` or
   `act_as: repo-admin`), in both modes; a runtime SA that does not exist yet reads as empty. The fix
   is one access-provisioning config change, never a write from here.
+- **A new service waits for its `act_as` line.** `gcloud run deploy --service-account=<d>-run` needs
+  repo-admin's `act_as` on that account, which F7 cannot grant. While the service does not exist
+  and that line is not live (or `<d>-run` is absent), F7 plans **only** `needs-jgd` for the
+  deployable (the `act_as` line and the `deployed_by` line): no `create-service`, no binding, in
+  both modes, so the apply never reaches `gcloud run deploy` and never half-applies a register.
+  The next run, once the line is live, creates and binds. An existing service is unaffected.
+- **Derived ids must be valid GCP ids.** `<d>-deployer` and `<d>-run` must each be 6-30 chars; a
+  deployable that breaks either (`a-run` is 5) is `error: <repo>: ...`, exit `1`, no plan.
 - **The runtime SA is derived, not chosen.** `runtime_service_account` is optional; if present it
   must equal `<deployable>-run`, else exit `1`, `error: <repo>: ...`, no plan. So a repo can never
   point its service at another identity (such as `repo-admin`), and a deployable under two repos is

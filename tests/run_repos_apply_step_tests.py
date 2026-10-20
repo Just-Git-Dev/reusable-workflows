@@ -31,6 +31,7 @@ RAN = 0
 CREATE_STEP = "Apply the write actions in order"
 WIF_STEP = "Apply (add-wif-binding only, in order)"
 DEPLOY_STEP = "Apply (write actions, in order)"
+SA_STEP = "Apply (create/update service accounts only, in order)"
 
 STUB = """#!/bin/bash
 n=$(( $(cat "$STUB_DIR/count" 2>/dev/null || echo 0) + 1 ))
@@ -163,29 +164,69 @@ def wif_cases():
     check("F5 report plan: rc 0", r["rc"] == 0, r["out"])
     check("F5 report plan: no gcloud call", r["calls"] == [], r["calls"])
 
-    r = wif_run([add("sa-one", MEMBER % "a"), act("wif-link", "r", "in-sync", {}), add("sa-two", MEMBER % "b")])
+    r = wif_run([add("one-aa-deployer", MEMBER % "a"), act("wif-link", "r", "in-sync", {}), add("two-bb-deployer", MEMBER % "b")])
     check("F5 enforce: rc 0", r["rc"] == 0, r["out"])
     check("F5 enforce: exactly the planned calls in order", r["calls"] == [
-        wif_call("sa-one", MEMBER % "a"), wif_call("sa-two", MEMBER % "b")], r["calls"])
+        wif_call("one-aa-deployer", MEMBER % "a"), wif_call("two-bb-deployer", MEMBER % "b")], r["calls"])
 
     for bad in ("remove-wif-binding", "create-sa-key", "grant-project-role", "delete-sa"):
-        r = wif_run([add("sa-one", MEMBER % "a"), act("wif-link", "r", bad, {}), add("sa-two", MEMBER % "b")])
+        r = wif_run([add("one-aa-deployer", MEMBER % "a"), act("wif-link", "r", bad, {}), add("two-bb-deployer", MEMBER % "b")])
         check(f"F5 verb {bad}: step fails", r["rc"] != 0, r["out"])
         check(f"F5 verb {bad}: no call made", r["calls"] == [], r["calls"])
 
-    r = wif_run([add("sa-one", MEMBER % "a"), add("sa-two", MEMBER % "b", "roles/owner")])
+    r = wif_run([add("one-aa-deployer", MEMBER % "a"), add("two-bb-deployer", MEMBER % "b", "roles/owner")])
     check("F5 foreign role: step fails", r["rc"] != 0, r["out"])
     check("F5 foreign role: no call made (even the valid action before it)", r["calls"] == [], r["calls"])
 
-    r = wif_run([add("sa-one", MEMBER % "a"), add("sa-two", MEMBER % "b"), add("sa-three", MEMBER % "c")], fail_on=2)
+    r = wif_run([add("one-aa-deployer", MEMBER % "a"), add("two-bb-deployer", MEMBER % "b"), add("three-cc-deployer", MEMBER % "c")], fail_on=2)
     check("F5 first failure: rc != 0", r["rc"] != 0, r["out"])
     check("F5 first failure: loop stopped after the failing call", len(r["calls"]) == 2, r["calls"])
 
+    # the member (free-form) arrives as ONE literal argument; the SA name must have the planner's shape
     for v in NASTY:
-        r = wif_run([add(v, v)])
-        check(f"F5 metachar {v!r}: rc 0", r["rc"] == 0, r["out"])
-        check(f"F5 metachar {v!r}: nothing executed", "pwned" not in r["files"], r["files"])
-        check(f"F5 metachar {v!r}: literal single arguments", r["calls"] == [wif_call(v, v)], r["calls"])
+        r = wif_run([add("one-aa-deployer", v)])
+        check(f"F5 metachar member {v!r}: rc 0", r["rc"] == 0, r["out"])
+        check(f"F5 metachar member {v!r}: nothing executed", "pwned" not in r["files"], r["files"])
+        check(f"F5 metachar member {v!r}: literal single argument",
+              r["calls"] == [wif_call("one-aa-deployer", v)], r["calls"])
+        r = wif_run([add(v, MEMBER % "a")])
+        check(f"F5 malformed SA {v!r}: step fails, no call, nothing executed",
+              r["rc"] != 0 and r["calls"] == [] and "pwned" not in r["files"], (r["rc"], r["calls"]))
+
+    # review 9: the whole plan is re-checked for the `-deployer` suffix before any write (as F7 does)
+    for label, sa_name in (("repo-admin", "repo-admin"), ("runtime SA", "payments-api-run"),
+                           ("deployer-in-the-middle", "x-deployer-aa"), ("trailing newline", "aa-deployer\n")):
+        r = wif_run([add("one-aa-deployer", MEMBER % "a"), add(sa_name, MEMBER % "b")])
+        check(f"F5 non-deployer SA ({label}): step fails", r["rc"] != 0, r["out"])
+        check(f"F5 non-deployer SA ({label}): no call made (even the valid action before it)",
+              r["calls"] == [], r["calls"])
+
+
+# ---------------------------------------------------------------- F6 repos-service-accounts
+def sa_run(plan, **kw):
+    return run_apply(extract_step("repos-service-accounts.yml", SA_STEP), plan,
+                     env={"PROJECT_ID": "example-proj"}, **kw)
+
+
+def sa_cases():
+    mk = lambda n: act("service-accounts", None, "create-service-account",
+                       {"name": n, "display_name": "D", "description": "desc"})
+    r = sa_run([mk("one-aa-deployer"), act("service-accounts", None, "in-sync", {}), mk("two-bb-deployer")])
+    check("F6 enforce: rc 0", r["rc"] == 0, r["out"])
+    check("F6 enforce: two creates in order", [c[3] for c in r["calls"]] == ["create"] * 2
+          and [c[4] for c in r["calls"]] == ["one-aa-deployer", "two-bb-deployer"], r["calls"])
+    for label, n in (("repo-admin", "repo-admin"), ("github-releaser", "github-releaser"),
+                     ("runtime SA", "payments-api-run"), ("trailing newline", "aa-deployer\n")):
+        r = sa_run([mk("one-aa-deployer"), mk(n)])
+        check(f"F6 non-deployer SA ({label}): step fails", r["rc"] != 0, r["out"])
+        check(f"F6 non-deployer SA ({label}): no call made (even the valid action before it)",
+              r["calls"] == [], r["calls"])
+    upd = lambda n: act("service-accounts", None, "update-service-account",
+                        {"name": n, "field": "description", "from": "a", "to": "b"})
+    r = sa_run([upd("repo-admin")])
+    check("F6 update of a non-deployer SA: step fails, no call", r["rc"] != 0 and r["calls"] == [], r["out"])
+    r = sa_run([upd("one-aa-deployer")])
+    check("F6 update of a deployer SA: one call", r["rc"] == 0 and len(r["calls"]) == 1, r["out"])
 
 
 # ---------------------------------------------------------------- F7 repos-deploy-scope
@@ -300,6 +341,39 @@ def deploy_cases():
         ], r["calls"])
 
 
+def deploy_gated_cases():
+    """Review F2, end to end: the real planner's plan for a NEW service whose runtime SA is absent
+    (or lacks repo-admin's act_as) goes through the real apply step and reaches no gcloud verb."""
+    fix = ROOT / "tests" / "fixtures-repos-deploy"
+    reg = json.loads((fix / "repos.yaml").read_text())
+    base = json.loads((fix / "state-base.json").read_text())
+    absent = json.loads(json.dumps(base))
+    absent["service_accounts"].pop("payments-api-run")
+    no_act_as = json.loads(json.dumps(base))
+    no_act_as["service_accounts"]["payments-api-run"]["iam"] = []
+    for label, st in (("runtime SA absent", absent), ("act_as not live", no_act_as)):
+        with tempfile.TemporaryDirectory() as t:
+            (Path(t) / "r.yaml").write_text(json.dumps(reg))
+            (Path(t) / "s.json").write_text(json.dumps(st))
+            p = subprocess.run([sys.executable, str(ROOT / "scripts" / "repos_deploy_plan.py"),
+                                "--feature", "deploy-scope", "--register", str(Path(t) / "r.yaml"),
+                                "--state", str(Path(t) / "s.json"), "--repo-admin-sa-email",
+                                "repo-admin@example-proj.iam.gserviceaccount.com"],
+                               capture_output=True, text=True)
+        check(f"F7 gated ({label}): planner rc 0", p.returncode == 0, p.stderr)
+        plan = json.loads(p.stdout or "[]")
+        r = deploy_run(plan)
+        check(f"F7 gated ({label}): apply rc 0", r["rc"] == 0, r["out"])
+        check(f"F7 gated ({label}): `gcloud run deploy` never reached",
+              not any(c[1:3] == ["run", "deploy"] for c in r["calls"]), r["calls"])
+        check(f"F7 gated ({label}): nothing bound on the not-yet-created service",
+              not any("payments-api" in " ".join(c) and "add-iam-policy-binding" in c for c in r["calls"]),
+              r["calls"])
+        check(f"F7 gated ({label}): the existing service is still served",
+              any(c[:4] == ["gcloud", "run", "services", "add-iam-policy-binding"] and c[4] == "ledger-worker"
+                  for c in r["calls"]), r["calls"])
+
+
 # ------------------------------------------- F3/F4 write token is narrowed to the plan's targets
 def targets_cases():
     for wf, feature, verb, mint_name in (
@@ -330,7 +404,9 @@ def main():
     targets_cases()
     create_cases()
     wif_cases()
+    sa_cases()
     deploy_cases()
+    deploy_gated_cases()
     print(f"repos apply step tests: {RAN} cases run, {RAN - len(FAILURES)} passed, {len(FAILURES)} failed")
     if RAN == 0 or FAILURES:
         sys.exit(1)

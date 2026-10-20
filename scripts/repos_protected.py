@@ -12,12 +12,12 @@ DEPRECATED NO-OP: it is still accepted so existing callers do not break, and it 
 
 import re
 
-PROJECT_SA_RE = re.compile(r"^[a-z][a-z0-9-]*-deployer$")
+PROJECT_SA_RE = re.compile(r"[a-z][a-z0-9-]*-deployer")     # matched with fullmatch: `$` accepts a trailing newline
 
 
 def is_project_sa(name):
     """True when `name` is a service account the project (this repo's automation) may manage."""
-    return isinstance(name, str) and PROJECT_SA_RE.match(name) is not None
+    return isinstance(name, str) and PROJECT_SA_RE.fullmatch(name) is not None
 
 
 def add_argument(ap):

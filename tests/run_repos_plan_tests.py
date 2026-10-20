@@ -723,7 +723,8 @@ def feature_selection_unknown_feature_is_rejected_with_no_stdout():
 
 @case
 def r21_a_deployable_belongs_to_exactly_one_repo():
-    # M2: two repos naming the same cloud_run is refused, by every feature (validate_core)
+    # M2: two repos naming the same cloud_run is refused (validate_core) by F1-F4 here; F5, F6 and F7
+    # call the same validate_core and pin it in their own suites
     a = {"name": "api", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}
     b = {"name": "web", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}
     for feature in ("register", "create", "settings"):

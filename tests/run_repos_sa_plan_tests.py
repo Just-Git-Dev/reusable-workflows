@@ -38,8 +38,14 @@ DESC = "CI deployer for payments-api only (owner: payments team)"
 
 
 def register(sas, mode="enforce", **extra):
+    """F6 creates only `<d>-deployer` for a `cloud_run: d` the register deploys, so each `-deployer`
+    entry is backed by a repo of its own unless `repos` is given."""
+    backing = [{"name": "repo-" + s["name"][:-len("-deployer")],
+                "deploys": [{"cloud_run": s["name"][:-len("-deployer")], "region": "europe-west1"}]}
+               for s in sas if isinstance(s.get("name"), str) and s["name"].endswith("-deployer")
+               and s["name"] != "-deployer"]
     reg = {"version": 1, "org": "Example-Org", "defaults": {"mode": mode},
-           "service_accounts": sas, "repos": []}
+           "service_accounts": sas, "repos": backing}
     reg.update(extra)
     return reg
 
@@ -251,7 +257,8 @@ def main():
 
     # 11. unknown keys are ignored (at every level), repos are not this feature's business
     e = entry(N, future_key={"x": 1})
-    reg = register([e], something_new=[1], repos=[{"name": "payments-api", "gcp": {"service_accounts": ["nope-nope"]}}])
+    reg = register([e], something_new=[1], repos=[{"name": "payments-api", "gcp": {"service_accounts": ["nope-nope"]},
+                                                  "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}])
     expect("unknown keys ignored", reg, state(live(N)), [insync()])
 
     # 12. determinism, bad version
@@ -277,6 +284,28 @@ def main():
         expect_error("a runtime SA is JGD's (" + mode + ")",
                      register([entry("payments-api-run")], mode=mode), state(),
                      "payments-api-run is not a project SA")
+    # review 3: only `<d>-deployer` for a deployable the register has, never any `*-deployer`
+    for mode in ("enforce", "report"):
+        expect_error("deployer of no deployable (" + mode + ")",
+                     register([entry("github-deployer")], mode=mode, repos=[]), state(),
+                     "github-deployer")
+        expect_error("deployer of another repo's name only (" + mode + ")",
+                     register([entry("github-deployer")], mode=mode,
+                              repos=[{"name": "github", "deploys": [{"cloud_run": "payments-api",
+                                                                      "region": "europe-west1"}]}]),
+                     state(live("github-deployer")), "github-deployer")
+    expect("deployer of a registered deployable ok", register([entry("github-deployer")], repos=[
+        {"name": "gh", "deploys": [{"cloud_run": "github", "region": "europe-west1"}]}]),
+        state(), [create("github-deployer")])
+    # review 1: F6 enforces deployable uniqueness (same check as F1-F4, F5, F7)
+    expect_error("dup deployable across repos", register([entry(N)], repos=[
+        {"name": "a", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]},
+        {"name": "b", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}]),
+        state(), "belongs to exactly one repo")
+    # review 8: a trailing newline is not part of a valid name
+    expect_error("trailing newline", register([entry(N + "\n")], repos=[
+        {"name": "a", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}]),
+        state(), "service_accounts")
     # the deprecated input is accepted and ignored
     expect("deprecated input is a no-op", register([entry("one-aa-deployer")]),
            state(live("one-aa-deployer")), [insync()],

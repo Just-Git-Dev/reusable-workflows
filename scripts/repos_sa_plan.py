@@ -17,10 +17,11 @@ import sys
 
 import yaml
 
+import repos_plan
 import repos_protected
 
 FEATURE = "service-accounts"
-SA_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+SA_RE = re.compile(r"[a-z][a-z0-9-]{4,28}[a-z0-9]")   # fullmatch: `$` accepts a trailing newline
 ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 
 
@@ -46,12 +47,12 @@ def validate(reg, errors):
     out = []
     for e in sas:
         name = e.get("name") if isinstance(e, dict) else None
-        who = name if isinstance(name, str) and name else "service_accounts"
+        who = name if isinstance(name, str) and name and name.isprintable() else "service_accounts"
         if not isinstance(e, dict):
             errors.append((who, "entry must be a mapping"))
             continue
         ok = True
-        if not isinstance(name, str) or not SA_RE.match(name):
+        if not isinstance(name, str) or not SA_RE.fullmatch(name):
             errors.append((who, "name must be 6-30 chars, ^[a-z][a-z0-9-]*$, no trailing hyphen"))
             ok = False
         if ok and not repos_protected.is_project_sa(name):
@@ -95,8 +96,21 @@ def main(argv=None):
     with open(args.state) as f:
         state = json.load(f)
 
+    # the shared register shape, incl. "a deployable belongs to exactly one repo" (F6 names `<d>-deployer`)
+    try:
+        repos_plan.validate_core(reg)
+    except repos_plan.PlanError as e:
+        print("\n".join(e.errors), file=sys.stderr)
+        return 1
     errors = []
     entries = validate(reg, errors)
+    deployables = {dep["cloud_run"] for r in reg["repos"] if isinstance(r.get("deploys"), list)
+                   for dep in r["deploys"] if isinstance(dep, dict) and isinstance(dep.get("cloud_run"), str)}
+    for name, *_ in entries:
+        if name[:-len("-deployer")] not in deployables:
+            errors.append((name, "%s is not the deployer of a deployable in the register: F6 creates "
+                                 "only `<d>-deployer` for a `cloud_run: <d>` in a repo's deploys "
+                                 "(docs/repos-register.md section 5, item 9)" % name))
     if errors:
         for who, why in dict.fromkeys(errors):
             print("error: %s: %s" % (who, why), file=sys.stderr)

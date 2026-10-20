@@ -180,7 +180,6 @@ jobs:
         run: |
           python3 .repos-src/scripts/repos_deploy_plan.py --feature deploy-scope \
             --register "$REGISTER" --state state.json \
-            --repo-admin-sa-email "$REPO_ADMIN_SA_EMAIL" \
             --repo-admin-sa-email "$REPO_ADMIN_SA_EMAIL" > plan.json
           echo "actions: $(jq length plan.json)"
 

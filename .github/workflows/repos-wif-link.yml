@@ -197,6 +197,10 @@ jobs:
           [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
           badrole=$(jq '[.[] | select(.action=="add-wif-binding" and .details.role != "roles/iam.workloadIdentityUser")] | length' plan.json)
           [ "$badrole" = "0" ] || { echo "::error::refusing $badrole binding(s) with a role other than roles/iam.workloadIdentityUser; nothing applied"; exit 1; }
+          # ruling 21: F5 links only the project's own `<d>-deployer` accounts. Re-checked on the whole
+          # plan before the first write (\z, not $: `$` would accept a trailing newline).
+          baddep=$(jq '[.[] | select(.action=="add-wif-binding") | select((.details.service_account | type == "string" and test("\\A[a-z][a-z0-9-]*-deployer\\z")) | not)] | length' plan.json)
+          [ "$baddep" = "0" ] || { echo "::error::refusing $baddep binding(s) on a service account that is not a <deployable>-deployer; nothing applied"; exit 1; }
           [ "$writes" -gt 0 ] || exit 0
           # fd 3, not a pipe: gcloud would otherwise eat the loop's stdin.
           while read -r a <&3; do

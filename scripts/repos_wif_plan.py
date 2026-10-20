@@ -16,11 +16,12 @@ import sys
 
 import yaml
 
+import repos_plan
 import repos_protected
 
 ROLE = "roles/iam.workloadIdentityUser"
 FEATURE = "wif-link"
-SA_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+SA_RE = re.compile(r"[a-z][a-z0-9-]{4,28}[a-z0-9]")   # fullmatch: `$` accepts a trailing newline
 NAME_RE = re.compile(r"^(?!-)(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$")   # never `-`-led, never . or ..
 ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 
@@ -58,10 +59,11 @@ def validate(reg, errors):
         sas = (r.get("gcp") or {}).get("service_accounts") if isinstance(r.get("gcp"), dict) else None
         if sas is None:
             continue
-        if not isinstance(sas, list) or not all(isinstance(s, str) and SA_RE.match(s) for s in sas):
+        if not isinstance(sas, list) or not all(isinstance(s, str) and SA_RE.fullmatch(s) for s in sas):
             errors.append((name, "gcp.service_accounts must be a list of valid service account names"))
             continue
-        deployables = {d.get("cloud_run") for d in (r.get("deploys") or []) if isinstance(d, dict)}
+        deployables = {d.get("cloud_run") for d in (r.get("deploys") or []) if isinstance(d, dict)
+                       and isinstance(d.get("cloud_run"), str)}
         for s in dict.fromkeys(sas):
             if not repos_protected.is_project_sa(s):
                 errors.append((name, "%s is not a project SA: ask JGD (wif_repos). F5 links only "
@@ -91,6 +93,13 @@ def main(argv=None):
     with open(args.state) as f:
         state = json.load(f)
 
+    # the shared register shape, incl. "a deployable belongs to exactly one repo": F5 links a repo to
+    # `<d>-deployer`, so two repos naming `d` would let one of them link the other's identity
+    try:
+        repos_plan.validate_core(reg)
+    except repos_plan.PlanError as e:
+        print("\n".join(e.errors), file=sys.stderr)
+        return 1
     errors = []
     repos = validate(reg, errors)
     number, pool = state.get("project_number"), state.get("pool")

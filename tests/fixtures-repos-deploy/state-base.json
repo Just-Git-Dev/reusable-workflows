@@ -4,7 +4,7 @@
     "ledger-worker": {"iam": []}
   },
   "service_accounts": {
-    "payments-api-run": {"iam": []},
+    "payments-api-run": {"iam": [{"role": "roles/iam.serviceAccountUser", "members": ["serviceAccount:repo-admin@example-proj.iam.gserviceaccount.com"]}]},
     "ledger-worker-run": {"iam": []}
   },
   "gar_repositories": {

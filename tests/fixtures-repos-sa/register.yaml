@@ -6,4 +6,6 @@ service_accounts:
   - name: payments-api-deployer
     display_name: Payments deployer
     description: "CI deployer for payments-api only (owner: payments team)"
-repos: []
+repos:
+  - name: payments-api
+    deploys: [{cloud_run: payments-api, region: europe-west1}]

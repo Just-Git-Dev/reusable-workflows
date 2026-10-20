@@ -2,8 +2,9 @@
 
 ## Index
 
-104 entries total — 94 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+105 entries total — 95 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [Ruling 21 review fixes: F5/F6 uniqueness, F7 waits for act_as, F6 own deployers only](#2026-10-20--ruling-21-review-fixes-f5f6-uniqueness-f7-waits-for-act_as-f6-own-deployers-only)
 - `2026-10-20` — [One writer per service-account policy: suffix rule, derived runtime SA, F7 writes no SA policy (ruling 21)](#2026-10-20--one-writer-per-service-account-policy-suffix-rule-derived-runtime-sa-f7-writes-no-sa-policy-ruling-21)
 - `2026-10-20` — [Repos-as-code review fixes: protected SAs, repo-admin self-grant, GKE deferred, visibility never written](#2026-10-20--repos-as-code-review-fixes-protected-sas-repo-admin-self-grant-gke-deferred-visibility-never-written)
 - `2026-10-20` — [Repos as code: a per-project register and independent, report-first features](#2026-10-20--repos-as-code-a-per-project-register-and-independent-report-first-features)
@@ -108,6 +109,23 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — Ruling 21 review fixes: F5/F6 uniqueness, F7 waits for act_as, F6 own deployers only
+
+**Context.** The adversarial review of ruling 21 (Option A) found that F5 and F6 skipped the deployable-uniqueness check, F7 planned a doomed `gcloud run deploy`, and several smaller gaps.
+
+**Decision.**
+- F5 and F6 call `repos_plan.validate_core` (the same check as F1-F4 and F7): a deployable under two repos is refused. Docs and the F5 test that enshrined two repos linking one deployer are corrected.
+- F7 gating: for a NEW service whose runtime SA `<d>-run` is absent or lacks repo-admin's `act_as`, only `needs-jgd` is planned for that deployable (no `create-service`, no binding, no GAR binding), in both modes. F7 cannot grant `act_as`, so the deploy could never succeed and the step went red on every run, after earlier repos' writes had landed. An existing service is unaffected.
+- F6 creates only `<d>-deployer` for a `cloud_run: <d>` some repo in the register deploys, not any `*-deployer` name.
+- F7 errors early when `<d>-run` or `<d>-deployer` is outside 6-30 chars (`a-run` is 5: JGD could never declare it).
+- A non-string `cloud_run` in F5 is a clean `error:` line, not a traceback. `PROJECT_SA_RE` / `SA_RE` use `fullmatch` (a trailing newline was accepted by `$`).
+- F5 and F6 apply steps re-check the `-deployer` suffix on the whole plan before any write (jq `\A...\z`), like F7's allow-list. The own-deployable half stays a planner rule: the apply step has the plan, not the register.
+- `repos-deploy-scope.yml` no longer passes `--repo-admin-sa-email` twice.
+
+**Not changed.** The deprecated `protected_service_accounts` input is kept as a no-op (spec 4 / 7(11)); the reviewer noted no released caller exists, so whether to drop it now is an open owner question.
+
+**Why.** One writer per SA policy only holds if the project side cannot name another repo's identity (F5/F6) and cannot start a write it knows will be denied (F7).
 
 ## 2026-10-20 — One writer per service-account policy: suffix rule, derived runtime SA, F7 writes no SA policy (ruling 21)
 

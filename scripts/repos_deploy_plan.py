@@ -21,6 +21,7 @@ FEATURE = "deploy-scope"
 RUN_DEV = "roles/run.developer"
 SA_USER = "roles/iam.serviceAccountUser"
 GAR_WRITER = "roles/artifactregistry.writer"
+MIN_SA_LEN = 6
 MAX_SA_LEN = 30
 
 
@@ -53,9 +54,14 @@ def plan_repo(repo, mode, state, errors, admin_email):
             errors.append("error: %s: deploys entry without a deployable name" % name)
             continue
         deployer = "%s-deployer" % deployable
-        if len(deployer) > MAX_SA_LEN:
-            errors.append("error: %s: deployer SA name '%s' is %d chars, max %d"
-                          % (name, deployer, len(deployer), MAX_SA_LEN))
+        runtime = "%s-run" % deployable
+        # both derived account ids must be valid GCP ids (6-30 chars): a one-char deployable gives
+        # `a-run` (5), which the access-provisioning side could never declare
+        bad_id = next(((k, i) for k, i in (("deployer", deployer), ("runtime", runtime))
+                       if not MIN_SA_LEN <= len(i) <= MAX_SA_LEN), None)
+        if bad_id:
+            errors.append("error: %s: %s SA name '%s' is %d chars, must be %d-%d"
+                          % (name, bad_id[0], bad_id[1], len(bad_id[1]), MIN_SA_LEN, MAX_SA_LEN))
             continue
         member = "serviceAccount:%s@%s.iam.gserviceaccount.com" % (deployer, project)
 
@@ -72,8 +78,7 @@ def plan_repo(repo, mode, state, errors, admin_email):
             continue
         # ruling 21: the runtime SA is DERIVED (`<d>-run`), never chosen, so a repo cannot point its
         # service at another identity. The key is optional; when present it must equal the derived name.
-        runtime = "%s-run" % deployable
-        given = d.get("runtime_service_account")
+        given =d.get("runtime_service_account")
         if given is not None and given != runtime:
             errors.append("error: %s: runtime_service_account '%s' must be '%s' (derived from the "
                           "deployable; omit the key)" % (name, given, runtime))
@@ -82,20 +87,27 @@ def plan_repo(repo, mode, state, errors, admin_email):
         svc = services.get(deployable)
         sa = (state.get("service_accounts") or {}).get(runtime) or {}
         runtime_email = "%s@%s.iam.gserviceaccount.com" % (runtime, project)
-        if svc is None:
-            writes.append(("create-service", {
-                "service": deployable, "region": region,
-                "runtime_service_account": runtime, "image": "placeholder"}))
-        bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"), region)
-        gar = d.get("image_repository")
-        if gar:
-            bind("artifactregistry.repository", gar, GAR_WRITER,
-                 ((state.get("gar_repositories") or {}).get(gar) or {}).get("iam"))
+        admin_member = "serviceAccount:%s" % admin_email
+        # `gcloud run deploy --service-account=<d>-run` needs repo-admin's act_as on that account, and
+        # F7 cannot grant it (ruling 21). While a NEW service's act_as line is not live (or the
+        # account is absent) nothing is created or bound for the deployable: only needs-jgd is
+        # planned, so no run ever reaches a doomed deploy and half-applies a register.
+        ready = svc is not None or held(sa.get("iam"), SA_USER, admin_member)
+        if ready:
+            if svc is None:
+                writes.append(("create-service", {
+                    "service": deployable, "region": region,
+                    "runtime_service_account": runtime, "image": "placeholder"}))
+            bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"), region)
+            gar = d.get("image_repository")
+            if gar:
+                bind("artifactregistry.repository", gar, GAR_WRITER,
+                     ((state.get("gar_repositories") or {}).get(gar) or {}).get("iam"))
         # F7 writes NO service-account policy (ruling 21: one writer, the access-provisioning side).
         # It only READS the runtime SA's policy and reports each line that is not live yet.
         lines = []
         if svc is None:
-            lines.append(("act_as: repo-admin", "serviceAccount:%s" % admin_email))
+            lines.append(("act_as: repo-admin", admin_member))
         lines.append(("deployed_by: %s" % deployer, member))
         for need, mem in lines:
             if not held(sa.get("iam"), SA_USER, mem):

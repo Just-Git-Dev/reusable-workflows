@@ -208,9 +208,24 @@ def main():
                 unreg("payments-api", D, b[0]["role"], b[0]["members"][0])])
 
     # 7. same SA for two repos; register order across repos and SAs
-    reg = register([repo("repo-b", ["two-x-deployer", D]), repo("repo-a", [D])])
-    expect("order = register order", reg, state({D: sa(), "two-x-deployer": sa()}),
-           [add("repo-b", "two-x-deployer"), add("repo-b", D), add("repo-a", D)])
+    # (a deployable belongs to exactly one repo, so no two repos can link the same `<d>-deployer`)
+    reg = register([repo("repo-b", ["two-x-deployer", "ledger-deployer"]), repo("repo-a", [D])])
+    expect("order = register order", reg,
+           state({D: sa(), "two-x-deployer": sa(), "ledger-deployer": sa()}),
+           [add("repo-b", "two-x-deployer"), add("repo-b", "ledger-deployer"), add("repo-a", D)])
+
+    # ruling 21 review F1: F5 enforces deployable uniqueness (the same check as F1-F4 and F7)
+    expect_error("dup deployable across repos",
+                 register([repo("web", ["web-deployer"]),
+                           raw("evil", ["web-deployer"], deploys=[{"cloud_run": "web"}])]),
+                 state({"web-deployer": sa()}), "belongs to exactly one repo")
+    # a non-string cloud_run is a clean error line, not a traceback (review 7)
+    expect_error("list-valued cloud_run",
+                 register([raw("web", ["web-deployer"], deploys=[{"cloud_run": ["web"]}])]),
+                 state({"web-deployer": sa()}), "web")
+    # a trailing newline is not a valid SA name (review 8)
+    expect_error("SA name with a trailing newline",
+                 register([repo("payments-api", [D + "\n"])]), state({D: sa()}), "payments-api")
 
     # 8. missing SA -> error, whole run refused (no partial plan), exists=false and absent
     expect_error("SA exists=false", register([repo("payments-api", [D])]),
@@ -223,8 +238,8 @@ def main():
     expect("report -> drift", register([repo("payments-api", [D])], mode="report"),
            state({D: sa()}), [drift("payments-api", D)])
     expect("repo mode overrides default",
-           register([repo("repo-a", [D], mode="enforce"), repo("repo-b", [D])], mode="report"),
-           state({D: sa()}), [add("repo-a", D), drift("repo-b", D)])
+           register([repo("repo-a", [D], mode="enforce"), repo("repo-b", ["ledger-deployer"])], mode="report"),
+           state({D: sa(), "ledger-deployer": sa()}), [add("repo-a", D), drift("repo-b", "ledger-deployer")])
     reg = register([repo("payments-api", [D])])
     del reg["defaults"]
     expect("mode defaults to report", reg, state({D: sa()}), [drift("payments-api", D)])
@@ -238,8 +253,8 @@ def main():
     ]
     for mode in ("enforce", "report"):
         acts = plan("never-list " + mode,
-                    register([repo("payments-api", [D]), repo("ledger-worker", [D])], mode=mode),
-                    state({D: sa(stale)}))
+                    register([repo("payments-api", [D]), repo("ledger-worker", ["ledger-deployer"])], mode=mode),
+                    state({D: sa(stale), "ledger-deployer": sa()}))
         if acts is None:
             continue
         check("never-list verbs " + mode, all(a.get("action") in ALLOWED_VERBS for a in acts),
@@ -270,11 +285,12 @@ def main():
     UB = [ub("payments-api", ROLE, member("old-repo")),
           ub("payments-api", "roles/iam.serviceAccountUser", "user:someone@example.com")]
     expect("unregistered bindings (enforce)",
-           register([repo("payments-api", [D]), repo("ledger-worker", [D])]), state({D: sa(stale)}),
-           UB + [add("ledger-worker", D)])
+           register([repo("payments-api", [D]), repo("ledger-worker", ["ledger-deployer"])]),
+           state({D: sa(stale), "ledger-deployer": sa()}),
+           UB + [add("ledger-worker", "ledger-deployer")])
     expect("unregistered bindings (report)",
-           register([repo("payments-api", [D]), repo("ledger-worker", [D])], mode="report"),
-           state({D: sa(stale)}), UB + [drift("ledger-worker", D)])
+           register([repo("payments-api", [D]), repo("ledger-worker", ["ledger-deployer"])], mode="report"),
+           state({D: sa(stale), "ledger-deployer": sa()}), UB + [drift("ledger-worker", "ledger-deployer")])
     expect("unregistered binding on an SA no repo lists is not examined",
            register([repo("payments-api", [D])]), state({D: sa(linked), "other-xx-deployer": sa(stale)}),
            [insync("payments-api")])

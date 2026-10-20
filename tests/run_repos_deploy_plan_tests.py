@@ -183,7 +183,7 @@ def missing_service_is_created_then_bound():
     acts = of(plan(load_register(), load_state()), "payments-api")
     exp = [create("payments-api", "payments-api-run")] + run_bindings(
         "payments-api", "payments-api-run", "payments-api-deployer") + [
-        needs_act_as("payments-api-run"), needs_deployed_by("payments-api-run", "payments-api-deployer")]
+        needs_deployed_by("payments-api-run", "payments-api-deployer")]
     assert shape(acts) == exp, "got %s" % json.dumps(shape(acts))
 
 
@@ -255,7 +255,7 @@ def r21_runtime_sa_deployed_by_line_missing_is_needs_jgd_in_both_modes():
 def r21_deployed_by_line_live_means_no_needs_jgd():
     st = load_state()
     st["service_accounts"]["ledger-worker-run"]["iam"] = [
-        {"role": SA_USER, "members": [member("ledger-worker-deployer")]}]
+        {"role": SA_USER, "members": [member("ledger-worker-deployer"), "serviceAccount:" + ADMIN_EMAIL]}]
     got = shape(of(plan(load_register(), st), "ledger-worker"))
     assert got == run_bindings("ledger-worker", "ledger-worker-run", "ledger-worker-deployer"), got
     # another role or another member does not count as live
@@ -289,6 +289,60 @@ def r21_act_as_for_repo_admin_is_reported_only_when_creating_a_service():
 
 
 @case
+def r21_new_service_with_act_as_not_live_plans_only_needs_jgd_in_both_modes():
+    # review F2: `gcloud run deploy --service-account=<d>-run` needs repo-admin's act_as on it. While
+    # that line is not live (SA present without it, or SA absent) nothing may be created or bound.
+    absent = load_state()
+    absent["service_accounts"].pop("payments-api-run")
+    present = load_state()
+    present["service_accounts"]["payments-api-run"]["iam"] = [
+        {"role": SA_USER, "members": [member("someone-else-aa")]}]
+    for label, st in (("sa absent", absent), ("sa without act_as", present)):
+        for mode in ("enforce", "report"):
+            reg = load_register()
+            reg["defaults"]["mode"] = mode
+            got = shape(of(plan(reg, st), "payments-api"))
+            exp = [needs_act_as("payments-api-run"),
+                   needs_deployed_by("payments-api-run", "payments-api-deployer")]
+            assert got == exp, "%s/%s: %s" % (label, mode, json.dumps(got))
+
+
+@case
+def r21_new_service_with_act_as_live_is_created_then_bound():
+    st = load_state()
+    st["service_accounts"]["payments-api-run"]["iam"] = [
+        {"role": SA_USER, "members": ["serviceAccount:" + ADMIN_EMAIL]}]
+    for mode in ("enforce", "report"):
+        reg = load_register()
+        reg["defaults"]["mode"] = mode
+        verbs = [g[0] if mode == "enforce" else g[1].get("would", g[0])
+                 for g in shape(of(plan(reg, st), "payments-api"))]
+        assert verbs[0] == "create-service" and "add-resource-binding" in verbs, verbs
+        assert "needs-jgd" in verbs, verbs         # deployed_by is still outstanding
+
+
+def _expect_planner_error(mutate, needle):
+    reg = load_register()
+    mutate(repo(reg, "payments-api")["deploys"][0])
+    rc, out, err = run(reg, load_state())
+    lines = [ln for ln in err.splitlines() if ln.strip()]
+    assert rc == 1 and out.strip() == "", (rc, out[:100], err[:200])
+    assert lines and all(ln.startswith("error: ") for ln in lines) and needle in err, err[:300]
+
+
+@case
+def r21_derived_ids_outside_gcp_length_are_an_early_error():
+    # review 5: `a-run` is 5 chars (GCP minimum 6): JGD could never declare it
+    def one_char(d):
+        d["cloud_run"] = "a"
+        d.pop("runtime_service_account", None)
+    _expect_planner_error(one_char, "a-run")
+    # `<d>-deployer` over 30 chars
+    _expect_planner_error(lambda d: d.update({"cloud_run": "x" * 22, "runtime_service_account": "x" * 22 + "-run"}),
+                          "-deployer")
+
+
+@case
 def artifact_registry_writer_on_the_image_repository():
     acts = of(plan(load_register(), load_state()), "payments-api")
     w = [a["details"] for a in acts if a["action"] == "add-resource-binding"
@@ -302,7 +356,7 @@ def cross_service_isolation_each_deployer_only_its_own_service():
     st = load_state()
     # the other repo's deployer already sits on payments-api's runtime SA: it is not payments-api's line
     st["service_accounts"]["payments-api-run"]["iam"] = [
-        {"role": SA_USER, "members": [member("ledger-worker-deployer")]}]
+        {"role": SA_USER, "members": [member("ledger-worker-deployer"), "serviceAccount:" + ADMIN_EMAIL]}]
     acts = plan(load_register(), st)
     mine = [a for a in of(acts, "payments-api") if a["action"] == "add-resource-binding"]
     assert mine and all(a["details"]["member"] == member("payments-api-deployer") for a in mine), mine
@@ -393,7 +447,7 @@ def report_mode_emits_only_drift_legacy_and_in_sync():
     exp = [("drift", dict(would=v, **d)) for v, d in
            [create("payments-api", "payments-api-run")] + run_bindings(
                "payments-api", "payments-api-run", "payments-api-deployer")] + [
-        needs_act_as("payments-api-run"), needs_deployed_by("payments-api-run", "payments-api-deployer")]
+        needs_deployed_by("payments-api-run", "payments-api-deployer")]
     assert shape(pay) == exp, json.dumps(shape(pay))
 
 
@@ -437,6 +491,7 @@ def deployer_name_over_30_chars_is_an_error_with_no_partial_plan():
 def deployer_name_of_exactly_30_chars_is_accepted():
     reg, st = load_register(), load_state()
     svc = "a" * 21                                       # 21 + 9 = 30
+    st["service_accounts"][svc + "-run"] = {"iam": [{"role": SA_USER, "members": ["serviceAccount:" + ADMIN_EMAIL]}]}
     repo(reg, "payments-api")["deploys"][0]["cloud_run"] = svc
     repo(reg, "payments-api")["deploys"][0]["runtime_service_account"] = svc + "-run"
     repo(reg, "payments-api")["gcp"]["service_accounts"] = [svc + "-deployer"]
