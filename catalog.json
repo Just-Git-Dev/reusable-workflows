@@ -3262,6 +3262,66 @@
       "secrets": {},
       "workflow": "repos-register-check.yml"
     },
+    "repos-secrets": {
+      "inputs": {
+        "environment": {
+          "default": "repo-admin",
+          "description": "GitHub environment the job runs in (holds the approval gate for the repo-admin identity).",
+          "required": false,
+          "type": "string"
+        },
+        "project_id": {
+          "default": null,
+          "description": "GCP project that hosts the secrets and the service accounts.",
+          "required": true,
+          "type": "string"
+        },
+        "prune": {
+          "default": false,
+          "description": "Enforce only: remove policy lines F8 would not write. Default false = report them as drift.",
+          "required": false,
+          "type": "boolean"
+        },
+        "register_path": {
+          "default": "repos.yaml",
+          "description": "Path of the register file in the caller repository.",
+          "required": false,
+          "type": "string"
+        },
+        "replication": {
+          "default": "automatic",
+          "description": "Replication of a newly created secret: 'automatic', or one region (user-managed), e.g. europe-west1.",
+          "required": false,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "The repo-admin service account email (acted as through WIF).",
+          "required": true,
+          "type": "string"
+        },
+        "workload_identity_provider": {
+          "default": null,
+          "description": "WIF provider resource name used to authenticate as the repo-admin SA.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "secrets": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read",
+            "id-token": "write"
+          }
+        }
+      },
+      "name": "repos-secrets",
+      "outputs": {},
+      "path": ".github/workflows/repos-secrets.yml",
+      "secrets": {},
+      "workflow": "repos-secrets.yml"
+    },
     "repos-service-accounts": {
       "inputs": {
         "environment": {

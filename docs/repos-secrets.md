@@ -34,7 +34,7 @@ register, the live-state JSON and the action list are defined in
 | deployer SA `<service>-deployer` missing | **error**, exit `1`, nothing planned for any repo: run F6 first |
 | runtime SA `<service>-run` missing | `needs-jgd` for that service, nothing else planned for it (the access-provisioning side declares `<service>-run`) |
 | secret `<service>-env` missing | `create-secret` (empty, no version; replication from the `replication` input; labels `managed-by=repos-secrets` and `deployable=<service>`) |
-| secret present | **adopt**: `adopt` is reported, the secret is never recreated and its versions are never read |
+| secret present, a wanted line missing | **adopt**: `adopt` is reported first, the secret is never recreated and its versions are never read |
 | a wanted (role, member) line missing | `add-secret-binding` |
 | a (role, member) line that is not wanted | `drift{would: "remove-secret-binding"}`; written as `remove-secret-binding` only in `enforce` AND with `prune: true` |
 | everything as wanted | `in-sync` |

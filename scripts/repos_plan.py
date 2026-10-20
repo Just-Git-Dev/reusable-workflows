@@ -188,6 +188,19 @@ def validate_register_feature(reg):
     import jsonschema
     schema = json.loads(SCHEMA.read_text())
     errs = []
+    # F8: `env_secret` opts a Cloud Run entry in to the secret `<cloud_run>-env`. The name is derived,
+    # never chosen, so the only accepted value is `true`. Checked ahead of the schema because a
+    # oneOf failure would not name the key.
+    repos = reg.get("repos") if isinstance(reg, dict) else None
+    for r in repos if isinstance(repos, list) else []:
+        deploys = r.get("deploys") if isinstance(r, dict) else None
+        for i, dep in enumerate(deploys if isinstance(deploys, list) else []):
+            if isinstance(dep, dict) and "env_secret" in dep and dep["env_secret"] is not True:
+                errs.append(err(r["name"] if isinstance(r.get("name"), str) else "register",
+                                f"deploys[{i}].env_secret must be true (the secret name "
+                                "`<cloud_run>-env` is derived, never chosen)"))
+    if errs:
+        raise PlanError(errs)
     for e in sorted(jsonschema.Draft202012Validator(schema).iter_errors(reg),
                     key=lambda e: [str(p) for p in e.absolute_path]):
         where = ".".join(str(p) for p in e.absolute_path) or "(top level)"

@@ -505,7 +505,7 @@ partial plan:** one error refuses the whole run.
 | `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `key: "gke"`, a `deploys` entry the feature does not act on |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
 | `needs-jgd` | `{"resource_type": "iam.serviceAccount", "resource": string, "role": "roles/iam.serviceAccountUser", "member": string, "needs": string}` — F7: a line on the runtime SA `<d>-run`'s policy that the access-provisioning side must declare (`deployed_by: <d>-deployer`, or `act_as: repo-admin` while a service is still to be created); reported in both modes, never written. F8 uses the same verb for a missing runtime SA, with `{"resource_type": "iam.serviceAccount", "resource": "<d>-run@<project>...", "needs": "service account <d>-run"}` (no `role`/`member`) |
-| `adopt` | `{"secret": string}` — F8: the secret `<d>-env` already exists; it is never recreated and its versions are never read. Emitted in both modes |
+| `adopt` | `{"secret": string}` — F8: the secret `<d>-env` already exists and lacks a wanted policy line; it is never recreated and its versions are never read. Emitted in both modes |
 
 **Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each; `update-repo` never carries `visibility`):
 
