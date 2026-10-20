@@ -1,0 +1,86 @@
+name: Repos register check (reusable)
+
+# F1 of the repos-as-code family (docs/repos-register.md, docs/repos-register-check.md): validate
+# `repos.yaml` against schemas/repos.v1.json plus the cross-entry rules. It writes nothing, mints
+# no token and needs no environment, so it is safe on every pull request that touches the register.
+#
+# The decision is scripts/repos_plan.py --feature register, checked out from this repo at
+# WORKFLOW_VERSION; this file only fetches it, installs its pinned dependencies and reports.
+# Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
+
+on:
+  workflow_call:
+    inputs:
+      register:
+        description: 'Path of the register in the caller repo (a plain relative path)'
+        type: string
+        required: false
+        default: repos.yaml
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.7.0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: repos-register-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the planner at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .repos-src
+          persist-credentials: false
+
+      - name: Install the pinned planner dependencies
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet --disable-pip-version-check -r .repos-src/requirements-ci.txt
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Validate the register
+        env:
+          REGISTER: ${{ inputs.register }}
+        run: |
+          set -uo pipefail
+          [[ "$REGISTER" =~ ^[A-Za-z0-9._/-]+$ && "$REGISTER" != *..* && "$REGISTER" != /* ]] || { echo "::error::register '$REGISTER' is not a plain relative path"; exit 1; }
+          python3 .repos-src/scripts/repos_plan.py --feature register --register "$REGISTER" > "$RUNNER_TEMP/plan.json" 2> "$RUNNER_TEMP/plan.err"; rc=$?
+          if [ "$rc" != "0" ]; then
+            sed 's/^error: /::error::/' "$RUNNER_TEMP/plan.err"
+            {
+              echo "### Repos register check"
+              echo
+              echo "**Invalid.** \`$REGISTER\` was refused:"
+              echo
+              sed 's/^error: /- /' "$RUNNER_TEMP/plan.err"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          examined=$(jq 'length' "$RUNNER_TEMP/plan.json")
+          {
+            echo "### Repos register check"
+            echo
+            echo "\`$REGISTER\` is valid: **$examined** repo(s) examined."
+            echo
+            jq -r '.[] | "- \(.repo)"' "$RUNNER_TEMP/plan.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$examined" != "0" ] || echo "::warning::the register lists no repos; nothing was examined"

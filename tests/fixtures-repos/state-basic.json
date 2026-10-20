@@ -1,0 +1,22 @@
+{
+  "repos": {
+    "payments-api": {
+      "exists": true,
+      "description": "Payments HTTP API",
+      "visibility": "private",
+      "default_branch": "main",
+      "settings": {"delete_branch_on_merge": false, "allow_auto_merge": false},
+      "variables": {"REGION": "us-east1", "UNLISTED_VAR": "keep"}
+    },
+    "ledger-worker": {"exists": false},
+    "legacy-billing": {"exists": true, "visibility": "private", "default_branch": "main"},
+    "stray-repo": {
+      "exists": true,
+      "description": "not in the register",
+      "visibility": "internal",
+      "default_branch": "trunk",
+      "settings": {"delete_branch_on_merge": false},
+      "variables": {"X": "1"}
+    }
+  }
+}

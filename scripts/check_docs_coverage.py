@@ -54,7 +54,7 @@ def main():
         # Standalone guidance pages, not workflow references. They have no
         # corresponding .yml and never will.
         if doc.stem in {"PLATFORM", "convergence-audit", "release-process", "alertspec",
-                        "TESTING-STANDARD"}:
+                        "TESTING-STANDARD", "repos-register"}:
             continue
         if not (WORKFLOWS / f"{doc.stem}.yml").is_file() \
                 and not (ACTIONS / doc.stem / "action.yml").is_file():

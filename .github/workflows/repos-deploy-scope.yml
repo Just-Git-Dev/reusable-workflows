@@ -1,0 +1,251 @@
+# repos-deploy-scope.yml — F7 of repos-as-code: each repo may deploy only its own service.
+#
+# Per `deploys:` entry of the register (`repos.yaml`): create the Cloud Run service once with a
+# placeholder image if it is missing, then bind the repo's `<deployable>-deployer` SA on THAT
+# service only (resource-level IAM). It writes NO service-account policy (one writer per SA policy,
+# ruling 21): the runtime SA is derived as `<deployable>-run`, owned by the access-provisioning side,
+# and F7 only reads its policy and reports `needs-jgd` when the deployer / repo-admin line is missing.
+# GKE is deferred: a `gke` entry is only reported as unsupported (no kubectl path exists).
+# A thin shell over scripts/repos_deploy_plan.py: fetch live state -> plan -> report or apply.
+#
+# Never: a project-level grant, a delete, an SA key. No project-level IAM is read; the region of
+# every service comes from the register.
+# Contract and action list: docs/repos-register.md. Page: docs/repos-deploy-scope.md.
+#
+# Caller example (pin the tag; the planner is fetched at the version stamped in WORKFLOW_VERSION):
+#   jobs:
+#     deploy-scope:
+#       uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-deploy-scope.yml@vX.Y.Z
+#       with:
+#         workload_identity_provider: projects/123/locations/global/workloadIdentityPools/p/providers/github
+#         service_account: repo-admin@example-proj.iam.gserviceaccount.com
+#         project_id: example-proj
+name: repos-deploy-scope
+
+on:
+  workflow_call:
+    inputs:
+      workload_identity_provider:
+        description: 'WIF provider resource name used to authenticate as the repo-admin SA.'
+        required: true
+        type: string
+      service_account:
+        description: 'The repo-admin service account email (acted as through WIF).'
+        required: true
+        type: string
+      project_id:
+        description: 'GCP project id that hosts the Cloud Run services, runtime SAs and GAR repositories.'
+        required: true
+        type: string
+      register_path:
+        description: 'Path of the register file in the caller repository.'
+        required: false
+        type: string
+        default: 'repos.yaml'
+      placeholder_image:
+        description: 'Image the service is first created with (only when the service is missing). Must be pullable by Cloud Run.'
+        required: false
+        type: string
+        default: 'us-docker.pkg.dev/cloudrun/container/hello'
+      environment:
+        description: 'GitHub environment the job runs in (holds the approval gate for the repo-admin identity).'
+        required: false
+        type: string
+        default: 'repo-admin'
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.7.0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy-scope:
+    name: deploy-scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ inputs.project_id }}
+      REGISTER: ${{ inputs.register_path }}
+      PLACEHOLDER_IMAGE: ${{ inputs.placeholder_image }}
+      REPO_ADMIN_SA_EMAIL: ${{ inputs.service_account }}
+    steps:
+      - name: Refuse unless repo-admin on the main branch
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          REF: ${{ github.ref }}
+          REGISTER_PATH: ${{ inputs.register_path }}
+        run: |
+          set -euo pipefail
+          [ "$ENVIRONMENT" = "repo-admin" ] || { echo "::error::environment is '$ENVIRONMENT', this workflow runs only in repo-admin"; exit 1; }
+          [ "$REF" = "refs/heads/main" ] || { echo "::error::ref is '$REF'; repos-as-code runs only on refs/heads/main"; exit 1; }
+          [[ "$REGISTER_PATH" =~ ^[A-Za-z0-9._/-]+$ && "$REGISTER_PATH" != *..* && "$REGISTER_PATH" != /* ]] || { echo "::error::register_path '$REGISTER_PATH' is not a plain relative path"; exit 1; }
+
+      - name: Checkout the caller (the register)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the planner at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .repos-src
+          persist-credentials: false
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Install the pinned planner dependencies
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet --disable-pip-version-check -r .repos-src/requirements-ci.txt
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch live state
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          import yaml
+
+          project = os.environ["PROJECT_ID"]
+          reg = yaml.safe_load(open(os.environ["REGISTER"]))
+
+          def gcloud(*args, missing_ok=False):
+              p = subprocess.run(["gcloud", *args, "--project", project, "--format=json"],
+                                 capture_output=True, text=True)
+              if p.returncode == 0:
+                  return json.loads(p.stdout or "null")
+              if missing_ok and ("NOT_FOUND" in p.stderr or "Cannot find service" in p.stderr
+                                 or "not found" in p.stderr.lower()):
+                  return None
+              sys.exit("error: register: gcloud %s failed: %s" % (" ".join(args[:4]), p.stderr.strip()[:300]))
+
+          def iam(policy):
+              return [{"role": b["role"], "members": b.get("members", [])}
+                      for b in (policy or {}).get("bindings", [])]
+
+          # Read-only calls only: run services describe/get-iam-policy, SA get-iam-policy, GAR
+          # get-iam-policy. The region always comes from the register (never `run services list`);
+          # no project-level IAM and no cluster is read (GKE entries are only reported).
+          state = {"project_id": project, "cloud_run_services": {}, "service_accounts": {},
+                   "gar_repositories": {}}
+          for repo in reg.get("repos") or []:
+              for d in repo.get("deploys") or []:
+                  if "cloud_run" not in d:
+                      continue
+                  svc, region = d["cloud_run"], d["region"]
+                  if gcloud("run", "services", "describe", svc, "--region", region,
+                            missing_ok=True) is not None:
+                      pol = gcloud("run", "services", "get-iam-policy", svc, "--region", region)
+                      state["cloud_run_services"][svc] = {"iam": iam(pol)}
+                  rt = d["cloud_run"] + "-run"   # derived (ruling 21), never chosen
+                  email = "%s@%s.iam.gserviceaccount.com" % (rt, project)
+                  pol = gcloud("iam", "service-accounts", "get-iam-policy", email, missing_ok=True)
+                  state["service_accounts"][rt] = {"iam": iam(pol)} if pol is not None else {}
+                  gar = d.get("image_repository")
+                  if gar:
+                      loc, name = gar.split("/", 1)
+                      state["gar_repositories"][gar] = {"iam": iam(gcloud(
+                          "artifacts", "repositories", "get-iam-policy", name, "--location", loc))}
+          json.dump(state, open("state.json", "w"), indent=2)
+          print("live state written: %d service(s), %d runtime SA(s), %d GAR repo(s)" % (
+              len(state["cloud_run_services"]), len(state["service_accounts"]),
+              len(state["gar_repositories"])))
+          PY
+
+      - name: Plan
+        run: |
+          python3 .repos-src/scripts/repos_deploy_plan.py --feature deploy-scope \
+            --register "$REGISTER" --state state.json \
+            --repo-admin-sa-email "$REPO_ADMIN_SA_EMAIL" > plan.json
+          echo "actions: $(jq length plan.json)"
+
+      - name: Report
+        run: |
+          examined=$(jq '[.[].repo] | unique | length' plan.json)
+          {
+            echo "## repos-deploy-scope"
+            echo
+            echo "Examined **${examined}** repo(s); **$(jq length plan.json)** plan entr(ies)."
+            echo
+            echo "| repo | action | details |"
+            echo "|---|---|---|"
+            jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tostring)` |"' plan.json
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.[] | select(.action=="unsupported") | "::warning::\(.repo): \(.details.key): \(.details.reason)"' plan.json
+          jq -r '.[] | select(.action=="needs-jgd") | "::warning::\(.repo): needs an access-provisioning change on \(.details.resource): \(.details.needs)"' plan.json
+          [ "$examined" != "0" ] || echo "::warning::the register lists no repos; nothing was examined"
+
+      - name: Apply (write actions, in order)
+        run: |
+          writes=$(jq '[.[] | select(.action=="create-service" or .action=="add-resource-binding")] | length' plan.json)
+          echo "write actions to apply: $writes"
+          # Re-check the WHOLE plan before the first write: an unknown verb (there is no kubectl or
+          # k8s verb any more), a role/resource pair outside the allow-list, a member that is not a
+          # service account, or a name of the wrong shape fails with nothing applied.
+          bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","needs-jgd","create-service","add-resource-binding"] | index($a) | not)] | length' plan.json)
+          [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
+          badbind=$(jq '[.[] | select(.action=="add-resource-binding") | select(
+              ((.details.resource_type=="run.service" and .details.role=="roles/run.developer"
+                  and (.details.resource | test("\\A[a-z]([-a-z0-9]{0,61}[a-z0-9])?\\z"))
+                  and ((.details.region // "") | test("\\A[a-z]+-[a-z]+[0-9]\\z")))
+               or (.details.resource_type=="artifactregistry.repository" and .details.role=="roles/artifactregistry.writer"))
+              and (.details.member | startswith("serviceAccount:")) | not)] | length' plan.json)
+          [ "$badbind" = "0" ] || { echo "::error::refusing $badbind binding(s) outside the role/resource allow-list; nothing applied"; exit 1; }
+          badsvc=$(jq '[.[] | select(.action=="create-service") | select(
+              (.details.service | test("\\A[a-z]([-a-z0-9]{0,61}[a-z0-9])?\\z"))
+              and (.details.region | test("\\A[a-z]+-[a-z]+[0-9]\\z"))
+              and (.details.runtime_service_account | test("\\A[a-z][a-z0-9-]{4,28}[a-z0-9]\\z")) | not)] | length' plan.json)
+          [ "$badsvc" = "0" ] || { echo "::error::refusing $badsvc create-service action(s) with a malformed name or region; nothing applied"; exit 1; }
+          [ "$writes" -gt 0 ] || exit 0
+          # fd 3, not a pipe: gcloud would otherwise eat the loop's stdin, and a pipe would run the
+          # loop in a subshell.
+          while read -r a <&3; do
+            act=$(jq -r .action <<<"$a")
+            d=$(jq -c .details <<<"$a")
+            case "$act" in
+              create-service)
+                svc=$(jq -r .service <<<"$d"); region=$(jq -r .region <<<"$d"); rt=$(jq -r .runtime_service_account <<<"$d")
+                echo "create-service $svc ($region)"
+                gcloud run deploy "$svc" --image="$PLACEHOLDER_IMAGE" \
+                  --service-account="${rt}@${PROJECT_ID}.iam.gserviceaccount.com" \
+                  --region="$region" --no-allow-unauthenticated --project="$PROJECT_ID" --quiet
+                ;;
+              add-resource-binding)
+                rtype=$(jq -r .resource_type <<<"$d"); res=$(jq -r .resource <<<"$d")
+                role=$(jq -r .role <<<"$d"); mem=$(jq -r .member <<<"$d")
+                echo "bind $role on $rtype $res"
+                case "$rtype" in
+                  run.service)
+                    region=$(jq -r .region <<<"$d")
+                    gcloud run services add-iam-policy-binding "$res" --region="$region" \
+                      --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet ;;
+                  artifactregistry.repository)
+                    gcloud artifacts repositories add-iam-policy-binding "${res#*/}" --location="${res%%/*}" \
+                      --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet ;;
+                  *)
+                    # unreachable after the allow-list above; kept as defence in depth
+                    echo "::error::refusing $role on $rtype $res: no resource-level IAM exists for it (a project-level grant is never made here)"
+                    exit 1 ;;
+                esac
+                ;;
+            esac
+          done 3< <(jq -c '.[] | select(.action=="create-service" or .action=="add-resource-binding")' plan.json)
