@@ -896,3 +896,4 @@ are the few things about running the convergence that the repo did not already r
   The bundle predates the root-mount decision, so it still nests under `user/`.
   Still open: the stage hostname; whether to adopt `ci-node`'s badges; Android App Links (the
   apex `assetlinks.json` returns HTML — already broken); the GKE decommission tail.
+- [ ] `.github/workflows/manage-config-secrets.yml` — refuse a `gsm` create of a `*-env` secret (ruling 24 says F8 owns it; only the doc states it today)

@@ -18,7 +18,7 @@ here. Nothing on this page is implemented until that page exists.
 3. [Schema `schemas/repos.v1.json`, in words](#3-schema-schemasreposv1json-in-words)
 4. [Report vs enforce](#4-report-vs-enforce)
 5. [The NEVER list](#5-the-never-list)
-6. [Features F1-F7 (adopt any one alone)](#6-features-f1-f7-adopt-any-one-alone)
+6. [Features F1-F8 (adopt any one alone)](#6-features-f1-f8-adopt-any-one-alone)
 7. [Planner / workflow split](#7-planner--workflow-split)
 8. [The planner action list — the contract](#8-the-planner-action-list--the-contract)
 9. [The `repo-admin` environment](#9-the-repo-admin-environment)
@@ -63,6 +63,7 @@ repos:
       - cloud_run: payments-api
         region: europe-west1                            # runtime SA is derived: payments-api-run
         image_repository: europe-west1/services         # <location>/<GAR repository>
+        env_secret: true                                # F8: secret payments-api-env (derived name)
   - name: ledger-worker
     status: new                   # F2 creates it if missing
     mode: enforce                 # overrides defaults.mode for this repo only
@@ -86,6 +87,7 @@ repos:
 | `repos[].gcp.service_accounts` | F5 WIF link | SAs must already exist; F5 never creates one |
 | top-level `service_accounts:` | F6 service accounts | create-if-missing only |
 | `repos[].deploys` | F7 deploy scope | Cloud Run entries; a GKE entry is reported `unsupported` |
+| `repos[].deploys[].env_secret` | F8 secrets | `true` = this Cloud Run entry gets the secret `<cloud_run>-env`; any other value is an error (the name is derived, never chosen) |
 | `repos[].kind` | nobody yet | inventory only |
 
 **Unknown keys are ignored by every feature** — at any level, including inside a repo entry. A
@@ -126,12 +128,14 @@ F1 validates against it; every planner validates the parts it reads before plann
     - `cloud_run` (string, the service name) — then `region` (string) and
       are required, `image_repository` (`<location>/<repository>`) is optional.
       `runtime_service_account` is optional and **derived**: the runtime SA is always
-      `<cloud_run>-run`; a value that is present must equal it, or F7 exits `1`. A `cloud_run` name
-      may appear under only one repo (a deployable belongs to exactly one repo; F1-F7 refuse a
+      `<cloud_run>-run`; a value that is present must equal it, or F7 exits `1`.
+      `env_secret` is optional and must be the boolean `true` when present (F8; the secret name
+      `<cloud_run>-env` is derived, so a string such as `web-env` is refused). A `cloud_run` name
+      may appear under only one repo (a deployable belongs to exactly one repo; F1-F8 refuse a
       register that lists it twice);
     - `gke` (object, all required: `cluster` as `<location>/<name>`, `namespace`, `workload`). The
       schema accepts it so a register can record intent, but F7 does not act on it
-      ([§6](#6-features-f1-f7-adopt-any-one-alone)).
+      ([§6](#6-features-f1-f8-adopt-any-one-alone)).
   - **Names that reach a command line** (`cloud_run`, `region`, `image_repository`, every repo
     name and `rename_from`, `default_branch`, SA names, the `gke` fields) are checked against
     patterns and may never start with `-`, so no register value can turn into a flag: Cloud Run
@@ -175,8 +179,8 @@ No feature, in any mode, ever:
 5. **creates a service-account key** (deploys are keyless, WIF only);
 6. **deletes a service account**;
 7. **grants a project-level IAM role** (only resource-level bindings: on one SA, one Cloud Run
-   service, one Artifact Registry repository; project-level grants are the access-provisioning
-   owner's, done by a human config change);
+   service, one Artifact Registry repository, one `<d>-env` secret; project-level grants are the
+   access-provisioning owner's, done by a human config change);
 8. removes or changes a binding it did not add — F5 only ever **adds**
    `roles/iam.workloadIdentityUser` principalSets; it never removes one;
 9. **writes the policy of, or creates or edits, a service account that is not the project's own.**
@@ -202,7 +206,7 @@ register that would need one (a `public` visibility, a `rename_from` that collid
 existing repo) is refused with an error, not planned around. The workflow checks every action
 name against the same allow-list before applying it — defence in depth, not the primary control.
 
-## 6. Features F1-F7 (adopt any one alone)
+## 6. Features F1-F8 (adopt any one alone)
 
 No feature requires another. Each row lists what you must have to adopt that feature by itself.
 
@@ -215,6 +219,7 @@ No feature requires another. Each row lists what you must have to adopt that fea
 | F5 | `repos-wif-link.yml` | `gcp.service_accounts` | GCP: the project's `repo-admin` SA via WIF (`id-token: write`) | SA IAM bindings |
 | F6 | `repos-service-accounts.yml` | top-level `service_accounts` | GCP: `repo-admin` via WIF | service accounts |
 | F7 | `repos-deploy-scope.yml` | `deploys` | GCP: `repo-admin` via WIF | Cloud Run service (create once) + resource-level IAM |
+| F8 | `repos-secrets.yml` | `deploys[].env_secret` | GCP: `repo-admin` via WIF | Secret Manager secret `<d>-env` (create once, never its versions) + that secret's IAM policy |
 
 GitHub-side features (F2-F4) mint a GitHub App installation token narrowed with `permission-*`
 inputs to exactly the row above, and run only in the `repo-admin` environment
@@ -310,6 +315,20 @@ a service name like `--ingress=all` never reaches `gcloud`). Then, per `deploys:
   shared accounts it was meant to migrate; moving a project off a shared account's project-level
   roles is a human change in the access-provisioning config.
 
+**F8 — per-service secrets** (owner ruling 24; page [repos-secrets.md](repos-secrets.md)). Same
+schema check as F1 first (a refused register plans nothing). For each `cloud_run: <d>` entry with
+`env_secret: true`, F8 owns the secret `<d>-env` and its **whole** IAM policy (one writer per secret
+policy, ruling 21's rule extended). The desired policy is exactly: `<d>-run` →
+`roles/secretmanager.secretAccessor`; `<d>-deployer` → `secretAccessor`, `secretVersionManager`,
+`viewer` (the sync role set; it includes `versions.destroy`, by owner choice). Per deployable: a
+missing `<d>-deployer` is `error: <repo>: ... run F6 first` (exit `1`, no plan at all); a missing
+`<d>-run` is `needs-jgd` and nothing else for that deployable; a missing secret is `create-secret`
+(empty, no version); an existing one is `adopt`ed (never recreated, versions never read); a missing
+policy line is `add-secret-binding`; a line that is not wanted is `drift{would:
+"remove-secret-binding"}`, written only in `enforce` with `--prune`. **F8 never** deletes a secret,
+adds/reads/disables/destroys a version, touches a secret that is not `<d>-env` for a registered `d`,
+or binds any other role. `env_secret` must be boolean `true`: a name is derived, never chosen.
+
 ## 7. Planner / workflow split
 
 Every feature is a **thin workflow over a pure planner**:
@@ -321,7 +340,8 @@ workflow: fetch live state (gh api / gcloud) ───────────�
 ```
 
 - Planners: `scripts/repos_plan.py` (F1-F4), `scripts/repos_wif_plan.py` (F5),
-  `scripts/repos_sa_plan.py` (F6), `scripts/repos_deploy_plan.py` (F7).
+  `scripts/repos_sa_plan.py` (F6), `scripts/repos_deploy_plan.py` (F7),
+  `scripts/repos_secrets_plan.py` (F8).
 - Invocation: `python3 scripts/<planner>.py --feature <name> --register repos.yaml --state
   state.json` — stdout is the action list ([§8](#8-the-planner-action-list--the-contract)).
 - Same input → same output, always. The planner reads only its two files; the workflow does every
@@ -333,7 +353,7 @@ workflow: fetch live state (gh api / gcloud) ───────────�
 
 ### 7.1 Planner command lines and live-state JSON
 
-All four planners take `--feature <name> --register <repos.yaml> --state <state.json>`, print the
+Every planner takes `--feature <name> --register <repos.yaml> --state <state.json>`, print the
 [§8](#8-the-planner-action-list--the-contract) action list to stdout and exit `0`, or print
 nothing to stdout, one `error: <repo|sa|register>: <reason>` line per error to stderr and exit
 `1`. An unknown `--feature` exits non-zero with nothing on stdout. The register is read as YAML
@@ -350,6 +370,7 @@ Which accounts a planner may manage is decided by the `-deployer` name suffix
 | `scripts/repos_wif_plan.py` (F5) | `wif-link` | none |
 | `scripts/repos_sa_plan.py` (F6) | `service-accounts` | none |
 | `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | required `--repo-admin-sa-email <email>` |
+| `scripts/repos_secrets_plan.py` (F8) | `secrets` | optional `--prune` (allow `remove-secret-binding` in enforce) |
 
 **F1-F4 live state** — one entry per repo the workflow looked up. A repo with `exists: false`, or
 absent from `repos`, does not exist. Live repos the register does not list produce no action.
@@ -396,6 +417,18 @@ A Cloud Run service whose key is absent from `cloud_run_services` does not exist
 of `{"role", "members"}` policy entries. `service_accounts` is keyed by runtime SA name and holds
 that SA's own policy. F7 reads no project-level IAM and no cluster. A deployer name longer than 30
 characters is an error (`error: <repo>: ...`).
+
+**F8 live state:**
+
+```json
+{"project_id": "example-proj",
+ "secrets": {"payments-api-env": {"iam": [{"role": "roles/secretmanager.secretAccessor", "members": ["serviceAccount:..."]}]}},
+ "service_accounts": {"payments-api-deployer": {}, "payments-api-run": {}}}
+```
+
+A secret whose key is absent from `secrets` does not exist. `service_accounts` lists only the
+accounts that exist (keyed by account name; the value is ignored). F8 reads no secret version and
+no project-level IAM.
 
 ### 7.2 Naming formats, ordering and modes
 
@@ -453,7 +486,7 @@ partial plan:** one error refuses the whole run.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `feature` | string enum | `register`, `create`, `settings`, `variables`, `wif-link`, `service-accounts`, `deploy-scope` |
+| `feature` | string enum | `register`, `create`, `settings`, `variables`, `wif-link`, `service-accounts`, `deploy-scope`, `secrets` |
 | `repo` | string or `null` | the register's repo `name`; `null` only for F6 actions (an SA has no repo) |
 | `action` | string enum | one verb from the table below |
 | `details` | object | the verb's fields below; always present, `{}` when it has none |
@@ -471,7 +504,8 @@ partial plan:** one error refuses the whole run.
 | `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode; and (F3 only) every `visibility` difference in ANY mode, because visibility is never written |
 | `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `key: "gke"`, a `deploys` entry the feature does not act on |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
-| `needs-jgd` | `{"resource_type": "iam.serviceAccount", "resource": string, "role": "roles/iam.serviceAccountUser", "member": string, "needs": string}` — F7: a line on the runtime SA `<d>-run`'s policy that the access-provisioning side must declare (`deployed_by: <d>-deployer`, or `act_as: repo-admin` while a service is still to be created); reported in both modes, never written |
+| `needs-jgd` | `{"resource_type": "iam.serviceAccount", "resource": string, "role": "roles/iam.serviceAccountUser", "member": string, "needs": string}` — F7: a line on the runtime SA `<d>-run`'s policy that the access-provisioning side must declare (`deployed_by: <d>-deployer`, or `act_as: repo-admin` while a service is still to be created); reported in both modes, never written. F8 uses the same verb for a missing runtime SA, with `{"resource_type": "iam.serviceAccount", "resource": "<d>-run@<project>...", "needs": "service account <d>-run"}` (no `role`/`member`) |
+| `adopt` | `{"secret": string}` — F8: the secret `<d>-env` already exists; it is never recreated and its versions are never read. Emitted in both modes |
 
 **Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each; `update-repo` never carries `visibility`):
 
@@ -486,6 +520,9 @@ partial plan:** one error refuses the whole run.
 | `service-accounts` | `update-service-account` | `{"name": string, "field": "description"\|"display_name", "from": string, "to": string}` |
 | `deploy-scope` | `create-service` | `{"service": string, "region": string, "runtime_service_account": string (derived `<service>-run`), "image": "placeholder"}` |
 | `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}`; a `run.service` binding adds `"region": string` (from the register) |
+| `secrets` | `create-secret` | `{"secret": string (`<d>-env`), "labels": {"managed-by": "repos-secrets", "deployable": string}}` |
+| `secrets` | `add-secret-binding` | `{"secret": string, "role": one of the four F8 roles, "member": "serviceAccount:<d>-run@..." or "serviceAccount:<d>-deployer@..."}` |
+| `secrets` | `remove-secret-binding` | same fields; emitted only in `enforce` with `--prune`, otherwise a `drift` with `would: "remove-secret-binding"` |
 
 **Invariants every planner test may assert:**
 - a repo in `report` mode yields only non-write verbs;
