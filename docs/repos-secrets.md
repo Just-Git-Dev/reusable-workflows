@@ -57,7 +57,10 @@ The planner's action vocabulary has no verb for 1 and 2 (`create-secret`, `add-s
 `remove-secret-binding` are the only writes). The apply step re-checks the **whole plan** before its
 first write: allowed verbs only, every secret name ends in `-env`, every role is one of the four, every
 member is a `serviceAccount:` of the form `<service>-run` / `<service>-deployer` in the project, and
-`remove-secret-binding` is refused unless `prune` is true. One bad action means nothing is applied.
+`remove-secret-binding` is refused unless `prune` is true, and never removes a line the policy is meant
+to hold. One bad action means nothing is applied. The names are matched with `\A..\z` anchors (jq's `$`
+matches before a trailing newline). The live-state fetch refuses (error, nothing written) a `<service>-env`
+policy that carries an IAM condition: conditional bindings are not modelled.
 
 ## Modes
 

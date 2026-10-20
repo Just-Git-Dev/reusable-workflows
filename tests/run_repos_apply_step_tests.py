@@ -378,7 +378,52 @@ def s_call(sub, secret, role, mem):
             "--project=example-proj", "--quiet"]
 
 
+FETCH_STUB = """#!/bin/bash
+case "$*" in
+  *"secrets get-iam-policy"*) cat "$POLICY_FILE" ;;
+  *) echo '{}' ;;
+esac
+"""
+
+
+def fetch_run(policy):
+    """Run the shipped 'Fetch live state' step with a gcloud stub answering describe with {} and
+    get-iam-policy with `policy`; return rc, output and the files left in the working dir."""
+    body = extract_step("repos-secrets.yml", "Fetch live state")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "bin").mkdir()
+        (tmp / "work").mkdir()
+        g = tmp / "bin" / "gcloud"
+        g.write_text(FETCH_STUB)
+        g.chmod(0o755)
+        (tmp / "policy.json").write_text(json.dumps(policy))
+        (tmp / "work" / "register.yml").write_text(
+            "repos:\n- name: r\n  deploys:\n  - {cloud_run: payments-api, env_secret: true}\n")
+        e = dict(os.environ)
+        e.update({"PATH": f"{tmp / 'bin'}:{e['PATH']}", "PROJECT_ID": "example-proj",
+                  "REGISTER": "register.yml", "POLICY_FILE": str(tmp / "policy.json")})
+        p = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+                           capture_output=True, text=True, env=e, cwd=tmp / "work")
+        return {"rc": p.returncode, "out": p.stdout + p.stderr,
+                "files": sorted(x.name for x in (tmp / "work").iterdir())}
+
+
+def fetch_cases():
+    plain = {"bindings": [{"role": S_ACC, "members": [S_RUN]}]}
+    r = fetch_run(plain)
+    check("F8 fetch positive control: unconditional policy -> state.json written",
+          r["rc"] == 0 and "state.json" in r["files"], (r["rc"], r["out"]))
+    cond = {"bindings": [{"role": S_ACC, "members": [S_RUN]},
+                         {"role": S_ACC, "members": [S_DEP],
+                          "condition": {"title": "t", "expression": "true"}}]}
+    r = fetch_run(cond)
+    check("F8 fetch refuses a <d>-env policy carrying an IAM condition (error, no state written)",
+          r["rc"] != 0 and "state.json" not in r["files"] and "condition" in r["out"], (r["rc"], r["out"]))
+
+
 def secrets_cases():
+    fetch_cases()
     r = secrets_run([act("secrets", "r", "in-sync", {}), act("secrets", "r", "adopt", {"secret": "x-env"}),
                      act("secrets", "r", "needs-jgd", {}),
                      act("secrets", "r", "drift", {"would": "create-secret"})])
@@ -407,14 +452,40 @@ def secrets_cases():
         check(f"F8 malformed replication {bad!r}: fails before any call", r["rc"] != 0 and r["calls"] == [], r["calls"])
 
     # removal: refused unless PRUNE=true, and refused for the WHOLE plan (nothing applied)
-    rm = s_bind("remove-secret-binding", mem="serviceAccount:payments-api-deployer" + SUFFIX, role=S_VIEW)
+    S_ADMIN = "roles/secretmanager.admin"
+    rm = s_bind("remove-secret-binding", mem="serviceAccount:payments-api-deployer" + SUFFIX, role=S_ADMIN)
     r = secrets_run([s_bind(), rm])
     check("F8 remove without prune: step fails, no call", r["rc"] != 0 and r["calls"] == [], (r["rc"], r["calls"]))
     r = secrets_run([s_bind(), rm], prune="true")
     check("F8 remove with prune: remove call issued", r["rc"] == 0 and r["calls"] == [
         s_call("add-iam-policy-binding", "payments-api-env", S_ACC, S_RUN),
-        s_call("remove-iam-policy-binding", "payments-api-env", S_VIEW, S_DEP),
+        s_call("remove-iam-policy-binding", "payments-api-env", S_ADMIN, S_DEP),
     ], (r["rc"], r["calls"]))
+    # a removal may never take a WANTED line (runtime accessor, deployer's three sync roles), even
+    # under prune: the planner never emits one, so this is defense in depth
+    for label, role, mem in (("runtime accessor", S_ACC, S_RUN), ("deployer accessor", S_ACC, S_DEP),
+                             ("deployer versionManager", S_MGR, S_DEP), ("deployer viewer", S_VIEW, S_DEP)):
+        r = secrets_run([s_bind("remove-secret-binding", role=role, mem=mem)], prune="true")
+        check(f"F8 prune refuses removing the wanted {label} line: step fails, no call",
+              r["rc"] != 0 and r["calls"] == [], (r["rc"], r["calls"]))
+
+    # m1: jq's `$` matches before a trailing newline, so \A..\z anchors are needed on the secret
+    # name and on the member the name derives
+    nl_mem = "serviceAccount:payments-api\n-run" + SUFFIX
+    for label, plan in (("add secret", [s_bind(secret="payments-api-env\n")]),
+                        ("add secret + newline-split member", [s_bind(secret="payments-api-env\n", mem=nl_mem)]),
+                        ("add newline-split member", [s_bind(mem=nl_mem)]),
+                        ("add member", [s_bind(mem=S_RUN + "\n")]),
+                        ("create secret", [s_create(secret="payments-api-env\n")])):
+        r = secrets_run(plan)
+        check(f"F8 trailing newline ({label}): step fails, no call", r["rc"] != 0 and r["calls"] == [],
+              (r["rc"], r["calls"]))
+    r = secrets_run([s_bind("remove-secret-binding", secret="payments-api-env\n", role=S_ADMIN)], prune="true")
+    check("F8 trailing newline (remove secret): step fails, no call", r["rc"] != 0 and r["calls"] == [],
+          (r["rc"], r["calls"]))
+    r = secrets_run([s_bind("remove-secret-binding", role=S_ADMIN, mem="user:a@example.com\n")], prune="true")
+    check("F8 trailing newline (remove member): step fails, no call", r["rc"] != 0 and r["calls"] == [],
+          (r["rc"], r["calls"]))
     # a removal may name ANY member (the extra lines are by definition not ours), but still only a
     # derived secret and a serviceAccount/user shape without metacharacters
     rm2 = s_bind("remove-secret-binding", mem="serviceAccount:github-rotator" + SUFFIX, role="roles/secretmanager.admin")

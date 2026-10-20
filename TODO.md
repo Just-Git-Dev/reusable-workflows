@@ -897,3 +897,4 @@ are the few things about running the convergence that the repo did not already r
   Still open: the stage hostname; whether to adopt `ci-node`'s badges; Android App Links (the
   apex `assetlinks.json` returns HTML — already broken); the GKE decommission tail.
 - [ ] `.github/workflows/manage-config-secrets.yml` — refuse a `gsm` create of a `*-env` secret (ruling 24 says F8 owns it; only the doc states it today)
+- [ ] `.github/workflows/repos-secrets.yml` — IAM conditions: the fetch step and `live_lines` (`scripts/repos_secrets_plan.py`) drop `condition` and gcloud add/remove run without `--condition`, so a conditional `<d>-run` line would read in-sync in F8 while the engine's secret_audit flags it forever; F8 now refuses a conditional `<d>-env` policy (error, no write), the redesign (carry condition into state, treat conditional lines as extra, `--condition=None` on add) is open
