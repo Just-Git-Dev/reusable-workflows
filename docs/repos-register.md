@@ -498,6 +498,12 @@ key** held only in a protected environment, so it can be revoked without touchin
   the environment is `repo-admin` and `github.ref` is `refs/heads/main`.
 - Pass the key **by name** (`secrets: REPO_ADMIN_APP_KEY: ...`); `secrets: inherit` is same-org
   only.
+- **The write token is narrowed to the repos it writes to.** F3 and F4 mint the write token with
+  the action's `repositories:` input set to exactly the repos the plan has write actions for
+  (unique, plan order, comma separated; every one exists, because the planner only plans writes
+  for live repos). When that list is empty no write token is minted and nothing is applied: an
+  empty `repositories:` would mean every repository of the installation. The read token that
+  fetches live state is not narrowed (it is read-only).
 - App settings (permissions, installation scope, keys) are UI-only: the owner sets them; no
   workflow can.
 

@@ -172,19 +172,30 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           [ "$examined" != "0" ] || echo "::warning::the register lists no repos; nothing was examined"
 
+      - name: Compute write targets
+        id: targets
+        run: |
+          set -euo pipefail
+          # The write token is narrowed to exactly the repos the plan writes to (the planner only
+          # plans writes for repos that exist). An EMPTY list would mean ALL repos to the token
+          # action, so the mint and apply steps below run only when this list is non-empty.
+          targets=$(jq -r '[.[] | select(.action=="update-repo") | .repo] | reduce .[] as $r ([]; if index($r) then . else . + [$r] end) | join(",")' "$RUNNER_TEMP/plan.json")
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
       - name: Mint App token (administration:write)
         id: app-rw
-        if: ${{ steps.plan.outputs.writes != '0' }}
+        if: ${{ steps.targets.outputs.targets != '' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.REPO_ADMIN_APP_KEY }}
           owner: ${{ steps.reg.outputs.org }}
+          repositories: ${{ steps.targets.outputs.targets }}
           permission-administration: write
           permission-metadata: read
 
       - name: Apply the write actions in order
-        if: ${{ steps.plan.outputs.writes != '0' }}
+        if: ${{ steps.targets.outputs.targets != '' }}
         env:
           GH_TOKEN: ${{ steps.app-rw.outputs.token }}
           ORG: ${{ steps.reg.outputs.org }}

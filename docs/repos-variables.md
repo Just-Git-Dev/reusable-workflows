@@ -22,6 +22,11 @@ Mode per repo is the repo's `mode`, else `defaults.mode`, else `report`. A **rea
 (`metadata:read`, `actions_variables:read`) is always minted; a **write** token
 (`actions_variables:write`, `metadata:read`) only when the plan holds a write action.
 
+**Write token scope.** A step computes the plan's write targets (the repos with `set-variable` actions,
+comma separated) and the write token is minted with `repositories:` set to exactly that list, so it
+cannot touch any other repo. With no write targets no write token is minted and nothing is applied
+(an empty `repositories:` would grant every repo). See [repos-register.md](repos-register.md) section 9.
+
 ## Inputs
 
 | Input | Required | Default | Meaning |

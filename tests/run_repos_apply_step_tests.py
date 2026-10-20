@@ -300,7 +300,34 @@ def deploy_cases():
         ], r["calls"])
 
 
+# ------------------------------------------- F3/F4 write token is narrowed to the plan's targets
+def targets_cases():
+    for wf, feature, verb, mint_name in (
+            ("repos-settings.yml", "settings", "update-repo", "Mint App token (administration:write)"),
+            ("repos-variables.yml", "variables", "set-variable", "Mint App token (actions_variables:write)")):
+        body = extract_step(wf, "Compute write targets")
+        w = lambda r: act(feature, r, verb, {"field": "x", "name": "X", "from": None, "to": 1})
+        env = {"GITHUB_OUTPUT": "/dev/stdout"}
+        r = run_apply(body, [w("b-repo"), act(feature, "n", "in-sync", {}), w("a-repo"), w("b-repo"),
+                             act(feature, "d", "drift", {"would": verb})], env=env)
+        check(f"{feature} targets: rc 0", r["rc"] == 0, r["out"])
+        check(f"{feature} targets: exactly the write targets, unique, in plan order",
+              "targets=b-repo,a-repo" in r["out"].splitlines(), r["out"])
+        r = run_apply(body, [act(feature, "n", "in-sync", {}), act(feature, "d", "drift", {"would": verb})], env=env)
+        check(f"{feature} no writes: empty targets", "targets=" in r["out"].splitlines(), r["out"])
+        doc = yaml.safe_load((WF / wf).read_text())
+        steps = {s.get("name"): s for j in doc["jobs"].values() for s in j["steps"]}
+        mint = steps[mint_name]
+        check(f"{feature} write mint: repositories = the plan targets",
+              mint["with"].get("repositories") == "${{ steps.targets.outputs.targets }}", mint["with"])
+        check(f"{feature} write mint: never runs on an empty target list (empty = ALL repos)",
+              "steps.targets.outputs.targets != ''" in mint.get("if", ""), mint.get("if"))
+        ro = [s for n, s in steps.items() if n and n.startswith("Mint App token (READ-ONLY)")][0]
+        check(f"{feature} read mint unchanged: no repositories input", "repositories" not in ro["with"], ro["with"])
+
+
 def main():
+    targets_cases()
     create_cases()
     wif_cases()
     deploy_cases()

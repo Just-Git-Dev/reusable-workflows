@@ -187,6 +187,7 @@ jobs:
             echo "|---|---|---|"
             jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tostring)` |"' plan.json
           } >> "$GITHUB_STEP_SUMMARY"
+          [ "$examined" != "0" ] || echo "::warning::the register lists no repos with gcp.service_accounts; nothing was examined"
           jq -r '.[] | select(.action=="unregistered-binding") | "::warning::\(.repo): \(.details.service_account) has a binding the register does not list: \(.details.role) \(.details.member)"' plan.json
 
       - name: Apply (add-wif-binding only, in order)
