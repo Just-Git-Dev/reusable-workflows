@@ -35,7 +35,6 @@ the first failure stops the job.
 | `service_account` | yes | | the repo-admin SA email |
 | `project_id` | yes | | GCP project of the services, runtime SAs and GAR repositories |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
-| `tooling_ref` | no | `main` | tag of this repository the planner is fetched from; pass the tag you pin the workflow to |
 | `placeholder_image` | no | `us-docker.pkg.dev/cloudrun/container/hello` | image of the first, placeholder revision |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
 
@@ -57,5 +56,4 @@ jobs:
       workload_identity_provider: projects/123/locations/global/workloadIdentityPools/p/providers/github
       service_account: repo-admin@example-proj.iam.gserviceaccount.com
       project_id: example-proj
-      tooling_ref: vX.Y.Z
 ```

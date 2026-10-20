@@ -3217,12 +3217,6 @@
           "required": true,
           "type": "string"
         },
-        "tooling_ref": {
-          "default": "main",
-          "description": "Tag of Just-Git-Dev/reusable-workflows to fetch the planner from (a called workflow cannot discover its own ref). Pass the same tag you pin the workflow to.",
-          "required": false,
-          "type": "string"
-        },
         "workload_identity_provider": {
           "default": null,
           "description": "WIF provider resource name used to authenticate as the repo-admin SA.",
@@ -3292,12 +3286,6 @@
           "default": null,
           "description": "The repo-admin service account email (acted as through WIF).",
           "required": true,
-          "type": "string"
-        },
-        "tooling_ref": {
-          "default": "main",
-          "description": "Tag of Just-Git-Dev/reusable-workflows to fetch the planner from (a called workflow cannot discover its own ref). Pass the same tag you pin the workflow to.",
-          "required": false,
           "type": "string"
         },
         "workload_identity_provider": {
@@ -3432,12 +3420,6 @@
           "default": null,
           "description": "The repo-admin service account email (acted as through WIF).",
           "required": true,
-          "type": "string"
-        },
-        "tooling_ref": {
-          "default": "main",
-          "description": "Tag of Just-Git-Dev/reusable-workflows to fetch the planner from (a called workflow cannot discover its own ref). Pass the same tag you pin the workflow to.",
-          "required": false,
           "type": "string"
         },
         "workload_identity_provider": {

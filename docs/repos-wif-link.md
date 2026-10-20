@@ -36,7 +36,6 @@ nothing to do and the job summary lists every repo examined (with the count). In
 | `project_id` | yes | | GCP project of the service accounts |
 | `pool` | yes | | org-level workload identity pool id used in the principalSet |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
-| `tooling_ref` | no | `main` | tag of this repository the planner is fetched from; pass the tag you pin the workflow to |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
 
 ## Caller example
@@ -50,5 +49,4 @@ jobs:
       service_account: repo-admin@example-proj.iam.gserviceaccount.com
       project_id: example-proj
       pool: example-pool
-      tooling_ref: vX.Y.Z
 ```

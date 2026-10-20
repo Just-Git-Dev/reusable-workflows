@@ -90,6 +90,9 @@ a pure planner. Contract: [repos-register](docs/repos-register.md).
 | [`repos-create.yml`](docs/repos-create.md) | F2: create `status: new` repos that are missing; rename only via `rename_from`. Report or enforce |
 | [`repos-settings.yml`](docs/repos-settings.md) | F3: description, visibility (never public), default branch and settings against live. Report or enforce |
 | [`repos-variables.yml`](docs/repos-variables.md) | F4: the listed NON-secret repository variables. Never deletes one. Report or enforce |
+| [`repos-wif-link.yml`](docs/repos-wif-link.md) | F5: link each repo's deployer SA to the WIF pool, scoped to one repo and environment. Report or enforce |
+| [`repos-service-accounts.yml`](docs/repos-service-accounts.md) | F6: create the registered service accounts that are missing. Never deletes one, never creates a key. Report or enforce |
+| [`repos-deploy-scope.yml`](docs/repos-deploy-scope.md) | F7: each repo may deploy only its own service (resource-level IAM). Report or enforce |
 
 ### Backups, alerts & housekeeping
 
