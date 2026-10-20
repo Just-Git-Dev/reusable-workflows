@@ -2,8 +2,9 @@
 
 ## Index
 
-102 entries total — 92 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+103 entries total — 93 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [Repos-as-code review fixes: protected SAs, repo-admin self-grant, GKE deferred, visibility never written](#2026-10-20--repos-as-code-review-fixes-protected-sas-repo-admin-self-grant-gke-deferred-visibility-never-written)
 - `2026-10-20` — [Repos as code: a per-project register and independent, report-first features](#2026-10-20--repos-as-code-a-per-project-register-and-independent-report-first-features)
 - `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
 - `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
@@ -106,6 +107,49 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — Repos-as-code review fixes: protected SAs, repo-admin self-grant, GKE deferred, visibility never written
+
+**Context.** An adversarial review of the repos-as-code family (F1-F7) found one blocker and
+several major issues, and the owner added rulings 18-20. This entry records the fixes and why.
+
+**Decision.**
+- **Protected service accounts (blocker).** `repo-admin` is always protected, hard-coded in the
+  planners; the `protected_service_accounts` workflow input (comma or newline list) adds more.
+  Linking one (F5), managing one (F6) or using one as a runtime SA or deployer (F7) is an error:
+  exit 1, no plan, in both modes. Why: linking `repo-admin` to a repo would hand its power to every
+  branch and pull-request job of that repo with no environment review.
+- **Repo-admin self-grant (ruling 18).** The `repo-admin` role has no project-wide act-as. Before
+  F7 creates a Cloud Run service it adds `roles/iam.serviceAccountUser` for repo-admin on that one
+  runtime SA, only when missing, so every "may run as X" is a visible line on X. The repo-admin
+  email is a required planner flag (`--repo-admin-sa-email`), fed by the existing `service_account`
+  workflow input; the apply allow-list covers the new binding.
+- **GKE deferred (ruling 19).** The apply path for in-cluster roles is deleted. A `gke` entry is
+  reported `unsupported`, in both modes. It is built when a project moves to GKE.
+- **Visibility never written (ruling 20).** F3 reports a visibility difference as `drift` in every
+  mode and never writes it; making a public repo private cannot be undone.
+- **Schema checks on F7 and name patterns.** F7 validates the register like F1 before planning.
+  Service, region, repo, image-repository and Kubernetes names have patterns; no identifier may
+  start with `-` or be `.`/`..`, so a value cannot become a command-line flag. Free text stays
+  unpatterned because it is only ever a `--field name=value` value.
+- **Fewer permissions for repo-admin.** F7 takes the region from the register (no service-list
+  permission), F5 takes the project number as an input (no project describe), and the project
+  IAM read plus the `legacy-grant` report are removed: that scan only ever looked at the new
+  per-service deployers, which hold no project roles, so it could not report the shared accounts
+  it was meant to migrate. This narrows the contract: `legacy-grant` is no longer a verb.
+- **Report token.** F3's report mode mints `administration:read` beside `metadata:read` (still
+  read-only). GitHub's permission table lists the repo GET under Metadata only, so whether the
+  merge-setting fields need more is unverified; the broader read is requested to be safe.
+- **Tests.** The apply step of F7 is covered by stubbed-command tests with the same assertions as
+  F2 and F5; F7's apply re-checks the whole plan before the first write.
+
+**Not done / open.** Narrowing the F3/F4 App tokens with the action's `repositories:` input: the
+input exists at the pinned version, but a register repo that does not exist yet (`status: new`) may
+make token minting fail; this needs an owner decision (see the hand-back note).
+
+**Consequences.** Callers of F5 must pass `project_number`; callers may pass
+`protected_service_accounts`. Register values that start with `-` or break the name patterns are
+now refused by F1 and F7.
 
 ## 2026-10-20 — Repos as code: a per-project register and independent, report-first features
 
