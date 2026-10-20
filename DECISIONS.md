@@ -118,7 +118,7 @@ then found that refusing more payloads would break callers.
 
 **Decision.** Always on, because each one already produced a corrupted file in v3.7.0: (1) the replace
 path passes key and value to awk through `ENVIRON`, not `-v` (which processes backslash escapes);
-(2) a newline, CR or NUL in a key or value is refused, naming the key only; (3) keys are matched
+(2) a newline, CR or NUL in a key, or an interior newline, CR or NUL in a value, is refused, naming the key only (trailing newlines of a value stay accepted and are stripped by the merge, exactly as in v3.7.0); (3) keys are matched
 literally, not as a regex; (4) an append onto a bundle with no trailing newline adds one first.
 Opt-in via a new `strict_values` input (boolean, default false): keys must match
 `^[A-Za-z_][A-Za-z0-9_]*$`, and empty, whitespace-only and whole-value placeholder values (`-`,
@@ -140,11 +140,10 @@ rollback, its dry run under-reports, no etag or `latest` re-check). It waits for
 
 **Consequences.** Minor bump (v3.8.0): one new optional input. Docs: `docs/sync-bundle-key.md` (value
 safety, `strict_values`, IAM now lists `secretmanager.secrets.get`).
-`secretmanager.secrets.get`).
 
 ## 2026-10-20 — Secret values come only from GitHub secrets; no hand writes to Secret Manager
 
-**Owner ruling.** Every secret value in Secret Manager comes from the app repo's GitHub Actions
+**Owner ruling.** Every secret value in Secret Manager comes from a GitHub Actions secret of the app repo, or is generated inside a rotate-* workflow (owner 2026-10-20: generated keys are allowed). Values come from the app repo's GitHub Actions
 secrets, written by a workflow (`sync-bundle-key` / `manage-config-secrets`). No one writes
 Secret Manager directly by hand. The owner's words: "we should have them from github secrets.
 don't want direct access to GSM".

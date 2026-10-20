@@ -188,10 +188,12 @@ jobs:
           #
           # ALWAYS: a newline, CR or NUL in a key or value is written as raw bytes and
           # splits or truncates the line, corrupting the bundle. (Byte test via explode:
-          # no regex or string-escape quirks across jq versions.)
+          # no regex or string-escape quirks across jq versions.) TRAILING newlines of a
+          # value are not refused: the merge reads it with `val=$(...)`, which strips
+          # them, exactly as v3.7.0 did, so they never reach the file.
           BADBYTES=$(printf '%s' "$PAYLOAD_JSON" | jq -r '
             def bad: explode | any(. == 0 or . == 10 or . == 13);
-            [to_entries[] | select((.key | bad) or (.value | bad)) | .key | @json] | join(", ")')
+            [to_entries[] | select((.key | bad) or (.value | sub("\n+\\z"; "") | bad)) | .key | @json] | join(", ")')
           if [ -n "$BADBYTES" ]; then
             echo "::error::payload_json key or value contains a newline, carriage return or NUL: $BADBYTES. A bundle line is KEY=value on one line; refusing to write what would corrupt the .env."
             exit 1
@@ -274,8 +276,8 @@ jobs:
             # Key and value reach awk through ENVIRON, never `-v` (which processes
             # backslash escapes and corrupts a value holding one) and never as a
             # regex (`A.B` must not match `AxB`). Bytes are written exactly.
-            if KEY="$key" awk 'BEGIN{FS="="} $1==ENVIRON["KEY"]{f=1} END{exit !f}' /tmp/bundle.env; then
-              KEY="$key" VAL="$val" awk 'BEGIN{FS=OFS="="} $1==ENVIRON["KEY"]{print ENVIRON["KEY"] "=" ENVIRON["VAL"]; next} {print}' /tmp/bundle.env > /tmp/bundle.env.new
+            if KEY="$key" awk 'BEGIN{FS="="} $1""==ENVIRON["KEY"]""{f=1} END{exit !f}' /tmp/bundle.env; then
+              KEY="$key" VAL="$val" awk 'BEGIN{FS=OFS="="} $1""==ENVIRON["KEY"]""{print ENVIRON["KEY"] "=" ENVIRON["VAL"]; next} {print}' /tmp/bundle.env > /tmp/bundle.env.new
               mv /tmp/bundle.env.new /tmp/bundle.env
             else
               # A last line with no trailing newline would swallow the appended key.

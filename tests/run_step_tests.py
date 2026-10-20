@@ -2347,6 +2347,27 @@ def sync_value_safety_cases():
     check("strict_values is an optional boolean defaulting to false",
           inp["type"] == "boolean" and inp["required"] is False and inp["default"] is False, inp)
 
+    # 5b. Trailing newlines only: v3.7.0 wrote these correctly (val=$(...) strips them),
+    # so they pass and are written as the bare value; an interior newline or a CR is not.
+    for tv in ("s3cret-value\n", "s3cret-value\n\n"):
+        r = run_sync_body(validate, {"K": tv})
+        check(f"a trailing-newline value {tv!r} passes validation", r["rc"] == 0, r["out"])
+        r = run_sync_body(upsert, {"K": tv}, bundle="K=old\n")
+        check(f"trailing newline(s) {tv!r} are stripped on replace",
+              r["bundle"] == "K=s3cret-value\n", r["bundle"])
+        r = run_sync_body(upsert, {"K": tv}, bundle="")
+        check(f"trailing newline(s) {tv!r} are stripped on append",
+              r["bundle"] == "K=s3cret-value\n", r["bundle"])
+    r = run_sync_body(validate, {"K": "s3cret\nvalue-x"})
+    check("an interior newline is still refused", r["rc"] != 0, r["out"])
+    r = run_sync_body(validate, {"K": "s3cret-value\r\n"})
+    check("a trailing CRLF is still refused (the CR remains)", r["rc"] != 0, r["out"])
+
+    # 5c. awk compares keys as strings, never numerically.
+    r = run_sync_body(upsert, {"1": "value-one-1"}, bundle="01=keep\n1.0=keep2\n")
+    check("numeric-looking keys do not cross-match (01, 1.0 vs 1)",
+          r["bundle"] == "01=keep\n1.0=keep2\n1=value-one-1\n", r["bundle"])
+
     # 6. Appending onto a bundle whose last line has no trailing newline.
     r = run_sync_body(upsert, {"NEW": "value-new-1"}, bundle="OLD=x")
     check("append adds the missing newline first (OLD kept, NEW present)",

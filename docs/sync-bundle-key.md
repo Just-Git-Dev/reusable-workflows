@@ -48,7 +48,7 @@ never the value.
 
 Always on (these corrupted the bundle in v3.7.0):
 
-- A key or value containing a newline, carriage return or NUL is refused: a bundle
+- A key containing a newline, carriage return or NUL, or a value with an interior one, is refused (trailing newlines of a value are stripped, as in v3.7.0): a bundle
   line is `KEY=value` on one line.
 - Values are written with their backslashes intact, on replace as well as append.
 - A key is matched against the existing bundle as a literal string, never as a regex
