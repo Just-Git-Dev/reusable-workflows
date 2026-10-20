@@ -1,0 +1,26 @@
+{
+  "project_id": "example-proj",
+  "service_accounts": {
+    "payments-api-deployer": {}, "payments-api-run": {},
+    "ledger-worker-deployer": {}, "ledger-worker-run": {},
+    "billing-web-deployer": {}, "billing-web-run": {}
+  },
+  "secrets": {
+    "payments-api-env": {"iam": [
+      {"role": "roles/secretmanager.secretAccessor",
+       "members": ["serviceAccount:payments-api-run@example-proj.iam.gserviceaccount.com",
+                   "serviceAccount:payments-api-deployer@example-proj.iam.gserviceaccount.com"]},
+      {"role": "roles/secretmanager.secretVersionManager",
+       "members": ["serviceAccount:payments-api-deployer@example-proj.iam.gserviceaccount.com"]},
+      {"role": "roles/secretmanager.viewer",
+       "members": ["serviceAccount:payments-api-deployer@example-proj.iam.gserviceaccount.com"]}
+    ]},
+    "billing-web-env": {"iam": [
+      {"role": "roles/secretmanager.secretAccessor",
+       "members": ["serviceAccount:someone-else@example-proj.iam.gserviceaccount.com"]}
+    ]},
+    "web-env": {"iam": [
+      {"role": "roles/secretmanager.admin", "members": ["user:a@example.com"]}
+    ]}
+  }
+}

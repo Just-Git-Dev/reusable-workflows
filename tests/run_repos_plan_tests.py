@@ -357,6 +357,18 @@ def register_unknown_keys_anywhere_are_accepted():
     assert [x["action"] for x in plan("register", r)] == ["in-sync"]
 
 
+@case
+def schema_env_secret_is_the_boolean_true_only_on_a_cloud_run_entry():
+    # F8 (ruling 24): the secret name is derived (`<cloud_run>-env`), so the opt-in is `true`, never a name
+    rc, out, err = run("register", reg([_deploy(env_secret=True)]))
+    assert rc == 0, f"env_secret: true refused: {err!r}"
+    for bad in ("web-env", "payments-api-env", "true", False, 1, None, [], {}):
+        rc, out, err = run("register", reg([_deploy(env_secret=bad)]))
+        assert rc == 1 and out.strip() == "" and "env_secret" in err, (bad, rc, err[:200])
+    s = json.dumps(_schema())
+    assert "env_secret" in s, "schemas/repos.v1.json does not know env_secret"
+
+
 # ---------------------------------------------------------------- F2 create
 
 @case
