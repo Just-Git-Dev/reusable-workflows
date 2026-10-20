@@ -272,6 +272,12 @@ def plan_settings(reg, state):
         if not diffs:
             out.append(action("settings", name, "in-sync"))
         for field, frm, to in diffs:
+            if field == "visibility":
+                # never written, in either direction and in either mode (a public -> private flip
+                # cannot be undone): always a reported difference for a human to act on
+                out.append(action("settings", name, "drift", {
+                    "would": "update-repo", "field": field, "from": frm, "to": to}))
+                continue
             out.append(write_or_drift(mode, "settings", name, "update-repo",
                                       {"field": field, "from": frm, "to": to}))
     return out

@@ -116,6 +116,9 @@ jobs:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.REPO_ADMIN_APP_KEY }}
           owner: ${{ steps.reg.outputs.org }}
+          # Read-only. administration:read so the merge-setting fields of GET /repos are returned
+          # (whether metadata:read alone would suffice is unverified); it can write nothing.
+          permission-administration: read
           permission-metadata: read
 
       - name: Fetch live state
@@ -152,6 +155,9 @@ jobs:
           # Defence in depth: nothing outside this feature's verbs may appear in the plan.
           bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","update-repo"] | index($a) | not)] | length' "$RUNNER_TEMP/plan.json")
           [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list"; exit 1; }
+          # Visibility is never written (it is always a drift entry): refuse an update-repo for it.
+          badvis=$(jq '[.[] | select(.action=="update-repo" and .details.field=="visibility")] | length' "$RUNNER_TEMP/plan.json")
+          [ "$badvis" = "0" ] || { echo "::error::plan holds a visibility write; visibility is never changed automatically"; exit 1; }
           writes=$(jq '[.[] | select(.action as $a | ["update-repo"] | index($a))] | length' "$RUNNER_TEMP/plan.json")
           examined=$(jq '[.[].repo] | unique | length' "$RUNNER_TEMP/plan.json")
           echo "writes=$writes" >> "$GITHUB_OUTPUT"

@@ -152,8 +152,8 @@ def check_invariants(feature, register, actions):
         if a["action"] == "rename-repo":
             assert listed[a["repo"]].get("rename_from") == a["details"]["from"], \
                 f"rename without rename_from: {a}"
-        if a["action"] == "update-repo" and a["details"].get("field") == "visibility":
-            assert a["details"]["to"] != "public", a
+        if a["action"] == "update-repo":
+            assert a["details"].get("field") != "visibility", f"visibility is never written: {a}"
         if a["action"] == "create-repo":
             assert a["details"]["visibility"] in ("private", "internal"), a
     return actions
@@ -469,14 +469,15 @@ def settings_enforce_emits_exact_update_repo_diffs():
                                    settings={"delete_branch_on_merge": False,
                                              "allow_auto_merge": False})})
     a = plan("settings", r, s)
-    assert set(verbs(a)) == {"update-repo"} and len(a) == 4, a
+    assert sorted(verbs(a)) == ["drift", "update-repo", "update-repo", "update-repo"], a
     assert by_field(a) == {
         "description": {"field": "description", "from": "Payments HTTP API",
                         "to": "Payments HTTP API v2"},
-        "visibility": {"field": "visibility", "from": "private", "to": "internal"},
         "default_branch": {"field": "default_branch", "from": "main", "to": "trunk"},
         "delete_branch_on_merge": {"field": "delete_branch_on_merge", "from": False, "to": True},
     }
+    assert [x["details"] for x in a if x["action"] == "drift"] == [
+        {"would": "update-repo", "field": "visibility", "from": "private", "to": "internal"}], a
 
 
 @case
@@ -529,11 +530,21 @@ def settings_mode_is_per_repo_and_defaults_to_report():
 
 
 @case
-def settings_visibility_moves_private_to_internal_and_back_never_public():
-    for frm, to in (("private", "internal"), ("internal", "private")):
-        r = reg([{"name": "payments-api", "mode": "enforce", "visibility": to}])
-        a = plan("settings", r, st(**{"payments-api": live(visibility=frm, default_branch="main")}))
-        assert by_field(a)["visibility"] == {"field": "visibility", "from": frm, "to": to}
+def r20_visibility_difference_is_drift_in_every_mode_and_never_a_write():
+    for mode in ("enforce", "report"):
+        for frm, to in (("private", "internal"), ("internal", "private"), ("public", "private"),
+                        ("public", "internal")):
+            r = reg([{"name": "payments-api", "mode": mode, "visibility": to}])
+            a = plan("settings", r, st(**{"payments-api": live(visibility=frm, default_branch="main")}))
+            assert a == [{"feature": "settings", "repo": "payments-api", "action": "drift",
+                          "details": {"would": "update-repo", "field": "visibility", "from": frm,
+                                      "to": to}}], (mode, frm, to, a)
+    # defaults.visibility behaves the same, and a matching visibility stays in-sync
+    r = reg([{"name": "payments-api", "mode": "enforce"}], defaults={"visibility": "private"})
+    a = plan("settings", r, st(**{"payments-api": live(visibility="public", default_branch="main")}))
+    assert verbs(a) == ["drift"] and a[0]["details"]["field"] == "visibility", a
+    a = plan("settings", r, st(**{"payments-api": live(visibility="private", default_branch="main")}))
+    assert verbs(a) == ["in-sync"], a
 
 
 @case

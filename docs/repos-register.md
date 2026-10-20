@@ -43,7 +43,7 @@ version: 1
 org: Example-Org                  # the GitHub org every repo below lives in
 defaults:                         # applied to every repo unless the repo overrides the key
   mode: report                    # report | enforce
-  visibility: private             # private | internal — checked, never changed to public
+  visibility: private             # private | internal — checked and reported, never changed
   default_branch: main
   settings: {delete_branch_on_merge: true, allow_auto_merge: false}
 
@@ -182,7 +182,11 @@ No feature, in any mode, ever:
    The caller may protect more accounts with the `protected_service_accounts` input (a comma or
    newline list, merged with `repo-admin`; use it for the CI accounts the access-provisioning
    config declares). Why: linking `repo-admin` to a repo would hand its power to every branch and
-   pull-request job of that repo, with no environment review in the way.
+   pull-request job of that repo, with no environment review in the way;
+10. **changes the visibility of an existing repository, in either direction** (F3 reports a
+    difference and never writes it, in `report` and `enforce` mode alike; a human flips it in
+    GitHub). Making a public repository private cannot be undone: stars and watchers are lost.
+    Visibility is only ever set when F2 creates a repo.
 
 **Removing a repo (or SA, variable, link, deploy entry) from the register = stop managing it.**
 
@@ -200,7 +204,7 @@ No feature requires another. Each row lists what you must have to adopt that fea
 |---|---|---|---|---|
 | F1 | `repos-register-check.yml` | the whole file, against the schema | none | nothing |
 | F2 | `repos-create.yml` | `status`, `rename_from`, `visibility`, `default_branch`, `description` | App token: `administration:write`, `metadata:read` | GitHub repos |
-| F3 | `repos-settings.yml` | `description`, `visibility`, `default_branch`, `settings` | report: `metadata:read`; enforce: `administration:write` | repo settings |
+| F3 | `repos-settings.yml` | `description`, `visibility`, `default_branch`, `settings` | report: `administration:read` + `metadata:read` (still read-only); enforce: `administration:write` | repo settings (never `visibility`) |
 | F4 | `repos-variables.yml` | `variables` | report: `actions_variables:read`; enforce: `actions_variables:write` | repo variables |
 | F5 | `repos-wif-link.yml` | `gcp.service_accounts` | GCP: the project's `repo-admin` SA via WIF (`id-token: write`) | SA IAM bindings |
 | F6 | `repos-service-accounts.yml` | top-level `service_accounts` | GCP: `repo-admin` via WIF | service accounts |
@@ -223,8 +227,13 @@ name is gone, and refused if both exist. Needs the App installed on **all reposi
 org, or it cannot see the repo it just created.
 
 **F3 — repo settings.** Compares description, visibility, default branch and `settings` with
-live. Report lists the diff; enforce applies it. Visibility can move `internal` ↔ `private`, never
-to `public`. A `default_branch` that does not exist in the repo is reported, never created.
+live. Report lists the diff; enforce applies it, except **visibility, which is never written**: a
+difference is always `drift{would: "update-repo", field: "visibility", from, to}`, even in
+`enforce` mode, and the repo counts as drifting (no `in-sync`) until a human changes it in GitHub.
+The report token holds `administration:read` beside `metadata:read` so the merge-setting fields
+(`allow_*`, `delete_branch_on_merge`) can be read; it can write nothing. (Whether `metadata:read`
+alone would return those fields is not stated in GitHub's permission table, which lists
+`GET /repos/{owner}/{repo}` under Metadata only; unverified, so the broader read is requested.) A `default_branch` that does not exist in the repo is reported, never created.
 
 **F4 — repo variables.** Same report/enforce for the NON-secret repository variables listed.
 Variables live but not listed are not managed (left alone, not reported). Never deletes a
@@ -435,11 +444,11 @@ partial plan:** one error refuses the whole run.
 |---|---|
 | `in-sync` | `{}` — emitted once per examined repo (or SA) with nothing to do, so a summary can list every repo examined |
 | `skip` | `{"reason": string}` — e.g. `"exists"`, `"rename already done"` |
-| `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode |
+| `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode; and (F3 only) every `visibility` difference in ANY mode, because visibility is never written |
 | `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `key: "gke"`, a `deploys` entry the feature does not act on |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
 
-**Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each):
+**Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each; `update-repo` never carries `visibility`):
 
 | `feature` | `action` | `details` |
 |---|---|---|
@@ -458,7 +467,7 @@ partial plan:** one error refuses the whole run.
 - no verb outside the two tables above is ever emitted (there is no delete, archive, unarchive,
   make-public, key-create or project-level-grant verb);
 - `rename-repo` appears only for a repo whose entry has `rename_from`;
-- `update-repo` with `field: "visibility"` never has `to: "public"`;
+- `update-repo` never has `field: "visibility"` (a visibility difference is `drift`, in every mode);
 - `add-wif-binding.role` is always `roles/iam.workloadIdentityUser`;
 - `add-resource-binding.resource_type` is never a project;
 - a repo absent from the register yields no action at all.

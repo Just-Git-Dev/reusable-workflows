@@ -15,14 +15,17 @@ decision is `scripts/repos_plan.py --feature settings`.
 
 Only keys the register states are compared: `description`, `visibility`, `default_branch` (a repo's
 own value, else `defaults`) and the boolean `settings` keys of the contract (a repo's `settings`
-merged over `defaults.settings`; other keys are ignored). Visibility moves `private` and `internal`
-only: `public` is refused as a validation error. A `default_branch` that does not exist in the repo
+merged over `defaults.settings`; other keys are ignored). **Visibility is never written**, in
+either direction: a difference is reported as `drift{would: update-repo, field: visibility}` in
+both modes (a human changes it in GitHub; making a public repo private cannot be undone), and
+`public` in the register is refused as a validation error. A `default_branch` that does not exist in the repo
 is reported by the API error, never created. Repos not in the register get no action.
 
 ## Modes and tokens
 
 Mode per repo is the repo's `mode`, else `defaults.mode`, else `report`. A **read** token
-(`metadata:read`) is always minted; a **write** token (`administration:write`, `metadata:read`)
+(`administration:read` + `metadata:read`, still read-only: the merge-setting fields may need the
+former) is always minted; a **write** token (`administration:write`, `metadata:read`)
 only when the plan holds a write action.
 
 ## Inputs
