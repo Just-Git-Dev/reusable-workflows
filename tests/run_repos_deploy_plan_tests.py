@@ -264,6 +264,29 @@ def already_bound_is_in_sync():
 
 
 @case
+def m3_unvalidated_values_never_reach_a_plan():
+    cases = [("cloud_run", "--ingress=all"), ("cloud_run", "-x"), ("cloud_run", "Upper_Case"),
+             ("region", "--region=us"), ("region", "europe_west1"),
+             ("runtime_service_account", "--x-run"), ("image_repository", "--x/y")]
+    for key, bad in cases:
+        reg = load_register()
+        repo(reg, "payments-api")["deploys"][0][key] = bad
+        for mode in ("enforce", "report"):
+            reg["defaults"]["mode"] = mode
+            rc, out, err = run(reg, load_state())
+            assert rc == 1 and out.strip() == "", (key, bad, mode, rc, out[:100])
+            assert "error: " in err and ("does not match" in err or "is not valid" in err), (key, bad, err[:300])
+    reg = load_register()
+    reg["repos"][0]["name"] = "-evil"
+    rc, out, err = run(reg, load_state())
+    assert rc == 1 and out.strip() == "", (rc, out[:100])
+    reg = load_register()
+    reg["version"] = 2
+    rc, out, err = run(reg, load_state())
+    assert rc == 1 and out.strip() == "" and "error: register:" in err, (rc, err[:200])
+
+
+@case
 def r19_gke_entry_is_unsupported_in_both_modes_and_nothing_else():
     for mode in ("enforce", "report"):
         reg = load_register()

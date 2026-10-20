@@ -307,6 +307,47 @@ def register_invalid_variable_and_settings_values_refused():
     refused("register", reg([{"name": "payments-api", "settings": {"has_wiki": "yes"}}]))
 
 
+def _deploy(**kw):
+    d = {"cloud_run": "payments-api", "region": "europe-west1",
+         "runtime_service_account": "payments-api-run", "image_repository": "europe-west1/services"}
+    d.update(kw)
+    return {"name": "payments-api", "deploys": [d]}
+
+
+@case
+def m3_name_patterns_and_no_leading_dash_in_the_register():
+    # controls first: the unmodified values are accepted, so each refusal below is the pattern's doing
+    for ok in (_deploy(), {"name": ".hidden"}, {"name": "a.b_c-d"}, {"name": "x", "default_branch": "release/1.x"}):
+        rc, out, err = run("register", reg([ok]))
+        assert rc == 0, f"control {ok} refused: {err!r}"
+    bad = [
+        {"name": "-evil"}, {"name": "--ingress=all"}, {"name": "."}, {"name": ".."},
+        {"name": "ok-name", "rename_from": "--x"}, {"name": "ok-name", "rename_from": ".."},
+        {"name": "ok-name", "default_branch": "--delete"},
+        _deploy(cloud_run="--ingress=all"), _deploy(cloud_run="-x"), _deploy(cloud_run="Upper"),
+        _deploy(cloud_run="a" * 64), _deploy(cloud_run="trailing-"),
+        _deploy(region="--region=x"), _deploy(region="europe_west1"), _deploy(region="europe-west"),
+        _deploy(region="Europe-west1"),
+        _deploy(runtime_service_account="--x-run"),
+        _deploy(image_repository="--x/services"), _deploy(image_repository="loc/--x"),
+        {"name": "g", "deploys": [{"gke": {"cluster": "--c/main", "namespace": "ns", "workload": "w"}}]},
+        {"name": "g", "deploys": [{"gke": {"cluster": "l/main", "namespace": "-ns", "workload": "w"}}]},
+        {"name": "g", "deploys": [{"gke": {"cluster": "l/main", "namespace": "ns", "workload": "--w"}}]},
+    ]
+    for b in bad:
+        refused("register", reg([b]))
+
+
+@case
+def m3_leading_dash_and_dot_names_are_refused_by_the_f2_f3_planners_too():
+    for feature in ("create", "settings"):
+        for b in ({"name": "-evil"}, {"name": ".."}, {"name": "ok-name", "default_branch": "--x"}):
+            refused(feature, reg([b]), st())
+    # rename_from is read by F2 only (7.2: each planner validates only the keys it reads)
+    for b in ({"name": "ok-name", "rename_from": "--x"}, {"name": "ok-name", "rename_from": ".."}):
+        refused("create", reg([b]), st())
+
+
 @case
 def register_unknown_keys_anywhere_are_accepted():
     r = reg([{"name": "payments-api", "future_key": {"a": 1}, "settings": {"new_setting": 3}}],

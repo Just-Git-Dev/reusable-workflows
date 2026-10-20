@@ -23,7 +23,7 @@ SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "repos.v1.json"
 FEATURES = ("register", "create", "settings", "variables")
 MODES = ("report", "enforce")
 VISIBILITIES = ("private", "internal")
-NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+NAME_RE = re.compile(r"^(?!-)(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$")   # never `-`-led, never . or ..
 ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 VAR_RE = re.compile(r"^(?!GITHUB_)[A-Z_][A-Z0-9_]*$")
 BOOL_SETTINGS = ("delete_branch_on_merge", "allow_auto_merge", "allow_squash_merge",
@@ -96,8 +96,10 @@ def check_keys(who, node, keys, errs):
         errs.append(err(who, f"visibility {node['visibility']!r} is not allowed "
                              "(private or internal; never public)"))
     if "default_branch" in keys and "default_branch" in node:
-        if not isinstance(node["default_branch"], str) or not node["default_branch"]:
-            errs.append(err(who, "default_branch must be a non-empty string"))
+        db = node["default_branch"]
+        if not isinstance(db, str) or not db or db.startswith("-") or any(c.isspace() for c in db):
+            errs.append(err(who, "default_branch must be a non-empty string that does not start "
+                                 "with '-' and holds no whitespace"))
     if "description" in keys and "description" in node:
         if not isinstance(node["description"], str) or len(node["description"]) > 350:
             errs.append(err(who, "description must be a string of at most 350 chars"))

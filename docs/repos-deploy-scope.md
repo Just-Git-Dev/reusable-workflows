@@ -58,6 +58,14 @@ Only these read calls, all resource-level: `gcloud run services describe` and `g
 `legacy-grant` report: it could only ever list the new per-service deployers, which hold no project
 roles.
 
+## Validation before planning
+
+The planner validates the register against `schemas/repos.v1.json` (the same check as F1) before it
+plans: a service name, region, repository or SA name of the wrong shape, or any such value
+starting with `-` (for example `--ingress=all`), is an error and nothing is planned or applied. The
+Apply step then re-checks the whole plan again before its first write (allowed verbs, the three
+role/resource pairs, a `serviceAccount:` member, name and region shapes).
+
 ## Caller example
 
 ```yaml

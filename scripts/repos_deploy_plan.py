@@ -14,6 +14,7 @@ import sys
 
 import yaml
 
+import repos_plan
 import repos_protected
 
 FEATURE = "deploy-scope"
@@ -127,6 +128,14 @@ def main(argv=None):
         return 2
     with open(args.register) as f:
         reg = yaml.safe_load(f)
+    # F1-style validation first: a name that is not a valid service/region/SA/repo name (or that
+    # starts with '-') must never reach a command line, so nothing is planned for a bad register.
+    try:
+        repos_plan.validate_core(reg)
+        repos_plan.validate_register_feature(reg)
+    except repos_plan.PlanError as e:
+        print("\n".join(e.errors), file=sys.stderr)
+        return 1
     with open(args.state) as f:
         state = json.load(f)
     default_mode = ((reg.get("defaults") or {}).get("mode")) or "report"

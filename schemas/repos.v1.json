@@ -16,7 +16,12 @@
   "$defs": {
     "mode": {"enum": ["report", "enforce"]},
     "visibility": {"enum": ["private", "internal"]},
-    "repoName": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,100}$"},
+    "repoName": {"type": "string", "pattern": "^(?!-)(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$"},
+    "branchName": {"type": "string", "pattern": "^[^\\s-]\\S*$"},
+    "serviceName": {"type": "string", "pattern": "^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"},
+    "regionName": {"type": "string", "pattern": "^[a-z]+-[a-z]+[0-9]$"},
+    "k8sName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"},
+    "slashPair": {"type": "string", "pattern": "^[^/\\s-][^/\\s]*/[^/\\s-][^/\\s]*$"},
     "saName": {"type": "string", "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"},
     "settings": {
       "type": "object",
@@ -38,7 +43,7 @@
       "properties": {
         "mode": {"$ref": "#/$defs/mode"},
         "visibility": {"$ref": "#/$defs/visibility"},
-        "default_branch": {"type": "string", "minLength": 1},
+        "default_branch": {"$ref": "#/$defs/branchName"},
         "settings": {"$ref": "#/$defs/settings"}
       }
     },
@@ -61,10 +66,10 @@
           "required": ["cloud_run", "region", "runtime_service_account"],
           "not": {"required": ["gke"]},
           "properties": {
-            "cloud_run": {"type": "string", "minLength": 1},
-            "region": {"type": "string", "minLength": 1},
+            "cloud_run": {"$ref": "#/$defs/serviceName"},
+            "region": {"$ref": "#/$defs/regionName"},
             "runtime_service_account": {"$ref": "#/$defs/saName"},
-            "image_repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"}
+            "image_repository": {"$ref": "#/$defs/slashPair"}
           }
         },
         {
@@ -76,9 +81,9 @@
               "required": ["cluster", "namespace", "workload"],
               "additionalProperties": true,
               "properties": {
-                "cluster": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
-                "namespace": {"type": "string", "minLength": 1},
-                "workload": {"type": "string", "minLength": 1}
+                "cluster": {"$ref": "#/$defs/slashPair"},
+                "namespace": {"$ref": "#/$defs/k8sName"},
+                "workload": {"$ref": "#/$defs/k8sName"}
               }
             }
           }
@@ -97,7 +102,7 @@
         "rename_from": {"$ref": "#/$defs/repoName"},
         "mode": {"$ref": "#/$defs/mode"},
         "visibility": {"$ref": "#/$defs/visibility"},
-        "default_branch": {"type": "string", "minLength": 1},
+        "default_branch": {"$ref": "#/$defs/branchName"},
         "settings": {"$ref": "#/$defs/settings"},
         "variables": {
           "type": "object",

@@ -130,6 +130,13 @@ F1 validates against it; every planner validates the parts it reads before plann
     - `gke` (object, all required: `cluster` as `<location>/<name>`, `namespace`, `workload`). The
       schema accepts it so a register can record intent, but F7 does not act on it
       ([§6](#6-features-f1-f7-adopt-any-one-alone)).
+  - **Names that reach a command line** (`cloud_run`, `region`, `image_repository`, every repo
+    name and `rename_from`, `default_branch`, SA names, the `gke` fields) are checked against
+    patterns and may never start with `-`, so no register value can turn into a flag: Cloud Run
+    service `^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`, region `^[a-z]+-[a-z]+[0-9]$`, repo name
+    `^[A-Za-z0-9._-]{1,100}$` that does not start with `-` and is not `.` or `..`. Free text
+    (descriptions, variable values) is always the value of a `--field name=value` argument, never
+    a positional, so it is not pattern-checked.
 
 - **`service_accounts[]`** — object; required: `name` and `description`.
   - `name`: string, **6-30 chars, `^[a-z][a-z0-9-]*$`** (the GCP account-id rule; the schema
@@ -242,7 +249,8 @@ account (`repo-admin` always, plus `protected_service_accounts`): the access-pro
 owns those accounts and their descriptions. A listed SA that exists is `in-sync`, or `drift` if its description or display name differ
 (enforce updates them).
 
-**F7 — deploy scope.** Per `deploys:` entry, so a repo can deploy only its own service:
+**F7 — deploy scope.** First the same schema check as F1 (a refused register plans nothing, so
+a service name like `--ingress=all` never reaches `gcloud`). Then, per `deploys:` entry, so a repo can deploy only its own service:
 - **Cloud Run:** first, if the repo-admin service account does not already hold
   `roles/iam.serviceAccountUser` on the `runtime_service_account`'s own policy, add it there
   (`repo-admin` has no project-wide act-as right, so every "repo-admin may run as X" is a visible

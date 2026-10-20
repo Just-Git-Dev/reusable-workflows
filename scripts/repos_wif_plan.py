@@ -21,7 +21,7 @@ import repos_protected
 ROLE = "roles/iam.workloadIdentityUser"
 FEATURE = "wif-link"
 SA_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
-NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+NAME_RE = re.compile(r"^(?!-)(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$")   # never `-`-led, never . or ..
 ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 
 
