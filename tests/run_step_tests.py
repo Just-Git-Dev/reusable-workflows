@@ -3203,7 +3203,7 @@ def main():
     check("empty list warns", "::warning::" in r["out"], r["out"])
 
     # ── cleanup-secret-versions · etag handling + all-failed execute ─────────
-    # Secret Manager returns the etag WITH literal quotes (run 39454966378: both calls failed
+    # Secret Manager returns the etag WITH literal quotes (a live run: both calls failed
     # FAILED_PRECONDITION because the plan stripped them). The stub holds the quoted form and
     # rejects anything else.
     print("\ncleanup-secret-versions · etag + execute failure accounting")

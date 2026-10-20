@@ -119,7 +119,7 @@
 **Decision.** `cleanup-secret-versions` passes the etag to `gcloud secrets versions disable|destroy --etag` exactly as the API returned it (quotes kept), and the Execute step fails when the plan had mutations and none succeeded. Partial success stays a warning; the step summary states planned vs succeeded.
 
 **RCA.**
-- Symptom: a consumer's run 39454966378 ended SUCCESS with disabled=0 destroyed=0; both gcloud calls had failed `FAILED_PRECONDITION: The etag provided in the request does not match the resource's current etag`.
+- Symptom: a consumer's run ended SUCCESS with disabled=0 destroyed=0; both gcloud calls had failed `FAILED_PRECONDITION: The etag provided in the request does not match the resource's current etag`.
 - Root cause: the plan stored `(v.get("etag") or "").strip('"')`. Secret Manager returns the etag with literal quotes (`"\"165292b156ce2f\""` in `--format=json`), so the stripped value never matched. Separately, a failed mutation was only a `::warning::`, so an all-failed run concluded green.
 - Why it wasn't caught: no test executed the Execute step or the version-collection step. The plan fixtures used opaque etags, and nothing modelled an API that rejects a non-identical etag.
 - Fix: removed the strip; Execute now compares planned vs succeeded and exits 1 with an `::error::` when planned > 0 and succeeded = 0; it writes the counts to the step summary.
