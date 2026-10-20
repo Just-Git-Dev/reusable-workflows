@@ -158,6 +158,12 @@ def main():
            state(live("sa-two-bb")),
            [create("sa-one-aa"), insync(), create("sa-three-cc")])
 
+    # 2b. display_name defaults to the SA name on create only (docs 7.2); compared only when stated
+    expect("create: display_name defaults to name", register([entry(N, display_name=None)]),
+           state(), [create(N, display_name=N)])
+    expect("no display_name in register -> never drift on it", register([entry(N, display_name=None)]),
+           state(live(N, display_name="whatever")), [insync()])
+
     # 3. in-sync
     expect("existing in sync", register([entry(N)]), state(live(N)), [insync()])
 
