@@ -1,0 +1,25 @@
+version: 1
+org: Example-Org
+defaults:
+  mode: report
+  visibility: private
+  default_branch: main
+  settings: {delete_branch_on_merge: true, allow_auto_merge: false}
+service_accounts:
+  - name: payments-api-deployer
+    description: "CI deployer for payments-api only (owner: payments team, 2026-10-20)"
+repos:
+  - name: payments-api
+    kind: go-service
+    description: "Payments HTTP API"
+    variables: {REGION: europe-west1}
+    gcp: {service_accounts: [payments-api-deployer]}
+    deploys:
+      - cloud_run: payments-api
+        region: europe-west1
+        runtime_service_account: payments-api-run
+  - name: ledger-worker
+    status: new
+    mode: enforce
+  - name: billing-web
+    rename_from: legacy-billing

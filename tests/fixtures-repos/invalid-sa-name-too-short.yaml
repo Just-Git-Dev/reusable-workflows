@@ -1,0 +1,6 @@
+version: 1
+org: Example-Org
+service_accounts:
+  - name: abc
+    description: "too short a name"
+repos: []
