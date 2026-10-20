@@ -4247,6 +4247,12 @@
           "required": true,
           "type": "string"
         },
+        "strict_values": {
+          "default": false,
+          "description": "true = also refuse payload keys that are not env-var names (^[A-Za-z_][A-Za-z0-9_]*$), empty or whitespace-only values (even with min_value_length 0), and values that are wholly a placeholder (\"-\", changeme, todo, xxx..., <...>, ${...}). Recommended. Default false keeps v3.7.0 behaviour for those; a future major will flip the default. A newline, CR or NUL in a key or value is refused regardless, because it corrupts the bundle.",
+          "required": false,
+          "type": "boolean"
+        },
         "title": {
           "default": "secrets",
           "description": "Human label for the run summary (e.g. \"DB + Redis passwords\").",

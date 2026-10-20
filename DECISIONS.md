@@ -2,8 +2,9 @@
 
 ## Index
 
-107 entries total — 97 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+108 entries total — 98 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [sync-bundle-key: value-safety guards and an opt-in strict_values mode](#2026-10-20--sync-bundle-key-value-safety-guards-and-an-opt-in-strict_values-mode)
 - `2026-10-20` — [Secret values come only from GitHub secrets; no hand writes to Secret Manager](#2026-10-20--secret-values-come-only-from-github-secrets-no-hand-writes-to-secret-manager)
 - `2026-10-20` — [Drop the deprecated protected_service_accounts input and flag (owner ruling)](#2026-10-20--drop-the-deprecated-protected_service_accounts-input-and-flag-owner-ruling)
 - `2026-10-20` — [Ruling 21 review fixes: F5/F6 uniqueness, F7 waits for act_as, F6 own deployers only](#2026-10-20--ruling-21-review-fixes-f5f6-uniqueness-f7-waits-for-act_as-f6-own-deployers-only)
@@ -112,9 +113,41 @@
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
 
+## 2026-10-20 — sync-bundle-key: value-safety guards and an opt-in strict_values mode
+
+**Context.** A consumer's env blob carried a hand-written, wrong connection string; the owner ruled
+(2026-10-20, see "Secret values come only from GitHub secrets") that values reach Secret Manager only
+through `sync-bundle-key` / `manage-config-secrets`. That makes `sync-bundle-key` the single path, so
+its merge must be byte-exact. A local run of its merge code found four gaps; the pre-release review
+then found that refusing more payloads would break callers.
+
+**Decision.** Always on, because each one already produced a corrupted file in v3.7.0: (1) the replace
+path passes key and value to awk through `ENVIRON`, not `-v` (which processes backslash escapes);
+(2) a newline, CR or NUL in a key, or an interior newline, CR or NUL in a value, is refused, naming the key only (trailing newlines of a value stay accepted and are stripped by the merge, exactly as in v3.7.0); (3) keys are matched
+literally, not as a regex; (4) an append onto a bundle with no trailing newline adds one first.
+Opt-in via a new `strict_values` input (boolean, default false): keys must match
+`^[A-Za-z_][A-Za-z0-9_]*$`, and empty, whitespace-only and whole-value placeholder values (`-`,
+changeme, todo, xxx..., `<...>`, `${...}`) are refused even at `min_value_length: 0`. Docs recommend
+`strict_values: true`; a future major flips the default.
+
+**Why not strict by default.** README.md ("a behaviour change on a destructive path is a major bump")
+makes refusing payloads that v3.7.0 wrote correctly a major change. Probed in review: a key `my-key`,
+an empty value at `min_value_length: 0` and one-line values like `<p>hi</p>` or `${A}:${B}` were all
+accepted and corrupted nothing. Dependabot raises a minor bump and dispatch-only callers would break at
+their next rotation. With the default false, v3.8.0 is a minor.
+
+**Not shipped.** An opt-in `destroy_old_disabled_versions` step (destroy every DISABLED version but the
+newest, because disabled versions are billed) was written and then pulled: it reverses the 2026-08-17
+ruling "disable is inline, destroy stays in the sweeper" without addressing that entry's reasons, and the
+review found hazards (it can destroy what the same run just disabled or the last good version after a
+rollback, its dry run under-reports, no etag or `latest` re-check). Owner decision 2026-10-20: old versions are destroyed by the EXISTING `cleanup-secret-versions` sweeper with `enable_destroy: true` on a schedule, which already has the quarantine clock, the `--etag` re-check and the consumer scan; sync-bundle-key stays disable-only. Disabled versions are billed, so consumers should schedule it. The pulled code is in commit 56ff8c0 (TODO.md "Secret Manager", closed as superseded).
+
+**Consequences.** Minor bump (v3.8.0): one new optional input. Docs: `docs/sync-bundle-key.md` (value
+safety, `strict_values`, IAM now lists `secretmanager.secrets.get`).
+
 ## 2026-10-20 — Secret values come only from GitHub secrets; no hand writes to Secret Manager
 
-**Owner ruling.** Every secret value in Secret Manager comes from the app repo's GitHub Actions
+**Owner ruling.** Every secret value in Secret Manager comes from a GitHub Actions secret of the app repo, or is generated inside a rotate-* workflow (owner 2026-10-20: generated keys are allowed). Values come from the app repo's GitHub Actions
 secrets, written by a workflow (`sync-bundle-key` / `manage-config-secrets`). No one writes
 Secret Manager directly by hand. The owner's words: "we should have them from github secrets.
 don't want direct access to GSM".

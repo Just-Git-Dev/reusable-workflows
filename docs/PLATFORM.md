@@ -23,7 +23,7 @@ project-specific input is a `workflow_call` input, and every secret is passed at
 
 **Secret values have one source: your app repo's GitHub Actions secrets.** Every key in a
 Secret Manager secret, including each line of an env blob (`DATABASE_URL`, `REDIS_URL`, …), is
-written by a workflow (`sync-bundle-key` / `manage-config-secrets`) from a GitHub secret. No one
+written by a workflow (`sync-bundle-key` / `manage-config-secrets`) from a GitHub secret, or is generated inside a rotate-* workflow (generated keys are allowed, owner 2026-10-20). No one
 writes Secret Manager by hand: no console edits, no `gcloud secrets versions add`. A key with no
 GitHub secret behind it is a defect, because the next person to rotate it can't know where its
 value came from. To change a value, update the GitHub secret, then run the sync.

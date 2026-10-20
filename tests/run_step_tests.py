@@ -2223,6 +2223,160 @@ def check(name, cond, detail=""):
         FAILURES.append(name)
 
 
+SYNC_VALIDATE = "Validate payload"
+SYNC_UPSERT = "Upsert payload keys into bundle"
+
+
+def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8, strict=False):
+    """Execute a sync-bundle-key run: body with /tmp redirected into a sandbox.
+
+    Returns rc, combined output and the resulting bundle bytes. No gcloud stub is
+    needed: the Validate and Upsert steps touch neither gcloud nor the network.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "bundle.env").write_bytes(bundle.encode())
+        env = dict(os.environ)
+        env["PAYLOAD_JSON"] = payload if isinstance(payload, str) else json.dumps(payload)
+        env["MIN_VALUE_LEN"] = str(min_len)
+        env["STRICT_VALUES"] = "true" if strict else "false"
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+             body.replace("/tmp/", f"{tmp}/")],
+            capture_output=True, text=True, env=env, cwd=tmp)
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "bundle": (tmp / "bundle.env").read_bytes().decode()}
+
+
+def sync_value_safety_cases():
+    print("\nsync-bundle-key · value safety (Validate payload + Upsert)")
+    validate = extract_step(SYNC, "sync", SYNC_VALIDATE)
+    upsert = extract_step(SYNC, "sync", SYNC_UPSERT)
+    url = "redis://default:p%40ss@host:6379/0?ssl=true&x=1"
+
+    def strict(body, payload, **kw):
+        return run_sync_body(body, payload, strict=True, **kw)
+
+    # A normal connection string passes validation and round-trips byte-identical,
+    # both appended and replacing an existing line.
+    r = run_sync_body(validate, {"REDIS_URL": url})
+    check("a normal URL passes validation", r["rc"] == 0, r["out"])
+    r = run_sync_body(upsert, {"REDIS_URL": url}, bundle="KEEP=one\n")
+    check("URL round-trips byte-identical (append)",
+          r["bundle"] == f"KEEP=one\nREDIS_URL={url}\n", r["bundle"])
+    r = run_sync_body(upsert, {"REDIS_URL": url}, bundle="KEEP=one\nREDIS_URL=old\nOTHER=a=b\n")
+    check("URL round-trips byte-identical (replace), neighbours untouched",
+          r["bundle"] == f"KEEP=one\nREDIS_URL={url}\nOTHER=a=b\n", r["bundle"])
+
+    # 1. Backslashes: awk -v processed escapes on the replace path.
+    nasty = 'pa\\ss\\n\\t\\\\end "q" $HOME `x`'
+    r = run_sync_body(upsert, {"K1": nasty}, bundle="K1=old\n")
+    check("backslashes survive on replace", r["bundle"] == f"K1={nasty}\n", r["bundle"])
+    r = run_sync_body(upsert, {"K1": nasty}, bundle="")
+    check("backslashes survive on append", r["bundle"] == f"K1={nasty}\n", r["bundle"])
+
+    # 2. Newline / CR / NUL: refused before any write, naming the KEY only.
+    for label, bad in (("newline", "line1\nline2-secret"), ("CR", "abcdefgh\rZZZZ"),
+                       ("NUL", "abcdefgh\u0000ZZZZ")):
+        r = run_sync_body(validate, {"MULTI": bad})
+        check(f"a {label} in a value is refused", r["rc"] != 0, r["out"])
+        check(f"{label} refusal names the key", "MULTI" in r["out"], r["out"])
+        check(f"{label} refusal never echoes the value",
+              "line1" not in r["out"] and "ZZZZ" not in r["out"], r["out"])
+
+    # 3. Keys match literally, never as a regex.
+    r = run_sync_body(upsert, {"A.B": "value-one-1"}, bundle="AxB=keepme\n")
+    check("a key with a regex dot does not cross-match another key",
+          r["bundle"] == "AxB=keepme\nA.B=value-one-1\n", r["bundle"])
+    r = run_sync_body(upsert, {"AxB": "value-two-2"}, bundle="A.B=keepme\nAxB=old\n")
+    check("replace touches only the literal key",
+          r["bundle"] == "A.B=keepme\nAxB=value-two-2\n", r["bundle"])
+    r = run_sync_body(upsert, {"KEY": "value-one-1"}, bundle="KEY_2=keepme\n")
+    check("a key that prefixes another is appended, not merged",
+          r["bundle"] == "KEY_2=keepme\nKEY=value-one-1\n", r["bundle"])
+
+    # 3b. Keys are validated as env names.
+    for bad in ("A.B", "1ABC", "A B", "A=B", "", "A-B", "A\nB", "A::B"):
+        r = strict(validate, {bad: "value-one-1"})
+        check(f"key {bad!r} is refused", r["rc"] != 0 and "::error::" in r["out"], r["out"])
+    r = strict(validate, {"_OK_1": "value-one-1", "lower_ok": "value-two-2"})
+    check("valid env-name keys pass", r["rc"] == 0, r["out"])
+
+    # 4. Whitespace-only, empty and placeholder values (even at min_value_length 0).
+    for bad in ("          ", "\t\t\t\t\t\t\t\t", "changeme", "ChangeMe", "change-me",
+                "PLACEHOLDER", "TODO", "tbd", "xxxxxxxx", "XXX", "dummy", "Example",
+                "<your-password>", "<REDIS_URL>", "${REDIS_PASSWORD}", "  changeme  "):
+        for ml in (8, 0):
+            r = strict(validate, {"SECRET_K": bad}, min_len=ml)
+            check(f"value {bad!r} refused (min_value_length {ml})",
+                  r["rc"] != 0 and "SECRET_K" in r["out"], r["out"])
+    r = strict(validate, {"SECRET_K": ""}, min_len=0)
+    check("an empty value is refused even with min_value_length 0", r["rc"] != 0, r["out"])
+    r = strict(validate, {"SECRET_K": "xxxReal"}, min_len=0)
+    check("a real value that merely starts with xxx passes", r["rc"] == 0, r["out"])
+    r = strict(validate, {"SECRET_K": "my-example-password-1"}, min_len=0)
+    check("a real value that merely contains 'example' passes", r["rc"] == 0, r["out"])
+    r = strict(validate, {"SECRET_K": "changeme"})
+    check("placeholder refusal never echoes the value",
+          "changeme" not in r["out"].replace("::add-mask::changeme", ""), r["out"])
+    r = strict(validate, {"SECRET_K": "-"}, min_len=0)
+    check("strict: the lone '-' (May 2026 incident value) is refused at min 0",
+          r["rc"] != 0, r["out"])
+
+    # 5. strict_values false (default) keeps v3.7.0 behaviour for everything that
+    # never corrupted a file: these were accepted before and still are.
+    for label, payload, ml in (
+            ("hyphenated key my-key", {"my-key": "value-one-1"}, 8),
+            ("dotted key", {"A.B": "value-one-1"}, 8),
+            ("empty value at min 0", {"SECRET_K": ""}, 0),
+            ("html one-liner", {"SECRET_K": "<p>hi</p>"}, 8),
+            ("template one-liner", {"SECRET_K": "${A}:${B}"}, 8),
+            ("placeholder changeme", {"SECRET_K": "changeme"}, 8),
+            ("whitespace-only", {"SECRET_K": "          "}, 8),
+            ("lone dash at min 0", {"SECRET_K": "-"}, 0)):
+        r = run_sync_body(validate, payload, min_len=ml)
+        check(f"strict_values=false still accepts {label}", r["rc"] == 0, r["out"])
+    r = run_sync_body(validate, {"SECRET_K": "ab"}, min_len=8)
+    check("strict_values=false still enforces min_value_length", r["rc"] != 0, r["out"])
+    r = run_sync_body(validate, {"A\nB": "value-one-1"})
+    check("a newline in a KEY is refused even without strict_values", r["rc"] != 0, r["out"])
+    r = run_sync_body(validate, {"SECRET_K": "a\nb-value"}, min_len=0)
+    check("a newline value is refused even without strict_values", r["rc"] != 0, r["out"])
+    doc = yaml.safe_load(SYNC.read_text())
+    inp = (doc.get("on") or doc[True])["workflow_call"]["inputs"]["strict_values"]
+    check("strict_values is an optional boolean defaulting to false",
+          inp["type"] == "boolean" and inp["required"] is False and inp["default"] is False, inp)
+
+    # 5b. Trailing newlines only: v3.7.0 wrote these correctly (val=$(...) strips them),
+    # so they pass and are written as the bare value; an interior newline or a CR is not.
+    for tv in ("s3cret-value\n", "s3cret-value\n\n"):
+        r = run_sync_body(validate, {"K": tv})
+        check(f"a trailing-newline value {tv!r} passes validation", r["rc"] == 0, r["out"])
+        r = run_sync_body(upsert, {"K": tv}, bundle="K=old\n")
+        check(f"trailing newline(s) {tv!r} are stripped on replace",
+              r["bundle"] == "K=s3cret-value\n", r["bundle"])
+        r = run_sync_body(upsert, {"K": tv}, bundle="")
+        check(f"trailing newline(s) {tv!r} are stripped on append",
+              r["bundle"] == "K=s3cret-value\n", r["bundle"])
+    r = run_sync_body(validate, {"K": "s3cret\nvalue-x"})
+    check("an interior newline is still refused", r["rc"] != 0, r["out"])
+    r = run_sync_body(validate, {"K": "s3cret-value\r\n"})
+    check("a trailing CRLF is still refused (the CR remains)", r["rc"] != 0, r["out"])
+
+    # 5c. awk compares keys as strings, never numerically.
+    r = run_sync_body(upsert, {"1": "value-one-1"}, bundle="01=keep\n1.0=keep2\n")
+    check("numeric-looking keys do not cross-match (01, 1.0 vs 1)",
+          r["bundle"] == "01=keep\n1.0=keep2\n1=value-one-1\n", r["bundle"])
+
+    # 6. Appending onto a bundle whose last line has no trailing newline.
+    r = run_sync_body(upsert, {"NEW": "value-new-1"}, bundle="OLD=x")
+    check("append adds the missing newline first (OLD kept, NEW present)",
+          r["bundle"] == "OLD=x\nNEW=value-new-1\n", r["bundle"])
+    r = run_sync_body(upsert, {"NEW": "value-new-1"}, bundle="OLD=x\n")
+    check("append onto a newline-terminated bundle adds no blank line",
+          r["bundle"] == "OLD=x\nNEW=value-new-1\n", r["bundle"])
+
+
 def main():
     body = extract_step(PROMOTE, "promote", "Wait for source image")
     print("promote-image · Wait for source image")
@@ -4003,6 +4157,7 @@ def main():
     check("no revision carrying traffic is cannot-verify",
           r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
 
+    sync_value_safety_cases()
     r2_bootstrap_cases()
     r2_publish_cases()
 

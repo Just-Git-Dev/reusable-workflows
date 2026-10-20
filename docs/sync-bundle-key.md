@@ -41,6 +41,33 @@ by `manage-config-secrets`), the first run now disables all of it and emits a
 enable`; per [AGENTS.md §5](../AGENTS.md) dry-run both pins and compare before
 upgrading if the secret has been written outside these workflows.
 
+## Value safety
+
+The payload is validated before any cloud call. Every refusal names the **key only**,
+never the value.
+
+Always on (these corrupted the bundle in v3.7.0):
+
+- A key containing a newline, carriage return or NUL, or a value with an interior one, is refused (trailing newlines of a value are stripped, as in v3.7.0): a bundle
+  line is `KEY=value` on one line.
+- Values are written with their backslashes intact, on replace as well as append.
+- A key is matched against the existing bundle as a literal string, never as a regex
+  (`A.B` does not touch `AxB`).
+- Appending to a bundle whose last line has no trailing newline adds one first, so the
+  last existing line is not merged with the new key.
+
+Opt-in with **`strict_values: true`** (recommended; default `false` so that payloads
+v3.7.0 accepted keep working; a future major will flip the default):
+
+- Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`.
+- An empty or whitespace-only value, and a value that is wholly a placeholder (`-`,
+  `changeme`, `change-me`, `placeholder`, `todo`, `tbd`, `dummy`, `example`, `xxx...`,
+  `<...>`, `${...}`; case-insensitive, trimmed), is refused even with
+  `min_value_length: 0`. A real value that merely contains one of these passes.
+
+Secret values come only from GitHub secrets (see [PLATFORM.md](PLATFORM.md)); these
+guards make this workflow safe to be the only path into the bundle.
+
 ## Serialisation — one lock across all three bundle writers
 
 `sync-bundle-key`, `rotate-signing-keypair` and `rotate-worker-signing-secret`
@@ -78,6 +105,7 @@ bundle if that is a real risk.
 | `title` | input | `secrets` | label for the run summary |
 | `dry_run` | input | `false` | validate + print the plan; write nothing |
 | `min_value_length` | input | `8` | refuse the run if any payload value is shorter than this; `0` disables |
+| `strict_values` | input | `false` | also refuse non-env-name keys, empty/whitespace-only values and placeholders (even at `min_value_length: 0`); recommended `true` |
 | `keep_enabled_count` | input | `'1'` | keep this many newest ENABLED versions, disable the rest; minimum `1` |
 | `payload_json` | **secret** (req) | — | `{"DEST_KEY": "value", ...}` |
 
@@ -89,7 +117,10 @@ bundle if that is a real risk.
 
 On `service_account`: `roles/secretmanager.secretVersionManager` and
 `roles/secretmanager.secretAccessor` on `bundle_secret`, plus
-`roles/run.developer` on the target services.
+`roles/run.developer` on the target services. The run also calls
+`gcloud secrets describe`, which needs `secretmanager.secrets.get` on `bundle_secret`;
+the two roles above are not documented to carry it, so grant a role that does (for
+example `roles/secretmanager.viewer`; verify with `gcloud iam roles describe`).
 
 ## Example caller
 
@@ -140,6 +171,6 @@ change, and they are chosen entirely by the caller:
 
 - Payload values must be JSON strings. Numbers and booleans are rejected up
   front rather than silently stringified into the bundle.
-- Values are base64-encoded on the way through the shell, so newlines and shell
-  metacharacters survive intact.
+- Values are base64-encoded on the way through the shell, so shell metacharacters
+  and backslashes survive intact (newlines are refused; see Value safety).
 - The local copy of the bundle is removed in an `always()` step.
