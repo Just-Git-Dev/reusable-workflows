@@ -3894,6 +3894,12 @@
           "required": false,
           "type": "string"
         },
+        "destroy_old_disabled_versions": {
+          "default": false,
+          "description": "After a successful roll and disable, DESTROY every DISABLED version of the bundle secret except the newest disabled one (kept for a quick rollback). Disabled versions are billed like enabled ones; destroyed ones are free. Irreversible, and needs secretmanager.versions.destroy, so it defaults to false; set it to true. Never touches an ENABLED version; skipped when any roll failed; a dry run prints the plan and destroys nothing.",
+          "required": false,
+          "type": "boolean"
+        },
         "dry_run": {
           "default": false,
           "description": "true = validate the payload and print the plan; write nothing, roll nothing.",

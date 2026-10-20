@@ -22,6 +22,8 @@ name: Sync keys into Secret Manager bundle (reusable)
 #   roles/secretmanager.secretVersionManager  (on bundle_secret)
 #   roles/secretmanager.secretAccessor        (on bundle_secret)
 #   roles/run.developer                       (on the target services)
+#   secretmanager.secrets.get                 (on bundle_secret; the existence check needs it)
+#   secretmanager.versions.destroy            (only with destroy_old_disabled_versions: true)
 
 on:
   workflow_call:
@@ -90,6 +92,17 @@ on:
         type: string
         required: false
         default: '1'
+      destroy_old_disabled_versions:
+        description: >-
+          After a successful roll and disable, DESTROY every DISABLED version of the
+          bundle secret except the newest disabled one (kept for a quick rollback).
+          Disabled versions are billed like enabled ones; destroyed ones are free.
+          Irreversible, and needs secretmanager.versions.destroy, so it defaults to
+          false; set it to true. Never touches an ENABLED version; skipped when any
+          roll failed; a dry run prints the plan and destroys nothing.
+        type: boolean
+        required: false
+        default: false
     secrets:
       payload_json:
         description: 'JSON object {DEST_BUNDLE_KEY: value, ...} — keys are destination bundle keys.'
@@ -170,6 +183,39 @@ jobs:
             echo "::error::every payload_json value must be a string."
             exit 1
           fi
+          # Value-safety guards (the merge below writes `KEY=value` lines into an env
+          # file, so a key or value that is not a plain one-line env entry corrupts
+          # the bundle). Every refusal below names the KEY only, never the value.
+          #
+          # Keys must be env-var names. Printed JSON-quoted (@json) because a bad key
+          # may itself hold a newline or `::` that would forge a workflow command.
+          BADKEYS=$(printf '%s' "$PAYLOAD_JSON" \
+            | jq -r '[keys[] | select(test("\\A[A-Za-z_][A-Za-z0-9_]*\\z") | not) | @json] | join(", ")')
+          if [ -n "$BADKEYS" ]; then
+            echo "::error::payload_json key(s) are not valid env names (^[A-Za-z_][A-Za-z0-9_]*\$): $BADKEYS"
+            exit 1
+          fi
+          # A newline, CR or NUL would be written as raw bytes and split or truncate the line.
+          MULTILINE=$(printf '%s' "$PAYLOAD_JSON" \
+            | jq -r '[to_entries[] | select(.value | (contains("\n") or contains("\r") or contains("\u0000"))) | .key] | join(", ")')
+          if [ -n "$MULTILINE" ]; then
+            echo "::error::payload_json value(s) contain a newline, carriage return or NUL: $MULTILINE. A bundle line is KEY=value on one line; refusing to write a value that would corrupt the .env."
+            exit 1
+          fi
+          # Empty / whitespace-only values, and values that are a whole placeholder
+          # (changeme, todo, xxx..., <...>, ${...}). Compared after trimming and
+          # lowercasing; a real credential merely CONTAINING one of these passes.
+          # Not subject to min_value_length: 0, which only relaxes the length floor.
+          PLACEHOLDER=$(printf '%s' "$PAYLOAD_JSON" | jq -r '
+            [to_entries[]
+             | select((.value | gsub("\\A\\s+|\\s+\\z"; "") | ascii_downcase)
+                      | (. == "" or test("\\A(change[-_]?me|placeholder|todo|tbd|dummy|example|x{3,})\\z")
+                         or test("\\A<.*>\\z") or test("\\A\\$\\{.*\\}\\z")))
+             | .key] | join(", ")')
+          if [ -n "$PLACEHOLDER" ]; then
+            echo "::error::payload_json value(s) are empty, whitespace-only or a placeholder: $PLACEHOLDER. Refusing to distribute a value that cannot be a credential. Source the real value from a GitHub secret."
+            exit 1
+          fi
           # Mask every value so nothing leaks in later logs.
           while IFS= read -r v; do
             [ -n "$v" ] && echo "::add-mask::$v"
@@ -219,8 +265,11 @@ jobs:
         run: |
           upsert() {
             local key="$1" val="$2"
-            if grep -q "^${key}=" /tmp/bundle.env; then
-              awk -v k="$key" -v v="$val" 'BEGIN{FS=OFS="="} $1==k{print k"="v; next} {print}' /tmp/bundle.env > /tmp/bundle.env.new
+            # Key and value reach awk through ENVIRON, never `-v` (which processes
+            # backslash escapes and corrupts a value holding one) and never as a
+            # regex (`A.B` must not match `AxB`). Bytes are written exactly.
+            if KEY="$key" awk 'BEGIN{FS="="} $1==ENVIRON["KEY"]{f=1} END{exit !f}' /tmp/bundle.env; then
+              KEY="$key" VAL="$val" awk 'BEGIN{FS=OFS="="} $1==ENVIRON["KEY"]{print ENVIRON["KEY"] "=" ENVIRON["VAL"]; next} {print}' /tmp/bundle.env > /tmp/bundle.env.new
               mv /tmp/bundle.env.new /tmp/bundle.env
             else
               echo "${key}=${val}" >> /tmp/bundle.env
@@ -338,9 +387,44 @@ jobs:
               --project="$GCP_PROJECT"
           done < /tmp/to-disable.txt
 
+      - name: Destroy old disabled bundle version(s)
+        # Opt-in (destroy_old_disabled_versions, default false): DISABLED versions are
+        # billed like ENABLED ones, only DESTROYED ones are free. Reached only when the
+        # new version was added, every service rolled and the superseded version was
+        # disabled (a failed earlier step skips this one). Destroys every DISABLED
+        # version except the NEWEST disabled one, kept for a quick rollback; never an
+        # ENABLED version, because the list is filtered to state=DISABLED. A dry run
+        # lists the plan and destroys nothing. See DECISIONS.md 2026-10-20.
+        if: inputs.destroy_old_disabled_versions == true
+        run: |
+          gcloud secrets versions list "$BUNDLE_SECRET" \
+            --project="$GCP_PROJECT" --filter='state=DISABLED' \
+            --sort-by=~createTime --format='value(name)' > /tmp/disabled.txt
+          EXAMINED=$(grep -c . /tmp/disabled.txt || true)
+          # Newest disabled is line 1 (newest first): keep it, plan the rest.
+          tail -n +2 /tmp/disabled.txt > /tmp/to-destroy.txt
+          PLANNED=$(grep -c . /tmp/to-destroy.txt || true)
+          echo "DISABLED versions examined: $EXAMINED; keeping the newest disabled for rollback; $PLANNED to destroy."
+          DESTROYED=0
+          while read -r v; do
+            [ -n "$v" ] || continue
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry run] would destroy version $v"
+              continue
+            fi
+            echo "Destroying version $v"
+            if ! gcloud secrets versions destroy "$v" \
+                 --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" --quiet; then
+              echo "::error::Failed to destroy version $v of $BUNDLE_SECRET ($DESTROYED destroyed before the failure)."
+              exit 1
+            fi
+            DESTROYED=$((DESTROYED + 1))
+          done < /tmp/to-destroy.txt
+          echo "Destroyed $DESTROYED of $PLANNED planned (examined $EXAMINED disabled version(s))."
+
       - name: Shred local bundle copy
         if: always()
-        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/enabled.txt /tmp/to-disable.txt
+        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/enabled.txt /tmp/to-disable.txt /tmp/disabled.txt /tmp/to-destroy.txt
 
       - name: Summary
         if: always()

@@ -2247,6 +2247,77 @@ def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8):
                 "bundle": (tmp / "bundle.env").read_bytes().decode()}
 
 
+def run_destroy_step(body: str, *, disabled=(), dry_run=False, destroy_fails=()):
+    """Run the destroy body against a gcloud stub whose DISABLED list is `disabled`
+    (newest first). Returns rc, output and the versions `destroy` was called on."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        calls = tmp / "calls"
+        calls.write_text("")
+        rows = "".join(f'  echo "{v}"\n' for v in disabled)
+        fails = " ".join(destroy_fails)
+        gcloud = stub / "gcloud"
+        gcloud.write_text(
+            '#!/usr/bin/env bash\n'
+            f'echo "$*" >> {calls}\n'
+            'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
+            '  case "$*" in *state=DISABLED*) ;; *) echo "unfiltered list" >&2; exit 9;; esac\n'
+            f'{rows}  exit 0\nfi\n'
+            'if [ "$2" = "versions" ] && [ "$3" = "destroy" ]; then\n'
+            f'  for f in {fails}; do [ "$4" = "$f" ] && exit 1; done\n'
+            '  exit 0\nfi\nexit 0\n')
+        gcloud.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(BUNDLE_SECRET="app-secrets", GCP_PROJECT="p",
+                   DRY_RUN="true" if dry_run else "false")
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+             body.replace("/tmp/", f"{tmp}/")],
+            capture_output=True, text=True, env=env, cwd=tmp)
+        destroyed = [ln.split()[3] for ln in calls.read_text().splitlines()
+                     if ln.startswith("secrets versions destroy")]
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "destroyed": destroyed}
+
+
+def sync_destroy_cases():
+    print("\nsync-bundle-key · Destroy old disabled bundle version(s)")
+    step = "Destroy old disabled bundle version(s)"
+    body = extract_step(SYNC, "sync", step)
+    doc = yaml.safe_load(SYNC.read_text())
+    steps = doc["jobs"]["sync"]["steps"]
+    names = [s.get("name") for s in steps]
+    spec = steps[names.index(step)]
+    inp = (doc.get("on") or doc[True])["workflow_call"]["inputs"]["destroy_old_disabled_versions"]
+    check("destroy input is an optional boolean defaulting to false",
+          inp["type"] == "boolean" and inp["required"] is False and inp["default"] is False, inp)
+    check("destroy step is gated on the input",
+          spec.get("if") == "inputs.destroy_old_disabled_versions == true", spec.get("if"))
+    check("destroy runs after the roll and the disable (a failed roll skips it)",
+          names.index(step) > names.index("Disable superseded bundle version(s)")
+          > names.index("Force new Cloud Run revision(s)"), names)
+
+    r = run_destroy_step(body, disabled=())
+    check("only v1 (nothing disabled): nothing destroyed", r["rc"] == 0 and r["destroyed"] == [], r)
+    r = run_destroy_step(body, disabled=("2",))
+    check("v1 enabled + v2 disabled: the newest disabled is kept",
+          r["rc"] == 0 and r["destroyed"] == [], r)
+    r = run_destroy_step(body, disabled=("6", "5", "4", "3", "2", "1"))
+    check("many disabled: all but the newest disabled are destroyed",
+          r["rc"] == 0 and r["destroyed"] == ["5", "4", "3", "2", "1"], r)
+    check("counts examined and destroyed are printed",
+          "examined: 6" in r["out"] and "Destroyed 5 of 5" in r["out"], r["out"])
+    r = run_destroy_step(body, disabled=("6", "5", "4"), dry_run=True)
+    check("dry run destroys nothing and prints the plan",
+          r["rc"] == 0 and r["destroyed"] == [] and "would destroy version 5" in r["out"], r)
+    r = run_destroy_step(body, disabled=("6", "5", "4", "3"), destroy_fails=("4",))
+    check("a failed destroy fails the step loudly, naming the version",
+          r["rc"] != 0 and "::error::" in r["out"] and "version 4" in r["out"], r)
+
+
 def sync_value_safety_cases():
     print("\nsync-bundle-key · value safety (Validate payload + Upsert)")
     validate = extract_step(SYNC, "sync", SYNC_VALIDATE)
@@ -4098,6 +4169,7 @@ def main():
           r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
 
     sync_value_safety_cases()
+    sync_destroy_cases()
     r2_bootstrap_cases()
     r2_publish_cases()
 

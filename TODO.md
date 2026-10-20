@@ -1,7 +1,7 @@
 # TODO — reusable-workflows
 
 ## Index
-47 open across 15 live sections. 8 closed items archived.
+46 open across 15 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
@@ -18,7 +18,7 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [consumer C (`<consumer-C-project-id>`) has no alerts caller — adopt `bootstrap-alerts` (opened 2026-09-07)](#consumer-c-consumer-c-project-id-has-no-alerts-caller--adopt-bootstrap-alerts-opened-2026-09-07) — 3 open
 - **ACTIVE** — [Release hygiene — the `WORKFLOW_VERSION` stamp (regression found 2026-09-06)](#release-hygiene--the-workflow_version-stamp-regression-found-2026-09-06) — 4 open
 - **ACTIVE** — [Build attestations](#build-attestations) — 1 open
-- **ACTIVE** — [Secret Manager](#secret-manager) — 2 open, 2 closed
+- **ACTIVE** — [Secret Manager](#secret-manager) — 1 open, 3 closed
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
@@ -471,7 +471,7 @@ semver here tracks the **input contract**, so each pin needs its own diff read b
 
 ## Secret Manager
 
-- [ ] `.github/workflows/sync-bundle-key.yml` — value-safety gaps found 2026-10-20 by a local run of its merge code (lines 219-234, v3.7.0 = main): (1) the replace path `awk -v v=…` (:224) processes backslash escapes, so a `\` in an EXISTING key's value is corrupted (the append path is fine); (2) a multi-line value is written as raw lines and breaks the `.env`; (3) `grep -q "^${key}="` treats the key as a regex (`A.B` matches `AxB`); (4) empty, whitespace-only and placeholder values are refused only by `min_value_length` (default 8): `changeme` and 10 spaces pass. Fix: pass values via ENVIRON, not `-v`; refuse a newline; match the key literally; add a placeholder/whitespace check. Red step tests first.
+- [x] **CLOSED 2026-10-20 (v3.8.0).** `.github/workflows/sync-bundle-key.yml` — value-safety gaps found 2026-10-20 by a local run of its merge code (lines 219-234, v3.7.0 = main): (1) the replace path `awk -v v=…` (:224) processes backslash escapes, so a `\` in an EXISTING key's value is corrupted (the append path is fine); (2) a multi-line value is written as raw lines and breaks the `.env`; (3) `grep -q "^${key}="` treats the key as a regex (`A.B` matches `AxB`); (4) empty, whitespace-only and placeholder values are refused only by `min_value_length` (default 8): `changeme` and 10 spaces pass. Fix: pass values via ENVIRON, not `-v`; refuse a newline; match the key literally; add a placeholder/whitespace check. Red step tests first.
 - [x] **`cleanup-secret-versions.yml` — ✅ ADOPTED 2026-08-24 (consumer B + <consumer-A-org>).**
       Zero callers since `v2.3.0`; the first adoption attempt immediately surfaced two latent
       defects in the workflow (project-wide `secrets.list` demanded to validate a name;

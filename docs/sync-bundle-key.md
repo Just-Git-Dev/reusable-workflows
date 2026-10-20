@@ -41,6 +41,55 @@ by `manage-config-secrets`), the first run now disables all of it and emits a
 enable`; per [AGENTS.md §5](../AGENTS.md) dry-run both pins and compare before
 upgrading if the secret has been written outside these workflows.
 
+## Destroying old disabled versions — `destroy_old_disabled_versions`
+
+Disabled Secret Manager versions are **billed like enabled ones**; only destroyed
+versions are free. With `destroy_old_disabled_versions: true`, after the new version
+is added, every service has rolled and the superseded version is disabled, the
+workflow **destroys every DISABLED version except the newest disabled one**, which
+stays for a quick rollback (`gcloud secrets versions enable`). Example: v7 goes
+live, v6 stays disabled, v1-v5 are destroyed. It prints how many disabled versions it
+examined and how many it destroyed, and fails the step if a destroy call errors.
+
+- **Default `false`**, so existing callers do not fail on a missing
+  `secretmanager.versions.destroy` permission. The platform owner wants every
+  consumer to set it to `true`.
+- **Irreversible.** Destroyed versions cannot be recovered. It never touches an
+  ENABLED version (the list is filtered to `state=DISABLED`) nor the newest disabled
+  one, and it is skipped whenever an earlier step failed (a failed roll, a failed
+  disable). On `dry_run: true` it lists what it would destroy and destroys nothing.
+- **With `keep_enabled_count`.** Retention disables first; destruction then works on
+  what is DISABLED. With `keep_enabled_count: 2` the previous version stays ENABLED,
+  so it is not destroyed, and the rollback target is the newest disabled version
+  below it.
+- **No quarantine clock.** Unlike
+  [cleanup-secret-versions](cleanup-secret-versions.md) this does not check how long
+  a version has been disabled or scan Cloud Run for pinned consumers. That is safe
+  for the mount this workflow manages (`:latest`, resolved to the newest ENABLED
+  version), but do not set it if some service pins a specific older version number.
+- **With the shared lock.** The step runs inside the same `bundle-write-...`
+  concurrency group as the job (see below), so no rotate-* writer can add a
+  version between the list and the destroy calls from the same caller repo.
+
+## Value safety
+
+The payload is validated before any cloud call, and the merge preserves bytes
+exactly. Every refusal names the **key only**, never the value.
+
+- Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`. A key is matched against the existing
+  bundle as a literal string, never as a regex (`A.B` does not touch `AxB`).
+- A value containing a newline, carriage return or NUL is refused: a bundle line is
+  `KEY=value` on one line.
+- An empty or whitespace-only value, and a value that is wholly a placeholder
+  (`changeme`, `change-me`, `placeholder`, `todo`, `tbd`, `dummy`, `example`,
+  `xxx...`, `<...>`, `${...}`; case-insensitive, trimmed), is refused even with
+  `min_value_length: 0`. A real value that merely contains one of these passes. There
+  is deliberately no opt-out input.
+- Values are written with their backslashes intact, on replace as well as append.
+
+Secret values come only from GitHub secrets (see [PLATFORM.md](PLATFORM.md)); these
+guards make this workflow safe to be the only path into the bundle.
+
 ## Serialisation — one lock across all three bundle writers
 
 `sync-bundle-key`, `rotate-signing-keypair` and `rotate-worker-signing-secret`
@@ -79,6 +128,7 @@ bundle if that is a real risk.
 | `dry_run` | input | `false` | validate + print the plan; write nothing |
 | `min_value_length` | input | `8` | refuse the run if any payload value is shorter than this; `0` disables |
 | `keep_enabled_count` | input | `'1'` | keep this many newest ENABLED versions, disable the rest; minimum `1` |
+| `destroy_old_disabled_versions` | input | `false` | after a green roll, DESTROY all DISABLED versions except the newest disabled; irreversible, needs `secretmanager.versions.destroy`; set `true` |
 | `payload_json` | **secret** (req) | — | `{"DEST_KEY": "value", ...}` |
 
 ## Outputs
@@ -89,7 +139,12 @@ bundle if that is a real risk.
 
 On `service_account`: `roles/secretmanager.secretVersionManager` and
 `roles/secretmanager.secretAccessor` on `bundle_secret`, plus
-`roles/run.developer` on the target services.
+`roles/run.developer` on the target services. The run also calls
+`gcloud secrets describe`, which needs `secretmanager.secrets.get` on `bundle_secret`;
+the two roles above are not documented to carry it, so grant a role that does (for
+example `roles/secretmanager.viewer`; verify with `gcloud iam roles describe`). With `destroy_old_disabled_versions: true`
+the account also needs `secretmanager.versions.list` and `secretmanager.versions.destroy`
+(both in `secretVersionManager`).
 
 ## Example caller
 
@@ -140,6 +195,6 @@ change, and they are chosen entirely by the caller:
 
 - Payload values must be JSON strings. Numbers and booleans are rejected up
   front rather than silently stringified into the bundle.
-- Values are base64-encoded on the way through the shell, so newlines and shell
-  metacharacters survive intact.
+- Values are base64-encoded on the way through the shell, so shell metacharacters
+  and backslashes survive intact (newlines are refused; see Value safety).
 - The local copy of the bundle is removed in an `always()` step.
