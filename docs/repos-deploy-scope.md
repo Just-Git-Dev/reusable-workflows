@@ -40,7 +40,6 @@ the first failure stops the job.
 | `workload_identity_provider` | yes | | WIF provider used to authenticate |
 | `service_account` | yes | | the repo-admin SA email |
 | `project_id` | yes | | GCP project of the services, runtime SAs and GAR repositories |
-| `protected_service_accounts` | no | empty | DEPRECATED no-op: accepted so existing callers do not break, ignored (the `-deployer` name suffix decides which accounts are managed) |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
 | `placeholder_image` | no | `us-docker.pkg.dev/cloudrun/container/hello` | image of the first, placeholder revision |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |

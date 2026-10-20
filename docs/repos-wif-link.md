@@ -24,8 +24,8 @@ in R's own `deploys:`. Anything else makes the planner exit `1` with no plan, in
 `github-releaser` gives `error: <repo>: github-releaser is not a project SA: ask JGD (wif_repos)`,
 and another repo's deployer gives `... is not a deployer of a deployable of <repo>`. `repo-admin`
 fails by name. Linking `repo-admin` would give every branch and pull-request job of a repo the
-identity that creates SAs and sets IAM. The old `protected_service_accounts` input is a deprecated
-no-op. The rule is a mistake-guard; the exact audit on the access-provisioning side detects a breach.
+identity that creates SAs and sets IAM. The old `protected_service_accounts` input was removed
+(owner ruling 2026-10-20). The rule is a mistake-guard; the exact audit on the access-provisioning side detects a breach.
 
 The workflow never removes a binding, grants any other role, creates a service account (a missing
 SA is an error; use [F6](repos-service-accounts.md)), or touches the pool or provider.
@@ -45,7 +45,6 @@ nothing to do and the job summary lists every repo examined (with the count). In
 | `project_id` | yes | | GCP project of the service accounts |
 | `pool` | yes | | org-level workload identity pool id used in the principalSet |
 | `project_number` | yes | | the GCP project NUMBER (digits) of `project_id`; an input, so the repo-admin SA needs no `projects.get` |
-| `protected_service_accounts` | no | empty | DEPRECATED no-op: accepted so existing callers do not break, ignored (the `-deployer` name suffix decides which accounts are managed) |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
 

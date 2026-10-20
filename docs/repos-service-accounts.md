@@ -22,7 +22,7 @@ A register entry whose name is not a `^[a-z][a-z0-9-]*-deployer$` account is an 
 a project SA`): the run is refused with no plan. F6 creates and updates only the project's own
 deployers and never adopts another account, even an existing one (`repo-admin`, `github-releaser`,
 a runtime `<d>-run`); the access-provisioning config owns those accounts and their descriptions.
-The `protected_service_accounts` input is a deprecated no-op.
+The old `protected_service_accounts` input was removed (owner ruling 2026-10-20).
 
 The workflow never deletes a service account, never creates a key and never grants any role.
 
@@ -39,7 +39,6 @@ the write actions run in plan order and the first failure stops the job.
 | `workload_identity_provider` | yes | | WIF provider used to authenticate |
 | `service_account` | yes | | the repo-admin SA email |
 | `project_id` | yes | | GCP project the service accounts live in |
-| `protected_service_accounts` | no | empty | DEPRECATED no-op: accepted so existing callers do not break, ignored (the `-deployer` name suffix decides which accounts are managed) |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
 

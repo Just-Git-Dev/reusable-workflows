@@ -18,7 +18,7 @@ parts the doc leaves to "the fixtures", so it is the implementer's contract:
                }
                POLICY = {"role": "roles/..", "members": ["serviceAccount:..", ..]}
   Flags        --repo-admin-sa-email <email> is REQUIRED (the repo-admin SA; missing -> rc 2, no
-               stdout). --protected-service-accounts is a DEPRECATED NO-OP (accepted, ignored).
+               stdout). --protected-service-accounts no longer exists (unknown flag -> rc 2).
   Ruling 21    F7 writes NO service-account policy. The runtime SA is DERIVED: `<d>-run`
                (`runtime_service_account` optional; if present it must equal `<d>-run`, else
                `error: <repo>: ...` rc 1). F7 only READS `<d>-run`'s policy and reports
@@ -605,11 +605,14 @@ def r21_f7_refuses_a_deployable_under_two_repos():
 
 
 @case
-def r21_deprecated_protected_input_is_accepted_and_ignored():
-    base = run(load_register(), load_state())
-    assert base[0] == 0, base
-    for val in ("", "payments-api-deployer", "x-yy-zz\nrepo-admin"):
-        assert run(load_register(), load_state(), extra=("--protected-service-accounts", val)) == base, val
+def removed_protected_flag_is_rejected_and_no_workflow_declares_the_input():
+    # owner ruling 2026-10-20: the deprecated flag and workflow input are gone
+    rc, out, err = run(load_register(), load_state(), extra=("--protected-service-accounts", ""))
+    assert rc == 2 and out.strip() == "", (rc, out[:100])
+    for wf in ("repos-wif-link", "repos-service-accounts", "repos-deploy-scope"):
+        text = (ROOT / ".github" / "workflows" / (wf + ".yml")).read_text()
+        assert "protected_service_accounts" not in text.lower().replace("-", "_"), wf
+        assert "PROTECTED_SERVICE_ACCOUNTS" not in text, wf
 
 
 @case

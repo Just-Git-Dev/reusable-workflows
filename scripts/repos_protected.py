@@ -6,8 +6,8 @@ The name says who writes the account's IAM policy, so neither side ever has to r
 account in the GCP project belongs to the access-provisioning side (or to Google). That includes
 `repo-admin` itself, which fails the suffix rule by name, so no list has to be kept in step.
 
-The `--protected-service-accounts` flag (and the workflows' `protected_service_accounts` input) is a
-DEPRECATED NO-OP: it is still accepted so existing callers do not break, and it is ignored.
+There is no caller-supplied protected list: the `--protected-service-accounts` flag and the workflows'
+`protected_service_accounts` input were removed (owner ruling 2026-10-20; no release had shipped them).
 """
 
 import re
@@ -18,8 +18,3 @@ PROJECT_SA_RE = re.compile(r"[a-z][a-z0-9-]*-deployer")     # matched with fullm
 def is_project_sa(name):
     """True when `name` is a service account the project (this repo's automation) may manage."""
     return isinstance(name, str) and PROJECT_SA_RE.fullmatch(name) is not None
-
-
-def add_argument(ap):
-    ap.add_argument("--protected-service-accounts", default="",
-                    help="DEPRECATED no-op (accepted and ignored): the `-deployer` suffix rule decides")

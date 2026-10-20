@@ -306,12 +306,11 @@ def main():
     expect_error("trailing newline", register([entry(N + "\n")], repos=[
         {"name": "a", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}]),
         state(), "service_accounts")
-    # the deprecated input is accepted and ignored
-    expect("deprecated input is a no-op", register([entry("one-aa-deployer")]),
-           state(live("one-aa-deployer")), [insync()],
-           extra=["--protected-service-accounts", "one-aa-deployer,x"])
-    expect_error("deprecated input cannot lift the rule", register([entry("github-releaser")]), state(),
-                 "github-releaser is not a project SA", extra=["--protected-service-accounts", ""])
+    # owner ruling 2026-10-20: the `--protected-service-accounts` flag is gone (argparse exit 2)
+    with tempfile.TemporaryDirectory() as t:
+        rc, out, err = run(register([entry("one-aa-deployer")]), state(), t,
+                           extra=["--protected-service-accounts", ""])
+    check("removed flag is rejected", rc == 2 and out.strip() == "", "rc=%d out=%r" % (rc, out[:80]))
 
     print("repos_sa_plan: %d checks, %d failed" % (COUNT[0], len(FAILURES)))
     for f in FAILURES:

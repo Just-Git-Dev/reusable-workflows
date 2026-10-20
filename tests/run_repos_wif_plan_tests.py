@@ -335,12 +335,11 @@ def main():
         "payments-api", [D], deploys=[{"gke": {"cluster": "l/main", "namespace": "ns",
                                                 "workload": "payments-api"}}])]),
         state({D: sa()}), "not a deployer of a deployable of payments-api")
-    # the deprecated input is accepted and ignored: it neither protects nor un-protects anything
-    expect("deprecated input is a no-op", register([repo("payments-api", [D])]), state({D: sa()}),
-           [add("payments-api", D)], extra=["--protected-service-accounts", "payments-api-deployer,x"])
-    expect_error("deprecated input cannot lift the rule", register([raw("p", ["github-releaser"])]),
-                 state({"github-releaser": sa()}), "not a project SA",
-                 extra=["--protected-service-accounts", ""])
+    # owner ruling 2026-10-20: the `--protected-service-accounts` flag is gone (argparse exit 2)
+    with tempfile.TemporaryDirectory() as t:
+        rc, out, err = run(register([repo("payments-api", [D])]), state({D: sa()}), t,
+                           extra=["--protected-service-accounts", ""])
+    check("removed flag is rejected", rc == 2 and out.strip() == "", "rc=%d out=%r" % (rc, out[:80]))
 
     # 15. is_project_sa: the suffix rule shared by F5-F7
     sys.path.insert(0, str(ROOT / "scripts"))

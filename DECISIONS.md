@@ -2,8 +2,9 @@
 
 ## Index
 
-105 entries total — 95 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+106 entries total — 96 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [Drop the deprecated protected_service_accounts input and flag (owner ruling)](#2026-10-20--drop-the-deprecated-protected_service_accounts-input-and-flag-owner-ruling)
 - `2026-10-20` — [Ruling 21 review fixes: F5/F6 uniqueness, F7 waits for act_as, F6 own deployers only](#2026-10-20--ruling-21-review-fixes-f5f6-uniqueness-f7-waits-for-act_as-f6-own-deployers-only)
 - `2026-10-20` — [One writer per service-account policy: suffix rule, derived runtime SA, F7 writes no SA policy (ruling 21)](#2026-10-20--one-writer-per-service-account-policy-suffix-rule-derived-runtime-sa-f7-writes-no-sa-policy-ruling-21)
 - `2026-10-20` — [Repos-as-code review fixes: protected SAs, repo-admin self-grant, GKE deferred, visibility never written](#2026-10-20--repos-as-code-review-fixes-protected-sas-repo-admin-self-grant-gke-deferred-visibility-never-written)
@@ -109,6 +110,16 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — Drop the deprecated protected_service_accounts input and flag (owner ruling)
+
+**Context.** The earlier ruling-21 entries kept the `protected_service_accounts` workflow input and the `--protected-service-accounts` planner flag as an accepted-but-ignored no-op, so that no existing caller would break. The review found that no repos-* workflow has been released, so there is no caller.
+
+**Decision.** The owner ruled on 2026-10-20 that the deprecated input and flag are dropped now: `protected_service_accounts` is removed from `repos-wif-link`, `repos-service-accounts` and `repos-deploy-scope`, and `--protected-service-accounts` is removed from the F5, F6 and F7 planners (an unknown flag now exits 2). `repos_protected.py` keeps only the `-deployer` suffix rule.
+
+**Supersedes.** The "kept as deprecated no-op" part of the "One writer per service-account policy" entry (its Contract paragraph) and the "Not changed" paragraph of the "Ruling 21 review fixes" entry. Everything else in those entries stands.
+
+**Why.** Removing a `workflow_call` input is free before the first release and would cost a major version after it. With no caller, the no-op only taught a dead knob.
 
 ## 2026-10-20 — Ruling 21 review fixes: F5/F6 uniqueness, F7 waits for act_as, F6 own deployers only
 

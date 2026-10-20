@@ -3205,12 +3205,6 @@
           "required": true,
           "type": "string"
         },
-        "protected_service_accounts": {
-          "default": "",
-          "description": "DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.",
-          "required": false,
-          "type": "string"
-        },
         "register_path": {
           "default": "repos.yaml",
           "description": "Path of the register file in the caller repository.",
@@ -3280,12 +3274,6 @@
           "default": null,
           "description": "GCP project id the service accounts are created in.",
           "required": true,
-          "type": "string"
-        },
-        "protected_service_accounts": {
-          "default": "",
-          "description": "DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.",
-          "required": false,
           "type": "string"
         },
         "register_path": {
@@ -3426,12 +3414,6 @@
           "default": null,
           "description": "GCP project NUMBER (digits) of project_id, used in the principalSet; an input so the repo-admin SA needs no projects.get.",
           "required": true,
-          "type": "string"
-        },
-        "protected_service_accounts": {
-          "default": "",
-          "description": "DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.",
-          "required": false,
           "type": "string"
         },
         "register_path": {

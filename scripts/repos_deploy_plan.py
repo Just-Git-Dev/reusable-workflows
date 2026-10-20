@@ -15,7 +15,6 @@ import sys
 import yaml
 
 import repos_plan
-import repos_protected  # noqa: F401  (add_argument: the deprecated no-op flag)
 
 FEATURE = "deploy-scope"
 RUN_DEV = "roles/run.developer"
@@ -132,7 +131,6 @@ def main(argv=None):
     ap.add_argument("--register", required=True)
     ap.add_argument("--state", required=True)
     ap.add_argument("--repo-admin-sa-email", required=True)
-    repos_protected.add_argument(ap)
     args = ap.parse_args(argv)
     if args.feature != FEATURE:
         print("error: register: unknown feature %r" % args.feature, file=sys.stderr)

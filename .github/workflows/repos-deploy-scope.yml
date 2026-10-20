@@ -37,11 +37,6 @@ on:
         description: 'GCP project id that hosts the Cloud Run services, runtime SAs and GAR repositories.'
         required: true
         type: string
-      protected_service_accounts:
-        description: 'DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.'
-        required: false
-        type: string
-        default: ''
       register_path:
         description: 'Path of the register file in the caller repository.'
         required: false

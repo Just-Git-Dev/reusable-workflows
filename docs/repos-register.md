@@ -184,8 +184,8 @@ No feature, in any mode, ever:
    `^[a-z][a-z0-9-]*-deployer$` account is the project's (F5 links it, F6 creates and updates it);
    every other account (`repo-admin`, the CI accounts, every runtime `<d>-run`) belongs to the
    access-provisioning side, which is the only writer of its policy. `repo-admin` fails the suffix
-   rule by name, so no list has to be kept in step. The old `protected_service_accounts` input is a
-   **deprecated no-op**: still accepted, ignored. Why: linking `repo-admin` to a repo would hand its
+   rule by name, so no list has to be kept in step. The old `protected_service_accounts` input was
+   **removed** (owner ruling 2026-10-20: no release had shipped it). Why: linking `repo-admin` to a repo would hand its
    power to every branch and pull-request job of that repo, with no environment review in the way.
    This is a mistake-guard, not a barrier: `repo-admin` can still write project-wide, and the exact
    audit on the access-provisioning side is what detects a breach;
@@ -340,16 +340,16 @@ nothing to stdout, one `error: <repo|sa|register>: <reason>` line per error to s
 (JSON is valid YAML, so a fixture may be JSON in a `.yaml` file).
 F7 also needs `--repo-admin-sa-email`, the full email of the `repo-admin` service account (the
 workflow's `service_account` input, the identity it authenticates as); without it F7 exits `2`.
-`--protected-service-accounts` (F5-F7) is a **deprecated no-op**: still accepted so existing callers
-do not break, and ignored. Which accounts a planner may manage is decided by the `-deployer` name
-suffix (`scripts/repos_protected.py`, `is_project_sa`), not by a list.
+There is no `--protected-service-accounts` flag any more (owner ruling 2026-10-20; an unknown flag exits `2`).
+Which accounts a planner may manage is decided by the `-deployer` name suffix
+(`scripts/repos_protected.py`, `is_project_sa`), not by a list.
 
 | Planner | `--feature` values | Notes on the inputs |
 |---|---|---|
 | `scripts/repos_plan.py` (F1-F4) | `register`, `create`, `settings`, `variables` | `--state` may be omitted for `register` (F1 needs no live state) |
-| `scripts/repos_wif_plan.py` (F5) | `wif-link` | deprecated no-op `--protected-service-accounts` |
-| `scripts/repos_sa_plan.py` (F6) | `service-accounts` | deprecated no-op `--protected-service-accounts` |
-| `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | required `--repo-admin-sa-email <email>`; deprecated no-op `--protected-service-accounts` |
+| `scripts/repos_wif_plan.py` (F5) | `wif-link` | none |
+| `scripts/repos_sa_plan.py` (F6) | `service-accounts` | none |
+| `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | required `--repo-admin-sa-email <email>` |
 
 **F1-F4 live state** — one entry per repo the workflow looked up. A repo with `exists: false`, or
 absent from `repos`, does not exist. Live repos the register does not list produce no action.

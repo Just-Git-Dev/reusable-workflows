@@ -82,7 +82,6 @@ def main(argv=None):
     ap.add_argument("--feature", required=True)
     ap.add_argument("--register", required=True)
     ap.add_argument("--state", required=True)
-    repos_protected.add_argument(ap)
     args = ap.parse_args(argv)
     if args.feature != FEATURE:
         print("error: register: unknown feature %r" % args.feature, file=sys.stderr)
