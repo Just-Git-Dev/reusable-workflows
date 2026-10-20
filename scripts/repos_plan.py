@@ -25,7 +25,9 @@ MODES = ("report", "enforce")
 VISIBILITIES = ("private", "internal")
 NAME_RE = re.compile(r"^(?!-)(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$")   # never `-`-led, never . or ..
 ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
-VAR_RE = re.compile(r"^(?!GITHUB_)[A-Z_][A-Z0-9_]*$")
+SERVICE_RE = re.compile(r"[a-z]([-a-z0-9]{0,61}[a-z0-9])?")
+REGION_RE = re.compile(r"[a-z]+-[a-z]+[0-9]")
+VAR_RE =re.compile(r"^(?!GITHUB_)[A-Z_][A-Z0-9_]*$")
 BOOL_SETTINGS = ("delete_branch_on_merge", "allow_auto_merge", "allow_squash_merge",
                  "allow_merge_commit", "allow_rebase_merge", "has_issues", "has_wiki",
                  "has_projects")
@@ -90,6 +92,14 @@ def validate_core(reg):
             continue
         for dep in r["deploys"]:
             svc = dep.get("cloud_run") if isinstance(dep, dict) else None
+            region = dep.get("region") if isinstance(dep, dict) else None
+            # `$` (the schema's pattern, jq's too) accepts a trailing "\n", which would then reach a
+            # command line. Other malformed values stay the schema's business; here only the value
+            # that the schema lets through but fullmatch refuses.
+            if isinstance(svc, str) and re.fullmatch(SERVICE_RE.pattern + r"\n", svc):
+                errs.append(err(r["name"], "cloud_run must be a Cloud Run service name"))
+            if isinstance(region, str) and re.fullmatch(REGION_RE.pattern + r"\n", region):
+                errs.append(err(r["name"], "region must look like europe-west1"))
             if isinstance(svc, str) and svc and r["name"] not in owners.setdefault(svc, []):
                 owners[svc].append(r["name"])
     for svc, names in sorted(owners.items()):

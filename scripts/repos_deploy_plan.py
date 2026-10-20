@@ -77,7 +77,7 @@ def plan_repo(repo, mode, state, errors, admin_email):
             continue
         # ruling 21: the runtime SA is DERIVED (`<d>-run`), never chosen, so a repo cannot point its
         # service at another identity. The key is optional; when present it must equal the derived name.
-        given =d.get("runtime_service_account")
+        given = d.get("runtime_service_account")
         if given is not None and given != runtime:
             errors.append("error: %s: runtime_service_account '%s' must be '%s' (derived from the "
                           "deployable; omit the key)" % (name, given, runtime))

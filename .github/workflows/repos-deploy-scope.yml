@@ -205,15 +205,15 @@ jobs:
           [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
           badbind=$(jq '[.[] | select(.action=="add-resource-binding") | select(
               ((.details.resource_type=="run.service" and .details.role=="roles/run.developer"
-                  and (.details.resource | test("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"))
-                  and ((.details.region // "") | test("^[a-z]+-[a-z]+[0-9]$")))
+                  and (.details.resource | test("\\A[a-z]([-a-z0-9]{0,61}[a-z0-9])?\\z"))
+                  and ((.details.region // "") | test("\\A[a-z]+-[a-z]+[0-9]\\z")))
                or (.details.resource_type=="artifactregistry.repository" and .details.role=="roles/artifactregistry.writer"))
               and (.details.member | startswith("serviceAccount:")) | not)] | length' plan.json)
           [ "$badbind" = "0" ] || { echo "::error::refusing $badbind binding(s) outside the role/resource allow-list; nothing applied"; exit 1; }
           badsvc=$(jq '[.[] | select(.action=="create-service") | select(
-              (.details.service | test("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"))
-              and (.details.region | test("^[a-z]+-[a-z]+[0-9]$"))
-              and (.details.runtime_service_account | test("^[a-z][a-z0-9-]{4,28}[a-z0-9]$")) | not)] | length' plan.json)
+              (.details.service | test("\\A[a-z]([-a-z0-9]{0,61}[a-z0-9])?\\z"))
+              and (.details.region | test("\\A[a-z]+-[a-z]+[0-9]\\z"))
+              and (.details.runtime_service_account | test("\\A[a-z][a-z0-9-]{4,28}[a-z0-9]\\z")) | not)] | length' plan.json)
           [ "$badsvc" = "0" ] || { echo "::error::refusing $badsvc create-service action(s) with a malformed name or region; nothing applied"; exit 1; }
           [ "$writes" -gt 0 ] || exit 0
           # fd 3, not a pipe: gcloud would otherwise eat the loop's stdin, and a pipe would run the

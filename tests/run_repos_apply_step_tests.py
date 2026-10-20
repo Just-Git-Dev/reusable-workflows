@@ -330,6 +330,16 @@ def deploy_cases():
             check(f"F7 malformed {label} {v!r}: step fails, no call, nothing executed",
                   r["rc"] != 0 and r["calls"] == [] and "pwned" not in r["files"], (r["rc"], r["calls"]))
 
+    # M1: jq's `$` matches before a trailing newline, so a newline-suffixed name must still be refused
+    for label, plan in (("service", [d_create(svc="payments-api\n")]),
+                        ("region", [d_create(region="europe-west1\n")]),
+                        ("runtime SA", [d_create(rt="payments-api-run\n")]),
+                        ("binding service", [d_run(svc="payments-api\n")]),
+                        ("binding region", [d_run(region="europe-west1\n")])):
+        r = deploy_run(plan)
+        check(f"F7 trailing newline {label}: step fails, no call",
+              r["rc"] != 0 and r["calls"] == [], (r["rc"], r["calls"]))
+
     # free-form fields (member suffix, SA email, GAR path) arrive as ONE literal argument
     for v in NASTY:
         r = deploy_run([d_gar(res="loc/" + v, mem="serviceAccount:" + v)])

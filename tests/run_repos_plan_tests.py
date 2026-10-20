@@ -327,7 +327,8 @@ def m3_name_patterns_and_no_leading_dash_in_the_register():
         _deploy(cloud_run="--ingress=all"), _deploy(cloud_run="-x"), _deploy(cloud_run="Upper"),
         _deploy(cloud_run="a" * 64), _deploy(cloud_run="trailing-"),
         _deploy(region="--region=x"), _deploy(region="europe_west1"), _deploy(region="europe-west"),
-        _deploy(region="Europe-west1"),
+        _deploy(region="Europe-west1"), _deploy(region="europe-west1\n"),
+        _deploy(cloud_run="payments-api\n"),
         _deploy(runtime_service_account="--x-run"),
         _deploy(image_repository="--x/services"), _deploy(image_repository="loc/--x"),
         {"name": "g", "deploys": [{"gke": {"cluster": "--c/main", "namespace": "ns", "workload": "w"}}]},
@@ -754,7 +755,7 @@ def r21_runtime_service_account_is_optional_in_the_schema():
 def feature_selection_f5_to_f7_keys_are_ignored_by_f1_to_f4():
     r = reg([{"name": "payments-api", "mode": "enforce",
               "gcp": {"service_accounts": ["payments-api-deployer"]},
-              "deploys": [{"cloud_run": "payments-api", "region": "r",
+              "deploys": [{"cloud_run": "payments-api", "region": "europe-west1",
                            "runtime_service_account": "payments-api-run"}]}],
             service_accounts=[{"name": "payments-api-deployer", "description": "d"}])
     s = st(**{"payments-api": live(visibility="private", default_branch="main")})

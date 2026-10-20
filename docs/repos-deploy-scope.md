@@ -19,7 +19,9 @@ SA is derived as `<service>-run` (`runtime_service_account` is optional; when pr
 it, else the run is refused) and belongs to the access-provisioning side. The workflow only reads
 its policy and reports a `needs-jgd` warning for each line that side must still declare:
 `deployed_by: <service>-deployer` (the deployer's `roles/iam.serviceAccountUser` on it) and, while
-the service is still to be created, `act_as: repo-admin`. The apply step's allow-list has no
+the service is still to be created, `act_as: repo-admin`. A NEW service therefore waits: until
+that `act_as` is live the planner plans only the `needs-jgd` report for it, and creates the service
+on a later run. The apply step's allow-list has no
 `iam.serviceAccount` write, so a plan that carried one is refused before anything runs.
 
 Order per deployable: the service, then the other bindings, then the `needs-jgd` reports. The
@@ -29,7 +31,7 @@ service-account key.
 ## Modes
 
 The mode is the repo's `mode`, else `defaults.mode`, else `report`. In `report` the planner emits
-only `drift`, `unsupported` and `in-sync`, so the Apply step has nothing to do and the job summary
+only `drift`, `unsupported`, `in-sync` and the `needs-jgd` reports, so the Apply step has nothing to do and the job summary
 lists every repo examined (with the count). In `enforce` the write actions run in plan order and
 the first failure stops the job.
 
