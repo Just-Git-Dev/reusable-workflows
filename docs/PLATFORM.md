@@ -75,6 +75,7 @@ out-of-band): **[release-process.md](release-process.md)**.
 | Reclaim Artifact Registry storage | [`cleanup-gar-images`](cleanup-gar-images.md) |
 | Provision Cloud Monitoring alert policies | [`bootstrap-alerts`](bootstrap-alerts.md) |
 | Deploy to EKS/AKS or a non-GAR registry (stored creds) | [`deploy-cluster-keyed`](deploy-cluster-keyed.md) |
+| List every repo my project owns, and create / configure / link them from one file | Repos as code — the `repos.yaml` register ([`repos-register`](repos-register.md), §5) |
 
 ---
 
@@ -142,6 +143,9 @@ full input/secret contract. Grant `id-token: write` for any WIF workflow. Cross-
 - **[`neon-backup`](neon-backup.md)** — `pg_dump` a Postgres DB → private artifact + sha256 manifest. Keys: `db_host`, `db_user`, `db_name`. *Auth: WIF; DB password read from a Secret Manager bundle.* `pg_major` ≥ server major; provider PITR is still the stronger DR story.
 - **[`cleanup-gar-images`](cleanup-gar-images.md)** — **release-relative** GAR sweep (not age-based since v2.0.0), protecting live Cloud Run Service **and** Job digests + recent semver + `keep_tags`. *Auth: WIF, and it needs `roles/artifactregistry.admin` — `repoAdmin` manages artifacts, not repository settings.* **`dry_run` defaults true** — run the plan first; aborts if zero live digests resolve. ⚠️ **Since v2.1.0 an applied sweep also LOCKS the repository** (`immutable_tags_policy: enforce`, the default), and an immutable repo rejects any push that *moves* a tag — retire `:latest`/`buildcache`-style moving tags first, or set `immutable_tags_policy: preserve`. That failure lands in your *build*, not in the sweep.
 - **[`bootstrap-alerts`](bootstrap-alerts.md)** — apply a Monitoring channel + alert policies from **your** repo's `infra/alerts/`. *Auth: WIF.* Idempotent by `displayName`; `force_update` is destructive.
+
+### Repos as code
+- **[`repos-register`](repos-register.md)** — the `repos.yaml` register in your root repo (every repo you own, its settings, variables, GCP links and deploy scope) and seven independent features over it: check, create, settings, variables, WIF link, service accounts, deploy scope. *Auth: GitHub-side features use your release App's second key in a `main`-only `repo-admin` environment; GCP-side features use your project's `repo-admin` SA via WIF.* **Design of record — the workflows are not released yet.** Every repo starts `mode: report`; never deletes, archives, makes public, or renames without `rename_from`.
 
 ---
 

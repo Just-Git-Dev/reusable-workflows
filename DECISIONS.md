@@ -2,8 +2,9 @@
 
 ## Index
 
-101 entries total — 91 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+102 entries total — 92 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [Repos as code: a per-project register and independent, report-first features](#2026-10-20--repos-as-code-a-per-project-register-and-independent-report-first-features)
 - `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
 - `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
 - `2026-10-19` — [CI pins actionlint and shellcheck](#2026-10-19--ci-pins-actionlint-and-shellcheck)
@@ -105,6 +106,48 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — Repos as code: a per-project register and independent, report-first features
+
+**What:** design of record for "repos as code" — a per-project `repos.yaml` register in the
+project's own root repo, and seven independent reusable workflows over it (check, create,
+settings, variables, WIF link, service accounts, deploy scope). Contract:
+[`docs/repos-register.md`](docs/repos-register.md). Docs only in this change; schema, planners,
+tests and workflows follow (red tests first).
+
+**Why a register in each project, not here:** this repo is public and project-agnostic — every
+value is a `workflow_call` input. A project's list of repos is project data, so it lives with the
+project, and the workflows only read it.
+
+**Why one workflow per feature, each reading only its own keys:** a project must be able to adopt
+any single feature (the register alone as an inventory, or settings without repo creation) in any
+order. Unknown keys are ignored by every feature, so a later feature (branch protection,
+skeletons) adds a key without a breaking change to the others.
+
+**Why report-first:** the first run against existing repos is a diff, not a change. Every repo
+starts `mode: report` and moves to `enforce` only by a reviewed register change; the report runs
+on the narrowest read permission.
+
+**Why pure planners:** the decisions that matter (create only when missing, rename only via
+`rename_from`, never touch an unlisted repo) are logic, not API calls. A planner that takes
+register + live-state JSON and returns an action list can be proven by fixture tests with no
+GitHub and no cloud — the same seam as the GAR and secret-version sweep plans
+(`tests/run_plan_tests.py`, `tests/run_secret_plan_tests.py`). The action-list shape is fixed in
+`docs/repos-register.md` §8 so test authors and implementers share one contract.
+
+**Why the never-do list lives in the planner, not only the workflow:** delete, archive,
+make-public, rename-without-`rename_from`, SA key creation, SA deletion and project-level grants
+have no verb in the planner's vocabulary, so no workflow bug can apply one. The workflow also
+checks each action name against the allow-list (defence in depth, not the primary control).
+
+**Credential:** the org's existing release App, extended with `Administration: write`, with a
+second key in a `main`-only `repo-admin` environment, passed by name — the same environment
+input pattern as `release-drafts.yml`. Each job narrows its token with `permission-*`.
+
+**Known follow-up for the implementer:** `scripts/check_docs_coverage.py` treats every
+`docs/*.md` without a matching workflow as an orphan; `repos-register` must join its
+standalone-page set (or its first workflow must land) before CI goes green, and each `repos-*`
+workflow still needs its own `docs/<name>.md` page and README row.
 
 ## 2026-10-19 — Local gate is CI: one make target per check, a committed pre-push hook
 
