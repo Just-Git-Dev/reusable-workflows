@@ -240,12 +240,19 @@ owns those accounts and their descriptions. A listed SA that exists is `in-sync`
 (enforce updates them).
 
 **F7 — deploy scope.** Per `deploys:` entry, so a repo can deploy only its own service:
-- **Cloud Run:** if the service does not exist, create it once with a placeholder image (resource
+- **Cloud Run:** first, if the repo-admin service account does not already hold
+  `roles/iam.serviceAccountUser` on the `runtime_service_account`'s own policy, add it there
+  (`repo-admin` has no project-wide act-as right, so every "repo-admin may run as X" is a visible
+  line on X). Then, if the service does not exist, create it once with a placeholder image (resource
   IAM needs the service to exist), running as `runtime_service_account`; then bind the
   deployer SA (`<deployable>-deployer`, the repo's `gcp.service_accounts` entry) with
   `roles/run.developer` **on that service**, `roles/iam.serviceAccountUser` **on that runtime
   SA**, and `roles/artifactregistry.writer` **on `image_repository`** (GAR IAM is per repository,
   not per image — a dedicated repository per deployable is the stricter option).
+- **Protected accounts.** A `runtime_service_account`, or a derived `<deployable>-deployer`, that
+  is a protected service account (`repo-admin` always, plus `protected_service_accounts`; see
+  [§5](#5-the-never-list), item 9) is an error: exit `1`, `error: <repo>: ...`, no plan. Otherwise
+  a register entry could make the deployer impersonate `repo-admin` by deploying code as it.
 - **GKE:** the deployer gets a namespaced Kubernetes `Role` whose rules always carry
   `resourceNames: [<workload>]`, bound to the Google identity — never `roles/container.developer`
   (it covers every namespace). Fetching cluster credentials needs `roles/container.clusterViewer`,
@@ -284,6 +291,8 @@ All four planners take `--feature <name> --register <repos.yaml> --state <state.
 nothing to stdout, one `error: <repo|sa|register>: <reason>` line per error to stderr and exit
 `1`. An unknown `--feature` exits non-zero with nothing on stdout. The register is read as YAML
 (JSON is valid YAML, so a fixture may be JSON in a `.yaml` file).
+F7 also needs `--repo-admin-sa-email`, the full email of the `repo-admin` service account (the
+workflow's `service_account` input, the identity it authenticates as); without it F7 exits `2`.
 `--protected-service-accounts` (F5-F7) takes a comma or newline separated list of account names; the
 planner merges it with the hard-coded `repo-admin`, so omitting it still protects `repo-admin`.
 
@@ -292,7 +301,7 @@ planner merges it with the hard-coded `repo-admin`, so omitting it still protect
 | `scripts/repos_plan.py` (F1-F4) | `register`, `create`, `settings`, `variables` | `--state` may be omitted for `register` (F1 needs no live state) |
 | `scripts/repos_wif_plan.py` (F5) | `wif-link` | optional `--protected-service-accounts <list>` |
 | `scripts/repos_sa_plan.py` (F6) | `service-accounts` | optional `--protected-service-accounts <list>` |
-| `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | |
+| `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | required `--repo-admin-sa-email <email>`; optional `--protected-service-accounts <list>` |
 
 **F1-F4 live state** — one entry per repo the workflow looked up. A repo with `exists: false`, or
 absent from `repos`, does not exist. Live repos the register does not list produce no action.
@@ -352,7 +361,7 @@ project-level roles it holds (F7 reads it for `legacy-grant` and for the GKE
   verb's details.
 - **`in-sync` emission:** exactly one per examined repo (or SA) that has nothing to do, and none
   for a repo (or SA) that has any other action, including `drift`.
-- **Deployer SA** (F7) is `<deployable>-deployer`, where the deployable is the Cloud Run service
+- **Deployer SA** (F7; never a protected one) is `<deployable>-deployer`, where the deployable is the Cloud Run service
   name, or the GKE workload.
 - **Member formats.** F5 `member` is
   `principalSet://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool>/attribute.repository/<org>/<repo>`.
@@ -361,7 +370,10 @@ project-level roles it holds (F7 reads it for `legacy-grant` and for the GKE
   `iam.serviceAccount` is the runtime SA's **email**; `artifactregistry.repository` is
   `<location>/<repo>` (the register's `image_repository`). There is no `container.cluster`
   resource type: GKE has no cluster-level IAM.
-- **F7 action order per repo:** `create-service` (if the service is missing), `roles/run.developer`
+- **F7 action order per repo:** for each Cloud Run entry, first `roles/iam.serviceAccountUser` for
+  the repo-admin SA (`member` `serviceAccount:<repo-admin email>`) on the runtime SA, emitted only
+  when that binding is missing from the runtime SA's live policy and at most once per runtime SA
+  per repo; then `create-service` (if the service is missing), `roles/run.developer`
   on the service, `roles/iam.serviceAccountUser` on the runtime SA,
   `roles/artifactregistry.writer` on the repository; for GKE, the
   non-write `unsupported` report when the deployer lacks the project-level

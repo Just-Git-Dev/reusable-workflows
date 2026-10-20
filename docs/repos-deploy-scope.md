@@ -10,6 +10,7 @@ defined in [repos-register.md](repos-register.md) (sections 6, 7 and 8).
 
 | Entry | Action |
 |---|---|
+| `cloud_run`, repo-admin lacks it on the runtime SA | `roles/iam.serviceAccountUser` for the repo-admin SA (the `service_account` input) ON the runtime SA, first (`gcloud iam service-accounts add-iam-policy-binding`): repo-admin has no project-wide act-as, so each "repo-admin may run as X" is a visible line on X |
 | `cloud_run`, service missing | `gcloud run deploy <service> --image=<placeholder_image> --service-account=<runtime SA> --region <region> --no-allow-unauthenticated`, once |
 | `cloud_run` | `roles/run.developer` ON that service for `<service>-deployer` (`gcloud run services add-iam-policy-binding`) |
 | `cloud_run` | `roles/iam.serviceAccountUser` ON that service's runtime SA only (`gcloud iam service-accounts add-iam-policy-binding`) |
@@ -17,7 +18,11 @@ defined in [repos-register.md](repos-register.md) (sections 6, 7 and 8).
 | `gke` | `kubectl apply` of a `Role` limited by `resourceNames: [<workload>]` plus a `RoleBinding` (credentials via `gcloud container clusters get-credentials`) |
 | any | a project-level `roles/run.*` or `roles/container.*` role the deployer still holds is reported as `legacy-grant` and never removed |
 
-Order per repo: create the service before any binding. The workflow never grants a project-level
+A `runtime_service_account` or `<service>-deployer` that is a protected service account (`repo-admin`
+always, plus `protected_service_accounts`) is an error and refuses the whole run: otherwise the
+deployer could deploy code as `repo-admin`.
+
+Order per repo: the repo-admin binding on the runtime SA, then the service, then the other bindings. The workflow never grants a project-level
 role, never deletes anything and never creates a service-account key.
 
 ## Modes
@@ -34,6 +39,7 @@ the first failure stops the job.
 | `workload_identity_provider` | yes | | WIF provider used to authenticate |
 | `service_account` | yes | | the repo-admin SA email |
 | `project_id` | yes | | GCP project of the services, runtime SAs and GAR repositories |
+| `protected_service_accounts` | no | empty | comma or newline list of SA names a runtime SA or deployer must never be; merged with the always-protected `repo-admin` |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
 | `placeholder_image` | no | `us-docker.pkg.dev/cloudrun/container/hello` | image of the first, placeholder revision |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |

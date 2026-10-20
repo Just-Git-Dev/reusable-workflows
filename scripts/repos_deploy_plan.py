@@ -14,6 +14,8 @@ import sys
 
 import yaml
 
+import repos_protected
+
 FEATURE = "deploy-scope"
 RUN_DEV = "roles/run.developer"
 SA_USER = "roles/iam.serviceAccountUser"
@@ -33,11 +35,12 @@ def held(policy_entries, role, member):
     return False
 
 
-def plan_repo(repo, mode, state, errors):
+def plan_repo(repo, mode, state, errors, protected, admin_email):
     name = repo["name"]
     project = state.get("project_id")
     writes = []  # (verb, details) in apply order
     legacy = []
+    admin_done = set()          # runtime SAs whose repo-admin binding is already planned for this repo
     for d in repo.get("deploys") or []:
         if "cloud_run" in d:
             deployable = d["cloud_run"]
@@ -53,6 +56,10 @@ def plan_repo(repo, mode, state, errors):
             errors.append("error: %s: deployer SA name '%s' is %d chars, max %d"
                           % (name, deployer, len(deployer), MAX_SA_LEN))
             continue
+        if deployer in protected:
+            errors.append("error: %s: deployer SA name '%s' is a protected service account"
+                          % (name, deployer))
+            continue
         member = "serviceAccount:%s@%s.iam.gserviceaccount.com" % (deployer, project)
 
         def bind(rtype, res, role, iam):
@@ -66,15 +73,27 @@ def plan_repo(repo, mode, state, errors):
                 errors.append("error: %s: cloud_run '%s' needs region and runtime_service_account"
                               % (name, deployable))
                 continue
+            if runtime in protected:
+                errors.append("error: %s: runtime_service_account '%s' is a protected service account"
+                              % (name, runtime))
+                continue
             services = state.get("cloud_run_services") or {}
             svc = services.get(deployable)
+            sa = (state.get("service_accounts") or {}).get(runtime) or {}
+            runtime_email = "%s@%s.iam.gserviceaccount.com" % (runtime, project)
+            # repo-admin has no project-wide act-as: it grants itself serviceAccountUser on THIS
+            # runtime SA first, so the right is a visible line in that SA's own policy.
+            admin_member = "serviceAccount:%s" % admin_email
+            if runtime not in admin_done and not held(sa.get("iam"), SA_USER, admin_member):
+                writes.append(("add-resource-binding", {
+                    "resource_type": "iam.serviceAccount", "resource": runtime_email,
+                    "role": SA_USER, "member": admin_member}))
+            admin_done.add(runtime)
             if svc is None:
                 writes.append(("create-service", {
                     "service": deployable, "region": region,
                     "runtime_service_account": runtime, "image": "placeholder"}))
             bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"))
-            sa = (state.get("service_accounts") or {}).get(runtime) or {}
-            runtime_email = "%s@%s.iam.gserviceaccount.com" % (runtime, project)
             bind("iam.serviceAccount", runtime_email, SA_USER, sa.get("iam"))
             gar = d.get("image_repository")
             if gar:
@@ -127,6 +146,8 @@ def main(argv=None):
     ap.add_argument("--feature", required=True)
     ap.add_argument("--register", required=True)
     ap.add_argument("--state", required=True)
+    ap.add_argument("--repo-admin-sa-email", required=True)
+    repos_protected.add_argument(ap)
     args = ap.parse_args(argv)
     if args.feature != FEATURE:
         print("error: register: unknown feature %r" % args.feature, file=sys.stderr)
@@ -139,7 +160,9 @@ def main(argv=None):
     errors, actions = [], []
     for repo in reg.get("repos") or []:
         mode = repo.get("mode") or default_mode
-        actions.extend(plan_repo(repo, mode, state, errors))
+        actions.extend(plan_repo(repo, mode, state, errors,
+                                 repos_protected.parse(args.protected_service_accounts),
+                                 args.repo_admin_sa_email))
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

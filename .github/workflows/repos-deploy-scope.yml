@@ -34,6 +34,11 @@ on:
         description: 'GCP project id that hosts the Cloud Run services, runtime SAs and GAR repositories.'
         required: true
         type: string
+      protected_service_accounts:
+        description: 'Comma or newline list of service account names a runtime SA or deployer must never be, merged with the always-protected repo-admin (use it for the CI accounts the access-provisioning config declares).'
+        required: false
+        type: string
+        default: ''
       register_path:
         description: 'Path of the register file in the caller repository.'
         required: false
@@ -75,6 +80,8 @@ jobs:
       PROJECT_ID: ${{ inputs.project_id }}
       REGISTER: ${{ inputs.register_path }}
       PLACEHOLDER_IMAGE: ${{ inputs.placeholder_image }}
+      REPO_ADMIN_SA_EMAIL: ${{ inputs.service_account }}
+      PROTECTED_SERVICE_ACCOUNTS: ${{ inputs.protected_service_accounts }}
     steps:
       - name: Refuse unless repo-admin on the main branch
         env:
@@ -178,7 +185,9 @@ jobs:
       - name: Plan
         run: |
           python3 .repos-src/scripts/repos_deploy_plan.py --feature deploy-scope \
-            --register "$REGISTER" --state state.json > plan.json
+            --register "$REGISTER" --state state.json \
+            --repo-admin-sa-email "$REPO_ADMIN_SA_EMAIL" \
+            --protected-service-accounts "$PROTECTED_SERVICE_ACCOUNTS" > plan.json
           echo "actions: $(jq length plan.json)"
 
       - name: Report
