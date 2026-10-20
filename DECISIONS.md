@@ -2,8 +2,9 @@
 
 ## Index
 
-108 entries total — 98 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+109 entries total — 99 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [cleanup-secret-versions: pass etag verbatim (quotes kept) and fail when no mutation succeeded](#2026-10-20--cleanup-secret-versions-pass-etag-verbatim-quotes-kept-and-fail-when-no-mutation-succeeded)
 - `2026-10-20` — [sync-bundle-key: value-safety guards and an opt-in strict_values mode](#2026-10-20--sync-bundle-key-value-safety-guards-and-an-opt-in-strict_values-mode)
 - `2026-10-20` — [Secret values come only from GitHub secrets; no hand writes to Secret Manager](#2026-10-20--secret-values-come-only-from-github-secrets-no-hand-writes-to-secret-manager)
 - `2026-10-20` — [Drop the deprecated protected_service_accounts input and flag (owner ruling)](#2026-10-20--drop-the-deprecated-protected_service_accounts-input-and-flag-owner-ruling)
@@ -112,6 +113,23 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — cleanup-secret-versions: pass etag verbatim (quotes kept) and fail when no mutation succeeded
+
+**Decision.** `cleanup-secret-versions` passes the etag to `gcloud secrets versions disable|destroy --etag` exactly as the API returned it (quotes kept), and the Execute step fails when the plan had mutations and none succeeded. Partial success stays a warning; the step summary states planned vs succeeded.
+
+**RCA.**
+- Symptom: a consumer's run 39454966378 ended SUCCESS with disabled=0 destroyed=0; both gcloud calls had failed `FAILED_PRECONDITION: The etag provided in the request does not match the resource's current etag`.
+- Root cause: the plan stored `(v.get("etag") or "").strip('"')`. Secret Manager returns the etag with literal quotes (`"\"165292b156ce2f\""` in `--format=json`), so the stripped value never matched. Separately, a failed mutation was only a `::warning::`, so an all-failed run concluded green.
+- Why it wasn't caught: no test executed the Execute step or the version-collection step. The plan fixtures used opaque etags, and nothing modelled an API that rejects a non-identical etag.
+- Fix: removed the strip; Execute now compares planned vs succeeded and exits 1 with an `::error::` when planned > 0 and succeeded = 0; it writes the counts to the step summary.
+- Prevention: tests/run_step_tests.py now runs both steps against a gcloud stub that holds the quoted etag and rejects any other --etag, plus all-failed, partial, empty-plan, dry-run and destroy-off cases.
+
+**Evidence on the --etag format (unverified against the live API).** The gcloud reference for `secrets versions destroy` (cloud.google.com/sdk/gcloud/reference/secrets/versions/destroy) says only "Current entity tag (ETag) of the secret version" with an illustrative `--etag=123`. The Secret Manager ETag page (docs.cloud.google.com/secret-manager/docs/etags) says a matching etag succeeds and a mismatch is FAILED_PRECONDITION, and does not state quoting. So the docs are silent on quoting. The quoted form is what describe returns, and passing the API's value back unmodified is the only choice consistent with that. NOT proven that the quoted form succeeds live; the first real run on a consumer is the proof. If it still fails FAILED_PRECONDITION, the run now fails loudly instead of reporting success.
+
+**Alternatives.** Keeping the strip (known failing). Dropping --etag (loses the stale-plan guard on irreversible destroy).
+
+**Local test note.** Host bash is 3.2 (no `${x,,}`); the new cases were run under python:3.12-slim (bash 5). Not a repo change.
 
 ## 2026-10-20 — sync-bundle-key: value-safety guards and an opt-in strict_values mode
 
