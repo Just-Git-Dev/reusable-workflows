@@ -97,6 +97,17 @@ A secret consumed outside Cloud Run (GKE, an external worker) needs
 `require_consumers: false`. That input is an explicit statement that you have
 checked by hand — it is not a convenience toggle.
 
+### Etags and a run where nothing landed
+
+Every disable/destroy carries the version's etag from plan time, passed back **exactly as Secret
+Manager returned it — including the literal double quotes** (`"165292b156ce2f"`). Stripping them
+made every call fail `FAILED_PRECONDITION`. Google's docs do not state the quoting convention for
+`--etag`, so the quoted form is the API's own value, not a documented guarantee.
+
+One version whose etag moved (a rotation landed mid-run) is a `::warning::` and the version is
+left as found; the step summary states `N planned, M succeeded`. If the plan had mutations and
+**none** succeeded, the job fails with an `::error::` — that is never a rotation race.
+
 ## Inputs
 
 | Input | Default | Meaning |

@@ -817,6 +817,88 @@ def run_collect_targets_step(body: str, *, secrets_list="", can_list=True,
                 "targets": targets.read_text().split() if targets.exists() else []}
 
 
+def run_sweep_execute_step(body: str, *, plan, fail_versions=(), enable_destroy="true",
+                           dry_run="false", latest="9"):
+    """Execute cleanup-secret-versions' "Execute" against a stubbed gcloud.
+
+    The stub models Secret Manager's real etag shape: the API returns the etag WITH literal
+    quotes (`"\\"abc\\""` in JSON), and a mutation whose --etag is not byte-identical to that
+    is FAILED_PRECONDITION. A stub that accepted any etag is how the quote-stripping bug
+    shipped. plan: {"disable": [...], "destroy": [...]} of {secret, version, etag} where etag
+    is the string exactly as the API returned it. fail_versions: versions whose mutation fails
+    regardless (a rotation moved the etag).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        (tmp / "secret-plan.json").write_text(json.dumps(plan))
+        # expected etag per version, as the API holds it
+        exp = {str(v["version"]): v["etag"] for k in ("disable", "destroy") for v in plan[k]}
+        (tmp / "expected.json").write_text(json.dumps(exp))
+        (stub / "gcloud").write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1 $2 $3" = "secrets versions describe" ]; then echo "projects/p/secrets/s/versions/' + latest + '"; exit 0; fi\n'
+            'if [ "$1 $2" = "secrets versions" ] && { [ "$3" = disable ] || [ "$3" = destroy ]; }; then\n'
+            '  v="$4"; got=""\n'
+            '  for a in "$@"; do case "$a" in --etag=*) got="${a#--etag=}";; esac; done\n'
+            '  want=$(python3 -c \'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])\' "' + str(tmp / "expected.json") + '" "$v")\n'
+            '  case " ' + " ".join(map(str, fail_versions)) + ' " in *" $v "*) echo "FAILED_PRECONDITION: moved" >&2; exit 1;; esac\n'
+            '  if [ "$got" != "$want" ]; then echo "FAILED_PRECONDITION: The etag provided in the request does not match the resource\'s current etag. got=[$got]" >&2; exit 1; fi\n'
+            '  exit 0\n'
+            'fi\n'
+            'exit 0\n'
+        )
+        (stub / "gcloud").chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="p", DRY_RUN=dry_run, ENABLE_DESTROY=enable_destroy,
+                   GITHUB_OUTPUT=str(tmp / "out.txt"), GITHUB_STEP_SUMMARY=str(tmp / "sum.md"))
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+             body.replace("/tmp/", f"{tmp}/")],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        out = tmp / "out.txt"
+        outs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l) \
+            if out.exists() else {}
+        summ = tmp / "sum.md"
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, "outputs": outs,
+                "summary": summ.read_text() if summ.exists() else ""}
+
+
+def run_sweep_versions_step(body: str, *, etag):
+    """Execute "Collect secret versions and quarantine clock" with one secret, one version
+    whose etag is returned verbatim by the stub. Returns the ndjson rows the step wrote."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        (tmp / "targets.txt").write_text("s\n")
+        (tmp / "vl.json").write_text(json.dumps([
+            {"name": "projects/1/secrets/s/versions/2", "state": "ENABLED",
+             "createTime": "2026-01-01T00:00:00Z", "etag": etag}]))
+        (stub / "gcloud").write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1 $2 $3" = "secrets versions describe" ]; then echo "projects/1/secrets/s/versions/2"; exit 0; fi\n'
+            'if [ "$1 $2 $3" = "secrets versions list" ]; then cat "' + str(tmp / "vl.json") + '"; exit 0; fi\n'
+            'if [ "$1" = "logging" ]; then echo "[]"; exit 0; fi\n'
+            'exit 0\n'
+        )
+        (stub / "gcloud").chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:{env['PATH']}"
+        env.update(GCP_PROJECT="p")
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+             body.replace("/tmp/", f"{tmp}/")],
+            capture_output=True, text=True, env=env, cwd=tmp,
+        )
+        nd = tmp / "versions.ndjson"
+        rows = [json.loads(l) for l in nd.read_text().splitlines() if l.strip()] if nd.exists() else []
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr, "rows": rows}
+
+
 def _git(cwd, *args):
     # -c overrides, not inherited config: a developer with `tag.annotate=true` set globally
     # would otherwise get "fatal: no tag message?" from the plain `git tag` below, and the
@@ -3119,6 +3201,50 @@ def main():
                                  existing=("app-secrets", "api-env"))
     check("empty list sweeps every secret", r["targets"] == ["api-env", "app-secrets"], r["targets"])
     check("empty list warns", "::warning::" in r["out"], r["out"])
+
+    # ── cleanup-secret-versions · etag handling + all-failed execute ─────────
+    # Secret Manager returns the etag WITH literal quotes (a live run: both calls failed
+    # FAILED_PRECONDITION because the plan stripped them). The stub holds the quoted form and
+    # rejects anything else.
+    print("\ncleanup-secret-versions · etag + execute failure accounting")
+    Q = '"165292b156ce2f"'
+    r = run_sweep_versions_step(extract_step(SWEEP, "cleanup", "Collect secret versions and quarantine clock"),
+                                etag=Q)
+    check("plan keeps the etag exactly as the API returned it (quotes included)",
+          [x["etag"] for x in r["rows"]] == [Q], r["rows"] or r["out"])
+
+    ex = extract_step(SWEEP, "cleanup", "Execute")
+    plan = {"disable": [{"secret": "s", "version": 2, "etag": Q}],
+            "destroy": [{"secret": "s", "version": 1, "etag": '"aa11"'}]}
+    r = run_sweep_execute_step(ex, plan=plan)
+    check("quoted etags are passed through and both mutations succeed",
+          r["rc"] == 0 and r["outputs"].get("disabled") == "1" and r["outputs"].get("destroyed") == "1",
+          r["out"])
+
+    # Every planned mutation fails: the job must fail, not conclude SUCCESS with 0/0.
+    r = run_sweep_execute_step(ex, plan=plan, fail_versions=(1, 2))
+    check("every mutation failed: step exits non-zero", r["rc"] != 0, r["out"])
+    check("every mutation failed: ::error names the counts",
+          "::error::" in r["out"] and "0 of 2" in r["out"], r["out"])
+    check("every mutation failed: summary states planned vs succeeded",
+          "planned" in r["summary"] and "succeeded" in r["summary"], r["summary"])
+
+    # Partial success stays a warning (a rotation landed mid-run on one version).
+    r = run_sweep_execute_step(ex, plan=plan, fail_versions=(2,))
+    check("partial success: step still exits 0", r["rc"] == 0, r["out"])
+    check("partial success: per-version warning kept",
+          "::warning::Could not disable s:2" in r["out"], r["out"])
+    check("partial success: summary states planned vs succeeded",
+          "2 planned" in r["summary"] and "1 succeeded" in r["summary"], r["summary"])
+
+    # Nothing planned is not a failure; dry run is not a failure.
+    r = run_sweep_execute_step(ex, plan={"disable": [], "destroy": []})
+    check("empty plan: exits 0", r["rc"] == 0, r["out"])
+    r = run_sweep_execute_step(ex, plan=plan, dry_run="true", fail_versions=(1, 2))
+    check("dry run: exits 0 and mutates nothing", r["rc"] == 0 and r["outputs"].get("disabled") == "0", r["out"])
+    # destroy disabled: only the disable is attempted
+    r = run_sweep_execute_step(ex, plan=plan, enable_destroy="false", fail_versions=(2,))
+    check("enable_destroy=false, the one disable fails: step fails", r["rc"] != 0, r["out"])
 
     # ---- cleanup-cloud-run-revisions: prune plan + execute deletions --------
     #
