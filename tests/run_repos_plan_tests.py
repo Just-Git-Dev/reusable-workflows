@@ -722,6 +722,34 @@ def feature_selection_unknown_feature_is_rejected_with_no_stdout():
 
 
 @case
+def r21_a_deployable_belongs_to_exactly_one_repo():
+    # M2: two repos naming the same cloud_run is refused, by every feature (validate_core)
+    a = {"name": "api", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}
+    b = {"name": "web", "deploys": [{"cloud_run": "payments-api", "region": "europe-west1"}]}
+    for feature in ("register", "create", "settings"):
+        err = refused(feature, reg([a, b]), st())
+        assert "payments-api" in err and "api" in err and "web" in err, (feature, err)
+    # controls: distinct deployables, and gke entries (no cloud_run name), are accepted
+    c = {"name": "web", "deploys": [{"cloud_run": "web", "region": "europe-west1"}]}
+    rc, out, err = run("register", reg([a, c]))
+    assert rc == 0, err
+    g1 = {"name": "g1", "deploys": [{"gke": {"cluster": "l/main", "namespace": "ns", "workload": "w"}}]}
+    g2 = {"name": "g2", "deploys": [{"gke": {"cluster": "l/main", "namespace": "ns", "workload": "w"}}]}
+    rc, out, err = run("register", reg([g1, g2]))
+    assert rc == 0, err
+
+
+@case
+def r21_runtime_service_account_is_optional_in_the_schema():
+    d = {"cloud_run": "payments-api", "region": "europe-west1"}
+    rc, out, err = run("register", reg([{"name": "payments-api", "deploys": [d]}]))
+    assert rc == 0, err
+    # still pattern-checked when present (M3), and region stays required
+    refused("register", reg([{"name": "payments-api", "deploys": [dict(d, runtime_service_account="--x-run")]}]))
+    refused("register", reg([{"name": "payments-api", "deploys": [{"cloud_run": "payments-api"}]}]))
+
+
+@case
 def feature_selection_f5_to_f7_keys_are_ignored_by_f1_to_f4():
     r = reg([{"name": "payments-api", "mode": "enforce",
               "gcp": {"service_accounts": ["payments-api-deployer"]},

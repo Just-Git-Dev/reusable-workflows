@@ -61,8 +61,7 @@ repos:
     gcp: {service_accounts: [payments-api-deployer]}    # F5: SAs this repo may act as
     deploys:                                            # F7: what this repo may deploy
       - cloud_run: payments-api
-        region: europe-west1
-        runtime_service_account: payments-api-run
+        region: europe-west1                            # runtime SA is derived: payments-api-run
         image_repository: europe-west1/services         # <location>/<GAR repository>
   - name: ledger-worker
     status: new                   # F2 creates it if missing
@@ -125,8 +124,11 @@ F1 validates against it; every planner validates the parts it reads before plann
   - `gcp` (object): `service_accounts` (array of SA names, pattern below, unique)
   - `deploys` (array). Each item has **exactly one** of:
     - `cloud_run` (string, the service name) — then `region` (string) and
-      `runtime_service_account` (SA name) are required, `image_repository`
-      (`<location>/<repository>`) is optional;
+      are required, `image_repository` (`<location>/<repository>`) is optional.
+      `runtime_service_account` is optional and **derived**: the runtime SA is always
+      `<cloud_run>-run`; a value that is present must equal it, or F7 exits `1`. A `cloud_run` name
+      may appear under only one repo (a deployable belongs to exactly one repo; F1-F7 refuse a
+      register that lists it twice);
     - `gke` (object, all required: `cluster` as `<location>/<name>`, `namespace`, `workload`). The
       schema accepts it so a register can record intent, but F7 does not act on it
       ([§6](#6-features-f1-f7-adopt-any-one-alone)).
@@ -177,12 +179,16 @@ No feature, in any mode, ever:
    owner's, done by a human config change);
 8. removes or changes a binding it did not add — F5 only ever **adds**
    `roles/iam.workloadIdentityUser` principalSets; it never removes one;
-9. **links, creates or edits a protected service account.** `repo-admin` is ALWAYS protected: the
-   name is hard-coded in every GCP planner and nothing in the register or the inputs can lift it.
-   The caller may protect more accounts with the `protected_service_accounts` input (a comma or
-   newline list, merged with `repo-admin`; use it for the CI accounts the access-provisioning
-   config declares). Why: linking `repo-admin` to a repo would hand its power to every branch and
-   pull-request job of that repo, with no environment review in the way;
+9. **writes the policy of, or creates or edits, a service account that is not the project's own.**
+   One writer per service-account policy (owner ruling 21): the NAME says who writes it. A
+   `^[a-z][a-z0-9-]*-deployer$` account is the project's (F5 links it, F6 creates and updates it);
+   every other account (`repo-admin`, the CI accounts, every runtime `<d>-run`) belongs to the
+   access-provisioning side, which is the only writer of its policy. `repo-admin` fails the suffix
+   rule by name, so no list has to be kept in step. The old `protected_service_accounts` input is a
+   **deprecated no-op**: still accepted, ignored. Why: linking `repo-admin` to a repo would hand its
+   power to every branch and pull-request job of that repo, with no environment review in the way.
+   This is a mistake-guard, not a barrier: `repo-admin` can still write project-wide, and the exact
+   audit on the access-provisioning side is what detects a breach;
 10. **changes the visibility of an existing repository, in either direction** (F3 reports a
     difference and never writes it, in `report` and `enforce` mode alike; a human flips it in
     GitHub). Making a public repository private cannot be undone: stars and watchers are lost.
@@ -246,33 +252,41 @@ Inputs: the GCP project id and number, pool id, the `repo-admin` SA email and th
 The SA must already exist — a missing SA is an error (F5 never creates one; that is F6). The
 ORG-level pool and provider are set up once by the access-provisioning owner and are never
 touched here; the provider's condition limits every link to repos of the same org.
-**A protected service account is never linked** ([§5](#5-the-never-list), item 9): a repo whose
-`gcp.service_accounts` names `repo-admin`, or any account in `protected_service_accounts`, makes
-the planner exit `1` with `error: <sa>: protected service account ...` and no plan at all (not a
-partial one), in report and enforce mode alike.
+**A repo links only its own deployers** ([§5](#5-the-never-list), item 9): repo R may link only
+`<d>-deployer` for a `cloud_run: <d>` in R's own `deploys:`. Anything else makes the planner exit `1`
+with no plan at all (not a partial one), in report and enforce mode alike: `github-releaser`
+gives `error: <repo>: github-releaser is not a project SA: ask JGD (wif_repos) ...`, and another
+repo's deployer gives `... is not a deployer of a deployable of <repo> ...`. Linking a repo to a
+shared access-provisioning CI identity is that side's `wif_repos`, not this register's.
 
 **F6 — the project's own service accounts.** Creates each listed SA that does not exist, with its
 required description. Never deletes one, never creates a key, never grants it a project-level
-role, and refuses (error, exit `1`, no plan) a register entry that names a protected service
-account (`repo-admin` always, plus `protected_service_accounts`): the access-provisioning config
-owns those accounts and their descriptions. A listed SA that exists is `in-sync`, or `drift` if its description or display name differ
-(enforce updates them).
+role, and refuses (error, exit `1`, no plan) a register entry whose name is not a `-deployer`
+account (`... is not a project SA`): it creates and updates only the project's own deployers and
+never adopts any other account, even one that already exists. The access-provisioning config owns
+those accounts and their descriptions. A listed SA that exists is `in-sync`, or `drift` if its
+description or display name differ (enforce updates them).
 
 **F7 — deploy scope.** First the same schema check as F1 (a refused register plans nothing, so
 a service name like `--ingress=all` never reaches `gcloud`). Then, per `deploys:` entry, so a repo can deploy only its own service:
-- **Cloud Run:** first, if the repo-admin service account does not already hold
-  `roles/iam.serviceAccountUser` on the `runtime_service_account`'s own policy, add it there
-  (`repo-admin` has no project-wide act-as right, so every "repo-admin may run as X" is a visible
-  line on X). Then, if the service does not exist, create it once with a placeholder image (resource
-  IAM needs the service to exist), running as `runtime_service_account`; then bind the
-  deployer SA (`<deployable>-deployer`, the repo's `gcp.service_accounts` entry) with
-  `roles/run.developer` **on that service**, `roles/iam.serviceAccountUser` **on that runtime
-  SA**, and `roles/artifactregistry.writer` **on `image_repository`** (GAR IAM is per repository,
-  not per image — a dedicated repository per deployable is the stricter option).
-- **Protected accounts.** A `runtime_service_account`, or a derived `<deployable>-deployer`, that
-  is a protected service account (`repo-admin` always, plus `protected_service_accounts`; see
-  [§5](#5-the-never-list), item 9) is an error: exit `1`, `error: <repo>: ...`, no plan. Otherwise
-  a register entry could make the deployer impersonate `repo-admin` by deploying code as it.
+- **Cloud Run:** if the service does not exist, create it once with a placeholder image (resource
+  IAM needs the service to exist), running as the derived runtime SA `<deployable>-run`; then bind
+  the deployer SA (`<deployable>-deployer`, the repo's `gcp.service_accounts` entry) with
+  `roles/run.developer` **on that service** and `roles/artifactregistry.writer` **on
+  `image_repository`** (GAR IAM is per repository, not per image — a dedicated repository per
+  deployable is the stricter option).
+- **F7 writes no service-account policy** (ruling 21). The runtime SA `<deployable>-run` is
+  declared by the access-provisioning side, which is the only writer of its policy; its config
+  carries `deployed_by: <deployable>-deployer` (the deployer's `roles/iam.serviceAccountUser` on it)
+  and, while a service is still to be created, an `act_as` line for `repo-admin`. F7 only **reads**
+  that policy and reports `needs-jgd{resource_type: "iam.serviceAccount", resource, role, member,
+  needs}` for each line that is not live (`needs` is `deployed_by: <deployable>-deployer` or
+  `act_as: repo-admin`), in both modes; a runtime SA that does not exist yet reads as empty. The fix
+  is one access-provisioning config change, never a write from here.
+- **The runtime SA is derived, not chosen.** `runtime_service_account` is optional; if present it
+  must equal `<deployable>-run`, else exit `1`, `error: <repo>: ...`, no plan. So a repo can never
+  point its service at another identity (such as `repo-admin`), and a deployable under two repos is
+  refused in the register itself ([§3](#3-schema-schemasreposv1json-in-words)).
 - **GKE is deferred.** No project uses GKE, and in-cluster Role/RoleBinding creation needs
   Kubernetes rights nothing here holds. A `deploys` entry with `gke` yields
   `unsupported{key: "gke", reason}` in both modes and nothing else; F7 never runs `kubectl`. It is
@@ -315,15 +329,16 @@ nothing to stdout, one `error: <repo|sa|register>: <reason>` line per error to s
 (JSON is valid YAML, so a fixture may be JSON in a `.yaml` file).
 F7 also needs `--repo-admin-sa-email`, the full email of the `repo-admin` service account (the
 workflow's `service_account` input, the identity it authenticates as); without it F7 exits `2`.
-`--protected-service-accounts` (F5-F7) takes a comma or newline separated list of account names; the
-planner merges it with the hard-coded `repo-admin`, so omitting it still protects `repo-admin`.
+`--protected-service-accounts` (F5-F7) is a **deprecated no-op**: still accepted so existing callers
+do not break, and ignored. Which accounts a planner may manage is decided by the `-deployer` name
+suffix (`scripts/repos_protected.py`, `is_project_sa`), not by a list.
 
 | Planner | `--feature` values | Notes on the inputs |
 |---|---|---|
 | `scripts/repos_plan.py` (F1-F4) | `register`, `create`, `settings`, `variables` | `--state` may be omitted for `register` (F1 needs no live state) |
-| `scripts/repos_wif_plan.py` (F5) | `wif-link` | optional `--protected-service-accounts <list>` |
-| `scripts/repos_sa_plan.py` (F6) | `service-accounts` | optional `--protected-service-accounts <list>` |
-| `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | required `--repo-admin-sa-email <email>`; optional `--protected-service-accounts <list>` |
+| `scripts/repos_wif_plan.py` (F5) | `wif-link` | deprecated no-op `--protected-service-accounts` |
+| `scripts/repos_sa_plan.py` (F6) | `service-accounts` | deprecated no-op `--protected-service-accounts` |
+| `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | required `--repo-admin-sa-email <email>`; deprecated no-op `--protected-service-accounts` |
 
 **F1-F4 live state** — one entry per repo the workflow looked up. A repo with `exists: false`, or
 absent from `repos`, does not exist. Live repos the register does not list produce no action.
@@ -379,22 +394,20 @@ characters is an error (`error: <repo>: ...`).
   verb's details.
 - **`in-sync` emission:** exactly one per examined repo (or SA) that has nothing to do, and none
   for a repo (or SA) that has any other action, including `drift`.
-- **Deployer SA** (F7; never a protected one) is `<deployable>-deployer`, where the deployable is the
+- **Deployer SA** (F7) is `<deployable>-deployer`, where the deployable is the
   Cloud Run service name.
 - **Member formats.** F5 `member` is
   `principalSet://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool>/attribute.repository/<org>/<repo>`.
   F7 `member` is `serviceAccount:<sa>@<project_id>.iam.gserviceaccount.com`.
 - **`add-resource-binding.resource`** by `resource_type`: `run.service` is the service name;
-  `iam.serviceAccount` is the runtime SA's **email**; `artifactregistry.repository` is
+  `artifactregistry.repository` is
   `<location>/<repo>` (the register's `image_repository`). A `run.service` binding also carries
   `region` in its `details` (the register's `region`); no other resource type does.
-- **F7 action order per repo:** for each Cloud Run entry, first `roles/iam.serviceAccountUser` for
-  the repo-admin SA (`member` `serviceAccount:<repo-admin email>`) on the runtime SA, emitted only
-  when that binding is missing from the runtime SA's live policy and at most once per runtime SA
-  per repo; then `create-service` (if the service is missing), `roles/run.developer`
-  on the service, `roles/iam.serviceAccountUser` on the runtime SA,
-  `roles/artifactregistry.writer` on the repository; a `gke` entry yields one `unsupported`
-  (`key: "gke"`) and nothing else.
+- **F7 action order per deployable:** `create-service` (if the service is missing),
+  `roles/run.developer` on the service, `roles/artifactregistry.writer` on the repository, then
+  the `needs-jgd` lines (`act_as: repo-admin` only while the service is missing, then
+  `deployed_by: <d>-deployer`); F7 emits no `iam.serviceAccount` binding. A `gke` entry yields
+  one `unsupported` (`key: "gke"`) and nothing else.
 - **F5 `unregistered-binding`.** A binding on a registered SA that the register does not list is
   reported, in both modes, with the non-write verb
   `unregistered-binding{service_account, role, member}`. It is never removed. Precisely:
@@ -447,6 +460,7 @@ partial plan:** one error refuses the whole run.
 | `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode; and (F3 only) every `visibility` difference in ANY mode, because visibility is never written |
 | `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `key: "gke"`, a `deploys` entry the feature does not act on |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
+| `needs-jgd` | `{"resource_type": "iam.serviceAccount", "resource": string, "role": "roles/iam.serviceAccountUser", "member": string, "needs": string}` — F7: a line on the runtime SA `<d>-run`'s policy that the access-provisioning side must declare (`deployed_by: <d>-deployer`, or `act_as: repo-admin` while a service is still to be created); reported in both modes, never written |
 
 **Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each; `update-repo` never carries `visibility`):
 
@@ -459,8 +473,8 @@ partial plan:** one error refuses the whole run.
 | `wif-link` | `add-wif-binding` | `{"service_account": string, "role": "roles/iam.workloadIdentityUser", "member": string}` |
 | `service-accounts` | `create-service-account` | `{"name": string, "display_name": string, "description": string}` |
 | `service-accounts` | `update-service-account` | `{"name": string, "field": "description"\|"display_name", "from": string, "to": string}` |
-| `deploy-scope` | `create-service` | `{"service": string, "region": string, "runtime_service_account": string, "image": "placeholder"}` |
-| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"iam.serviceAccount"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}`; a `run.service` binding adds `"region": string` (from the register) |
+| `deploy-scope` | `create-service` | `{"service": string, "region": string, "runtime_service_account": string (derived `<service>-run`), "image": "placeholder"}` |
+| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}`; a `run.service` binding adds `"region": string` (from the register) |
 
 **Invariants every planner test may assert:**
 - a repo in `report` mode yields only non-write verbs;

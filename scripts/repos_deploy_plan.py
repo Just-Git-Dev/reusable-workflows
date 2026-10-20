@@ -15,7 +15,7 @@ import sys
 import yaml
 
 import repos_plan
-import repos_protected
+import repos_protected  # noqa: F401  (add_argument: the deprecated no-op flag)
 
 FEATURE = "deploy-scope"
 RUN_DEV = "roles/run.developer"
@@ -35,11 +35,10 @@ def held(policy_entries, role, member):
     return False
 
 
-def plan_repo(repo, mode, state, errors, protected, admin_email):
+def plan_repo(repo, mode, state, errors, admin_email):
     name = repo["name"]
     project = state.get("project_id")
-    writes = []  # (verb, details) in apply order
-    admin_done = set()          # runtime SAs whose repo-admin binding is already planned for this repo
+    writes = []  # (verb, details) in apply order; the verbs that are never applied as drift come last
     for d in repo.get("deploys") or []:
         if "gke" in d:
             # ruling 19: GKE is deferred; no kubectl path exists, so the entry is only reported
@@ -58,10 +57,6 @@ def plan_repo(repo, mode, state, errors, protected, admin_email):
             errors.append("error: %s: deployer SA name '%s' is %d chars, max %d"
                           % (name, deployer, len(deployer), MAX_SA_LEN))
             continue
-        if deployer in protected:
-            errors.append("error: %s: deployer SA name '%s' is a protected service account"
-                          % (name, deployer))
-            continue
         member = "serviceAccount:%s@%s.iam.gserviceaccount.com" % (deployer, project)
 
         def bind(rtype, res, role, iam, region=None):
@@ -71,42 +66,46 @@ def plan_repo(repo, mode, state, errors, protected, admin_email):
                     det["region"] = region      # from the register: no live lookup is ever needed
                 writes.append(("add-resource-binding", det))
 
-        if "cloud_run" in d:
-            region, runtime = d.get("region"), d.get("runtime_service_account")
-            if not region or not runtime:
-                errors.append("error: %s: cloud_run '%s' needs region and runtime_service_account"
-                              % (name, deployable))
-                continue
-            if runtime in protected:
-                errors.append("error: %s: runtime_service_account '%s' is a protected service account"
-                              % (name, runtime))
-                continue
-            services = state.get("cloud_run_services") or {}
-            svc = services.get(deployable)
-            sa = (state.get("service_accounts") or {}).get(runtime) or {}
-            runtime_email = "%s@%s.iam.gserviceaccount.com" % (runtime, project)
-            # repo-admin has no project-wide act-as: it grants itself serviceAccountUser on THIS
-            # runtime SA first, so the right is a visible line in that SA's own policy.
-            admin_member = "serviceAccount:%s" % admin_email
-            if runtime not in admin_done and not held(sa.get("iam"), SA_USER, admin_member):
-                writes.append(("add-resource-binding", {
+        region = d.get("region")
+        if not region:
+            errors.append("error: %s: cloud_run '%s' needs region" % (name, deployable))
+            continue
+        # ruling 21: the runtime SA is DERIVED (`<d>-run`), never chosen, so a repo cannot point its
+        # service at another identity. The key is optional; when present it must equal the derived name.
+        runtime = "%s-run" % deployable
+        given = d.get("runtime_service_account")
+        if given is not None and given != runtime:
+            errors.append("error: %s: runtime_service_account '%s' must be '%s' (derived from the "
+                          "deployable; omit the key)" % (name, given, runtime))
+            continue
+        services = state.get("cloud_run_services") or {}
+        svc = services.get(deployable)
+        sa = (state.get("service_accounts") or {}).get(runtime) or {}
+        runtime_email = "%s@%s.iam.gserviceaccount.com" % (runtime, project)
+        if svc is None:
+            writes.append(("create-service", {
+                "service": deployable, "region": region,
+                "runtime_service_account": runtime, "image": "placeholder"}))
+        bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"), region)
+        gar = d.get("image_repository")
+        if gar:
+            bind("artifactregistry.repository", gar, GAR_WRITER,
+                 ((state.get("gar_repositories") or {}).get(gar) or {}).get("iam"))
+        # F7 writes NO service-account policy (ruling 21: one writer, the access-provisioning side).
+        # It only READS the runtime SA's policy and reports each line that is not live yet.
+        lines = []
+        if svc is None:
+            lines.append(("act_as: repo-admin", "serviceAccount:%s" % admin_email))
+        lines.append(("deployed_by: %s" % deployer, member))
+        for need, mem in lines:
+            if not held(sa.get("iam"), SA_USER, mem):
+                writes.append(("needs-jgd", {
                     "resource_type": "iam.serviceAccount", "resource": runtime_email,
-                    "role": SA_USER, "member": admin_member}))
-            admin_done.add(runtime)
-            if svc is None:
-                writes.append(("create-service", {
-                    "service": deployable, "region": region,
-                    "runtime_service_account": runtime, "image": "placeholder"}))
-            bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"), region)
-            bind("iam.serviceAccount", runtime_email, SA_USER, sa.get("iam"))
-            gar = d.get("image_repository")
-            if gar:
-                bind("artifactregistry.repository", gar, GAR_WRITER,
-                     ((state.get("gar_repositories") or {}).get(gar) or {}).get("iam"))
+                    "role": SA_USER, "member": mem, "needs": need}))
 
     out = []
     for verb, details in writes:
-        if verb == "unsupported" or mode == "enforce":
+        if verb in ("unsupported", "needs-jgd") or mode == "enforce":
             out.append(act(name, verb, details))
         else:
             out.append(act(name, "drift", dict(would=verb, **details)))
@@ -142,9 +141,7 @@ def main(argv=None):
     errors, actions = [], []
     for repo in reg.get("repos") or []:
         mode = repo.get("mode") or default_mode
-        actions.extend(plan_repo(repo, mode, state, errors,
-                                 repos_protected.parse(args.protected_service_accounts),
-                                 args.repo_admin_sa_email))
+        actions.extend(plan_repo(repo, mode, state, errors, args.repo_admin_sa_email))
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

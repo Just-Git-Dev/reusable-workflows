@@ -58,6 +58,15 @@ def register(repos, mode="enforce", **extra):
 
 
 def repo(name, sas, **extra):
+    """A repo entry linking `sas`. Unless `deploys` is given, each `<d>-deployer` is backed by a
+    `cloud_run: d` deploy of the repo's own (the F5 own-deployer rule); use raw() to skip that."""
+    r = {"name": name, "gcp": {"service_accounts": sas}}
+    r["deploys"] = [{"cloud_run": s[:-len("-deployer")]} for s in sas if s.endswith("-deployer")]
+    r.update(extra)
+    return r
+
+
+def raw(name, sas, **extra):
     r = {"name": name, "gcp": {"service_accounts": sas}}
     r.update(extra)
     return r
@@ -115,10 +124,10 @@ def check(name, ok, detail=""):
         FAILURES.append("%s: %s" % (name, detail))
 
 
-def plan(name, reg, st):
+def plan(name, reg, st, extra=()):
     """Run expecting success; return the parsed action list or None."""
     with tempfile.TemporaryDirectory() as t:
-        rc, out, err = run(reg, st, t)
+        rc, out, err = run(reg, st, t, extra=extra)
     if rc != 0:
         check(name, False, "exit %d, stderr=%r" % (rc, err[:200]))
         return None
@@ -130,8 +139,8 @@ def plan(name, reg, st):
     return acts
 
 
-def expect(name, reg, st, want):
-    acts = plan(name, reg, st)
+def expect(name, reg, st, want, extra=()):
+    acts = plan(name, reg, st, extra)
     if acts is not None:
         check(name, acts == want, "got %s" % json.dumps(acts))
     return acts
@@ -169,8 +178,8 @@ def main():
     linked = [{"role": ROLE, "members": [member("payments-api")]}]
     expect("linked -> in-sync", register([repo("payments-api", [D])]),
            state({D: sa(linked)}), [insync("payments-api")])
-    expect("two linked SAs -> one in-sync", register([repo("payments-api", [D, "ledger-run-sa"])]),
-           state({D: sa(linked), "ledger-run-sa": sa(linked)}), [insync("payments-api")])
+    expect("two linked SAs -> one in-sync", register([repo("payments-api", [D, "ledger-run-deployer"])]),
+           state({D: sa(linked), "ledger-run-deployer": sa(linked)}), [insync("payments-api")])
 
     # 4. linked among several members of the role
     many = [{"role": ROLE, "members": [member("other-repo"), member("payments-api")]}]
@@ -181,8 +190,8 @@ def main():
            state({D: sa(only)}), [insync("payments-api")])
 
     # 5. partial: one SA linked, one not -> only the missing pair, no in-sync
-    expect("partial link", register([repo("payments-api", [D, "ledger-run-sa"])]),
-           state({D: sa(linked), "ledger-run-sa": sa()}), [add("payments-api", "ledger-run-sa")])
+    expect("partial link", register([repo("payments-api", [D, "ledger-run-deployer"])]),
+           state({D: sa(linked), "ledger-run-deployer": sa()}), [add("payments-api", "ledger-run-deployer")])
 
     # 6. near-misses are NOT linked: other role, other repo, other org, other pool
     for label, b in [
@@ -199,16 +208,16 @@ def main():
                 unreg("payments-api", D, b[0]["role"], b[0]["members"][0])])
 
     # 7. same SA for two repos; register order across repos and SAs
-    reg = register([repo("repo-b", ["sa-two-x", D]), repo("repo-a", [D])])
-    expect("order = register order", reg, state({D: sa(), "sa-two-x": sa()}),
-           [add("repo-b", "sa-two-x"), add("repo-b", D), add("repo-a", D)])
+    reg = register([repo("repo-b", ["two-x-deployer", D]), repo("repo-a", [D])])
+    expect("order = register order", reg, state({D: sa(), "two-x-deployer": sa()}),
+           [add("repo-b", "two-x-deployer"), add("repo-b", D), add("repo-a", D)])
 
     # 8. missing SA -> error, whole run refused (no partial plan), exists=false and absent
     expect_error("SA exists=false", register([repo("payments-api", [D])]),
                  state({D: sa(exists=False)}), D)
     expect_error("SA absent from state", register([repo("payments-api", [D])]), state({}), D)
-    expect_error("no partial plan", register([repo("repo-a", [D]), repo("repo-b", ["ghost-sa"])]),
-                 state({D: sa()}), "ghost-sa")
+    expect_error("no partial plan", register([repo("repo-a", [D]), repo("repo-b", ["ghost-deployer"])]),
+                 state({D: sa()}), "ghost-deployer")
 
     # 9. report mode -> drift only; per-repo mode override; default mode is report
     expect("report -> drift", register([repo("payments-api", [D])], mode="report"),
@@ -267,7 +276,7 @@ def main():
            register([repo("payments-api", [D]), repo("ledger-worker", [D])], mode="report"),
            state({D: sa(stale)}), UB + [drift("ledger-worker", D)])
     expect("unregistered binding on an SA no repo lists is not examined",
-           register([repo("payments-api", [D])]), state({D: sa(linked), "other-sa-xx": sa(stale)}),
+           register([repo("payments-api", [D])]), state({D: sa(linked), "other-xx-deployer": sa(stale)}),
            [insync("payments-api")])
 
     # 11. unknown keys ignored at every level, and repos without our key are not our business
@@ -277,7 +286,7 @@ def main():
     expect("unknown keys ignored", reg, state({D: sa()}), [add("payments-api", D)])
 
     # 12. determinism
-    reg, st = register([repo("repo-a", [D, "sa-two-x"])]), state({D: sa(), "sa-two-x": sa()})
+    reg, st = register([repo("repo-a", [D, "two-x-deployer"])]), state({D: sa(), "two-x-deployer": sa()})
     a1, a2 = plan("determinism 1", reg, st), plan("determinism 2", reg, st)
     check("determinism", a1 is not None and a1 == a2)
 
@@ -286,27 +295,46 @@ def main():
     bad["version"] = 2
     expect_error("version != 1", bad, state({D: sa()}), "register")
 
-    # 14. B1: a protected SA is never linked. repo-admin is hard-coded (no input needed), the
-    # input adds more; the error is total (no partial plan) in report and enforce mode alike.
+    # 14. ruling 21 (one writer per SA policy): repo R may link only `<d>-deployer` for d in R's own
+    # `deploys:`. Anything else is refused whole (no partial plan), in report and enforce alike.
     for mode in ("enforce", "report"):
-        ok_repo, bad_repo = repo("payments-api", [D]), repo("project", ["repo-admin"])
-        st = state({D: sa(), "repo-admin": sa()})
-        expect_error("B1 repo-admin refused (" + mode + ")",
-                     register([ok_repo, bad_repo], mode=mode), st, "repo-admin")
-        expect_error("B1 repo-admin refused when it does not exist live (" + mode + ")",
-                     register([bad_repo], mode=mode), state({}), "protected")
-        expect_error("B1 input list adds a protected SA (" + mode + ")",
-                     register([repo("payments-api", ["github-releaser"])], mode=mode),
-                     state({"github-releaser": sa()}), "github-releaser",
-                     extra=["--protected-service-accounts", "ci-deployer-x,github-releaser"])
-    expect_error("B1 newline list", register([repo("a-repo", ["ci-deployer-x"])]),
-                 state({"ci-deployer-x": sa()}), "ci-deployer-x",
-                 extra=["--protected-service-accounts", "foo-bar-baz\nci-deployer-x\n"])
-    # a lookalike is not protected; an empty list still leaves repo-admin protected
-    expect("B1 unprotected SA still linked with a list given",
-           register([repo("payments-api", [D])]), state({D: sa()}), [add("payments-api", D)])
-    expect_error("B1 empty list keeps repo-admin protected", register([repo("p", ["repo-admin"])]),
-                 state({"repo-admin": sa()}), "repo-admin", extra=["--protected-service-accounts", ""])
+        st = state({D: sa(), "repo-admin": sa(), "github-releaser": sa(), "ledger-worker-deployer": sa()})
+        expect_error("not a project SA: repo-admin (" + mode + ")",
+                     register([repo("payments-api", [D]), raw("project", ["repo-admin"])], mode=mode), st,
+                     "repo-admin is not a project SA")
+        expect_error("not a project SA: github-releaser (" + mode + ")",
+                     register([raw("payments-api", ["github-releaser"])], mode=mode), st,
+                     "github-releaser is not a project SA: ask JGD (wif_repos)")
+        expect_error("not a project SA even when it does not exist live (" + mode + ")",
+                     register([raw("p", ["repo-admin"])], mode=mode), state({}), "not a project SA")
+        expect_error("another repo's deployer (" + mode + ")",
+                     register([repo("payments-api", [D]), raw("api", ["ledger-worker-deployer"],
+                               deploys=[{"cloud_run": "api"}])], mode=mode), st,
+                     "ledger-worker-deployer is not a deployer of a deployable of api")
+        expect_error("deployer with no deploys at all (" + mode + ")",
+                     register([raw("payments-api", [D])], mode=mode), st,
+                     "payments-api-deployer is not a deployer of a deployable of payments-api")
+    # a gke-only deploys list gives no cloud_run deployable to link
+    expect_error("gke deploy is not a deployable", register([raw(
+        "payments-api", [D], deploys=[{"gke": {"cluster": "l/main", "namespace": "ns",
+                                                "workload": "payments-api"}}])]),
+        state({D: sa()}), "not a deployer of a deployable of payments-api")
+    # the deprecated input is accepted and ignored: it neither protects nor un-protects anything
+    expect("deprecated input is a no-op", register([repo("payments-api", [D])]), state({D: sa()}),
+           [add("payments-api", D)], extra=["--protected-service-accounts", "payments-api-deployer,x"])
+    expect_error("deprecated input cannot lift the rule", register([raw("p", ["github-releaser"])]),
+                 state({"github-releaser": sa()}), "not a project SA",
+                 extra=["--protected-service-accounts", ""])
+
+    # 15. is_project_sa: the suffix rule shared by F5-F7
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import repos_protected
+    for name, want in [("payments-api-deployer", True), ("a-deployer", True), ("repo-admin", False),
+                       ("github-releaser", False), ("deployer", False), ("-deployer", False),
+                       ("payments-api-deployer-x", False), ("Payments-deployer", False),
+                       ("1pay-deployer", False), ("payments-api-run", False), ("", False), (None, False)]:
+        check("is_project_sa(%r)" % (name,), repos_protected.is_project_sa(name) is want)
+
 
     print("repos_wif_plan: %d checks, %d failed" % (COUNT[0], len(FAILURES)))
     for f in FAILURES:

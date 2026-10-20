@@ -5,3 +5,4 @@ defaults:
 repos:
   - name: payments-api
     gcp: {service_accounts: [payments-api-deployer]}
+    deploys: [{cloud_run: payments-api, region: europe-west1}]

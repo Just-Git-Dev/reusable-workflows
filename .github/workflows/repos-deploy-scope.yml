@@ -2,8 +2,9 @@
 #
 # Per `deploys:` entry of the register (`repos.yaml`): create the Cloud Run service once with a
 # placeholder image if it is missing, then bind the repo's `<deployable>-deployer` SA on THAT
-# service only (resource-level IAM). Before creating a service, repo-admin adds
-# roles/iam.serviceAccountUser for itself on the runtime SA's own policy (no project-wide act-as).
+# service only (resource-level IAM). It writes NO service-account policy (one writer per SA policy,
+# ruling 21): the runtime SA is derived as `<deployable>-run`, owned by the access-provisioning side,
+# and F7 only reads its policy and reports `needs-jgd` when the deployer / repo-admin line is missing.
 # GKE is deferred: a `gke` entry is only reported as unsupported (no kubectl path exists).
 # A thin shell over scripts/repos_deploy_plan.py: fetch live state -> plan -> report or apply.
 #
@@ -37,7 +38,7 @@ on:
         required: true
         type: string
       protected_service_accounts:
-        description: 'Comma or newline list of service account names a runtime SA or deployer must never be, merged with the always-protected repo-admin (use it for the CI accounts the access-provisioning config declares).'
+        description: 'DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.'
         required: false
         type: string
         default: ''
@@ -83,7 +84,6 @@ jobs:
       REGISTER: ${{ inputs.register_path }}
       PLACEHOLDER_IMAGE: ${{ inputs.placeholder_image }}
       REPO_ADMIN_SA_EMAIL: ${{ inputs.service_account }}
-      PROTECTED_SERVICE_ACCOUNTS: ${{ inputs.protected_service_accounts }}
     steps:
       - name: Refuse unless repo-admin on the main branch
         env:
@@ -161,10 +161,10 @@ jobs:
                             missing_ok=True) is not None:
                       pol = gcloud("run", "services", "get-iam-policy", svc, "--region", region)
                       state["cloud_run_services"][svc] = {"iam": iam(pol)}
-                  rt = d["runtime_service_account"]
+                  rt = d["cloud_run"] + "-run"   # derived (ruling 21), never chosen
                   email = "%s@%s.iam.gserviceaccount.com" % (rt, project)
-                  state["service_accounts"][rt] = {"iam": iam(
-                      gcloud("iam", "service-accounts", "get-iam-policy", email))}
+                  pol = gcloud("iam", "service-accounts", "get-iam-policy", email, missing_ok=True)
+                  state["service_accounts"][rt] = {"iam": iam(pol)} if pol is not None else {}
                   gar = d.get("image_repository")
                   if gar:
                       loc, name = gar.split("/", 1)
@@ -181,7 +181,7 @@ jobs:
           python3 .repos-src/scripts/repos_deploy_plan.py --feature deploy-scope \
             --register "$REGISTER" --state state.json \
             --repo-admin-sa-email "$REPO_ADMIN_SA_EMAIL" \
-            --protected-service-accounts "$PROTECTED_SERVICE_ACCOUNTS" > plan.json
+            --repo-admin-sa-email "$REPO_ADMIN_SA_EMAIL" > plan.json
           echo "actions: $(jq length plan.json)"
 
       - name: Report
@@ -197,6 +197,7 @@ jobs:
             jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tostring)` |"' plan.json
           } >> "$GITHUB_STEP_SUMMARY"
           jq -r '.[] | select(.action=="unsupported") | "::warning::\(.repo): \(.details.key): \(.details.reason)"' plan.json
+          jq -r '.[] | select(.action=="needs-jgd") | "::warning::\(.repo): needs an access-provisioning change on \(.details.resource): \(.details.needs)"' plan.json
           [ "$examined" != "0" ] || echo "::warning::the register lists no repos; nothing was examined"
 
       - name: Apply (write actions, in order)
@@ -206,13 +207,12 @@ jobs:
           # Re-check the WHOLE plan before the first write: an unknown verb (there is no kubectl or
           # k8s verb any more), a role/resource pair outside the allow-list, a member that is not a
           # service account, or a name of the wrong shape fails with nothing applied.
-          bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","create-service","add-resource-binding"] | index($a) | not)] | length' plan.json)
+          bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","needs-jgd","create-service","add-resource-binding"] | index($a) | not)] | length' plan.json)
           [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
           badbind=$(jq '[.[] | select(.action=="add-resource-binding") | select(
               ((.details.resource_type=="run.service" and .details.role=="roles/run.developer"
                   and (.details.resource | test("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"))
                   and ((.details.region // "") | test("^[a-z]+-[a-z]+[0-9]$")))
-               or (.details.resource_type=="iam.serviceAccount" and .details.role=="roles/iam.serviceAccountUser")
                or (.details.resource_type=="artifactregistry.repository" and .details.role=="roles/artifactregistry.writer"))
               and (.details.member | startswith("serviceAccount:")) | not)] | length' plan.json)
           [ "$badbind" = "0" ] || { echo "::error::refusing $badbind binding(s) outside the role/resource allow-list; nothing applied"; exit 1; }
@@ -243,9 +243,6 @@ jobs:
                   run.service)
                     region=$(jq -r .region <<<"$d")
                     gcloud run services add-iam-policy-binding "$res" --region="$region" \
-                      --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet ;;
-                  iam.serviceAccount)
-                    gcloud iam service-accounts add-iam-policy-binding "$res" \
                       --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet ;;
                   artifactregistry.repository)
                     gcloud artifacts repositories add-iam-policy-binding "${res#*/}" --location="${res%%/*}" \

@@ -2,8 +2,9 @@
 
 ## Index
 
-103 entries total — 93 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+104 entries total — 94 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [One writer per service-account policy: suffix rule, derived runtime SA, F7 writes no SA policy (ruling 21)](#2026-10-20--one-writer-per-service-account-policy-suffix-rule-derived-runtime-sa-f7-writes-no-sa-policy-ruling-21)
 - `2026-10-20` — [Repos-as-code review fixes: protected SAs, repo-admin self-grant, GKE deferred, visibility never written](#2026-10-20--repos-as-code-review-fixes-protected-sas-repo-admin-self-grant-gke-deferred-visibility-never-written)
 - `2026-10-20` — [Repos as code: a per-project register and independent, report-first features](#2026-10-20--repos-as-code-a-per-project-register-and-independent-report-first-features)
 - `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
@@ -107,6 +108,23 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — One writer per service-account policy: suffix rule, derived runtime SA, F7 writes no SA policy (ruling 21)
+
+**Context.** Owner ruling 21 (Option A, "one writer per service-account policy"): the access-provisioning side (JGD) writes every service account it declares; the project's automation writes only `<deployable>-deployer` accounts. The name says who owns an account, so neither side reads the other.
+
+**Decision.**
+- `scripts/repos_protected.py` becomes an `is_project_sa()` suffix rule (`^[a-z][a-z0-9-]*-deployer$`). `repo-admin` fails it by name, which subsumes the earlier hard-code. The `protected_service_accounts` input / `--protected-service-accounts` flag is a deprecated no-op.
+- F5: repo R may link only `<d>-deployer` for a `cloud_run: <d>` in R's own `deploys:`; anything else is refused whole ("... is not a project SA: ask JGD (wif_repos)").
+- F6: creates and updates only `-deployer` accounts, never adopts another name.
+- F7: the runtime SA is derived as `<d>-run` (`runtime_service_account` optional, must equal it when present). F7 writes no SA policy: the `repo-admin` serviceAccountUser self-grant and the deployer actAs write are gone; it reads `<d>-run`'s policy and reports `needs-jgd` (`deployed_by: <d>-deployer`, and `act_as: repo-admin` while the service is to be created). The apply allow-list drops `iam.serviceAccount`.
+- `validate_core`: a `cloud_run` name may appear under only one repo. Schema: `runtime_service_account` no longer required.
+
+**Supersedes.** The 2026-10-20 entries that added the `protected_service_accounts` input (list merged with `repo-admin`) and the F7 `repo-admin` self-grant on the runtime SA. The "co-own without fighting" premise behind both is replaced by one writer per SA policy.
+
+**Why.** The self-grant and the project-side links on JGD accounts were two writers on one policy: the audit could not tell a legitimate project line from drift, and F7 would prune-and-re-add against it. A caller-supplied protected list was author-controlled and had to be kept in step by hand; a fixed suffix rule has nothing to keep in step. It stays a mistake-guard, not a barrier (`repo-admin` still holds project-wide `setIamPolicy`); detection is the exact audit on the JGD side.
+
+**Contract.** Kept as accepted-but-ignored inputs, not removed: `protected_service_accounts` on `repos-wif-link`, `repos-service-accounts` and `repos-deploy-scope`, because a removed `workflow_call` input fails every caller that still passes it. Behaviour change for callers: a register that links a non-deployer SA, lists a deployable under two repos, or sets a non-derived `runtime_service_account` is now refused. New F7 action `needs-jgd` (non-write).
 
 ## 2026-10-20 — Repos-as-code review fixes: protected SAs, repo-admin self-grant, GKE deferred, visibility never written
 

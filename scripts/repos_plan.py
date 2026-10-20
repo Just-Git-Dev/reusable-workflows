@@ -80,6 +80,22 @@ def validate_core(reg):
         if r["name"] in seen:
             errs.append(err(r["name"], "duplicate repo name"))
         seen.add(r["name"])
+    # ruling 21: a deployable belongs to exactly one repo (its `<d>-deployer` / `<d>-run` are derived
+    # from the name, so two repos naming `d` would share one identity). Malformed deploys are the
+    # schema's business; only well-formed cloud_run names are compared here.
+    owners = {}
+    for r in repos:
+        if not isinstance(r, dict) or not isinstance(r.get("name"), str) \
+                or not isinstance(r.get("deploys"), list):
+            continue
+        for dep in r["deploys"]:
+            svc = dep.get("cloud_run") if isinstance(dep, dict) else None
+            if isinstance(svc, str) and svc and r["name"] not in owners.setdefault(svc, []):
+                owners[svc].append(r["name"])
+    for svc, names in sorted(owners.items()):
+        if len(names) > 1:
+            errs.append(err(names[1], f"cloud_run {svc} is also deployed by {names[0]}: a deployable "
+                                      "belongs to exactly one repo"))
     d = reg.get("defaults")
     if d is not None and not isinstance(d, dict):
         errs.append(err("register", "defaults must be a mapping"))

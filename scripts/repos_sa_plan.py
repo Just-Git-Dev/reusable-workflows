@@ -28,7 +28,7 @@ def act(action, details):
     return {"feature": FEATURE, "repo": None, "action": action, "details": details}
 
 
-def validate(reg, errors, protected=frozenset(repos_protected.ALWAYS)):
+def validate(reg, errors):
     if not isinstance(reg, dict):
         errors.append(("register", "register is not a mapping"))
         return []
@@ -54,9 +54,10 @@ def validate(reg, errors, protected=frozenset(repos_protected.ALWAYS)):
         if not isinstance(name, str) or not SA_RE.match(name):
             errors.append((who, "name must be 6-30 chars, ^[a-z][a-z0-9-]*$, no trailing hyphen"))
             ok = False
-        if name in protected:
-            errors.append((who, "protected service account: F6 never manages it (docs/repos-register.md "
-                                "section 5, item 9)"))
+        if ok and not repos_protected.is_project_sa(name):
+            errors.append((who, "%s is not a project SA: ask JGD. F6 creates and updates only "
+                                "`<deployable>-deployer` accounts, never adopts another "
+                                "(docs/repos-register.md section 5, item 9)" % name))
             ok = False
         desc = e.get("description")
         if not isinstance(desc, str) or not desc.strip():
@@ -95,7 +96,7 @@ def main(argv=None):
         state = json.load(f)
 
     errors = []
-    entries = validate(reg, errors, repos_protected.parse(args.protected_service_accounts))
+    entries = validate(reg, errors)
     if errors:
         for who, why in dict.fromkeys(errors):
             print("error: %s: %s" % (who, why), file=sys.stderr)

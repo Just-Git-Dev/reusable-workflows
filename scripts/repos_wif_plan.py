@@ -29,7 +29,7 @@ def act(repo, action, details):
     return {"feature": FEATURE, "repo": repo, "action": action, "details": details}
 
 
-def validate(reg, errors, protected=frozenset(repos_protected.ALWAYS)):
+def validate(reg, errors):
     """Validate only the keys F5 reads. Returns the usable repo list."""
     if not isinstance(reg, dict):
         errors.append(("register", "register is not a mapping"))
@@ -61,10 +61,16 @@ def validate(reg, errors, protected=frozenset(repos_protected.ALWAYS)):
         if not isinstance(sas, list) or not all(isinstance(s, str) and SA_RE.match(s) for s in sas):
             errors.append((name, "gcp.service_accounts must be a list of valid service account names"))
             continue
+        deployables = {d.get("cloud_run") for d in (r.get("deploys") or []) if isinstance(d, dict)}
         for s in dict.fromkeys(sas):
-            if s in protected:
-                errors.append((s, "protected service account: F5 never links it (docs/repos-register.md "
-                                  "section 5, item 9)"))
+            if not repos_protected.is_project_sa(s):
+                errors.append((name, "%s is not a project SA: ask JGD (wif_repos). F5 links only "
+                                     "`<deployable>-deployer` accounts (docs/repos-register.md section 5, "
+                                     "item 9)" % s))
+            elif s[:-len("-deployer")] not in deployables:
+                errors.append((name, "%s is not a deployer of a deployable of %s: F5 links only "
+                                     "`<d>-deployer` for a `cloud_run: <d>` in this repo's own deploys"
+                                     % (s, name)))
         out.append((name, mode, list(dict.fromkeys(sas))))
     return out
 
@@ -86,7 +92,7 @@ def main(argv=None):
         state = json.load(f)
 
     errors = []
-    repos = validate(reg, errors, repos_protected.parse(args.protected_service_accounts))
+    repos = validate(reg, errors)
     number, pool = state.get("project_number"), state.get("pool")
     if not number or not pool:
         errors.append(("register", "state needs project_number and pool"))

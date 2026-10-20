@@ -105,9 +105,9 @@ def check(name, ok, detail=""):
         FAILURES.append("%s: %s" % (name, detail))
 
 
-def plan(name, reg, st):
+def plan(name, reg, st, extra=()):
     with tempfile.TemporaryDirectory() as t:
-        rc, out, err = run(reg, st, t)
+        rc, out, err = run(reg, st, t, extra=extra)
     if rc != 0:
         check(name, False, "exit %d, stderr=%r" % (rc, err[:200]))
         return None
@@ -122,8 +122,8 @@ def key(a):
     return json.dumps(a, sort_keys=True)
 
 
-def expect(name, reg, st, want, ordered=True):
-    acts = plan(name, reg, st)
+def expect(name, reg, st, want, ordered=True, extra=()):
+    acts = plan(name, reg, st, extra)
     if acts is not None:
         ok = acts == want if ordered else sorted(map(key, acts)) == sorted(map(key, want))
         check(name, ok, "got %s" % json.dumps(acts))
@@ -154,9 +154,9 @@ def main():
     # 2. create only the missing ones, in register order
     expect("create missing", register([entry(N)]), state(), [create(N)])
     expect("create only the missing",
-           register([entry("sa-one-aa"), entry("sa-two-bb"), entry("sa-three-cc")]),
-           state(live("sa-two-bb")),
-           [create("sa-one-aa"), insync(), create("sa-three-cc")])
+           register([entry("one-aa-deployer"), entry("two-bb-deployer"), entry("three-cc-deployer")]),
+           state(live("two-bb-deployer")),
+           [create("one-aa-deployer"), insync(), create("three-cc-deployer")])
 
     # 2b. display_name defaults to the SA name on create only (docs 7.2); compared only when stated
     expect("create: display_name defaults to name", register([entry(N, display_name=None)]),
@@ -186,9 +186,9 @@ def main():
            [drift("update-service-account", name=N, field="description", **{"from": "old", "to": DESC})])
     expect("report: in sync", register([entry(N)], mode="report"), state(live(N)), [insync()])
     expect("entry mode overrides default", register(
-        [entry("sa-one-aa", mode="enforce"), entry("sa-two-bb")], mode="report"), state(),
-        [create("sa-one-aa"),
-         drift("create-service-account", name="sa-two-bb", display_name="Payments deployer",
+        [entry("one-aa-deployer", mode="enforce"), entry("two-bb-deployer")], mode="report"), state(),
+        [create("one-aa-deployer"),
+         drift("create-service-account", name="two-bb-deployer", display_name="Payments deployer",
                description=DESC)])
     reg = register([entry(N)])
     del reg["defaults"]
@@ -204,8 +204,8 @@ def main():
     ]:
         expect_error("bad name: " + label, register([entry(name)]), state(), name or "service_accounts")
     # boundaries are accepted
-    expect("6 chars ok", register([entry("abcdef")]), state(), [create("abcdef", )])
-    expect("30 chars ok", register([entry("a" * 30)]), state(), [create("a" * 30)])
+    expect("10 chars ok", register([entry("a-deployer")]), state(), [create("a-deployer")])
+    expect("30 chars ok", register([entry("a" * 21 + "-deployer")]), state(), [create("a" * 21 + "-deployer")])
 
     # 7. description required (missing, empty) and bounded
     e = entry(N)
@@ -216,31 +216,31 @@ def main():
     expect_error("display_name > 100", register([entry(N, display_name="x" * 101)]), state(), N)
 
     # 8. no partial plan: one bad entry refuses the whole run
-    expect_error("no partial plan", register([entry("sa-one-aa"), entry("BAD")]), state(), "BAD")
+    expect_error("no partial plan", register([entry("one-aa-deployer"), entry("BAD")]), state(), "BAD")
 
     # 9. an SA that exists live but is not in the register -> no action at all
     expect("unlisted live SA untouched", register([entry(N)]),
-           state(live(N), live("legacy-sa-zz", description="who knows")), [insync()])
-    expect("empty register list", register([]), state(live("legacy-sa-zz")), [])
+           state(live(N), live("legacy-zz-deployer", description="who knows")), [insync()])
+    expect("empty register list", register([]), state(live("legacy-zz-deployer")), [])
     reg = register([])
     del reg["service_accounts"]
-    expect("no service_accounts key", reg, state(live("legacy-sa-zz")), [])
-    expect("removed from register -> no action", register([entry("sa-one-aa")]),
-           state(live("sa-one-aa"), live(N)), [insync()])
+    expect("no service_accounts key", reg, state(live("legacy-zz-deployer")), [])
+    expect("removed from register -> no action", register([entry("one-aa-deployer")]),
+           state(live("one-aa-deployer"), live(N)), [insync()])
 
     # 10. NEVER list: no delete / key / role verbs, repo is always null, exact keys
     for mode in ("enforce", "report"):
         acts = plan("never-list " + mode,
-                    register([entry("sa-one-aa"), entry("sa-two-bb"), entry("sa-three-cc")],
+                    register([entry("one-aa-deployer"), entry("two-bb-deployer"), entry("three-cc-deployer")],
                              mode=mode),
-                    state(live("sa-two-bb", description="old"), live("legacy-sa-zz")))
+                    state(live("two-bb-deployer", description="old"), live("legacy-zz-deployer")))
         if acts is None:
             continue
         check("never verbs " + mode, all(a["action"] in ALLOWED_VERBS for a in acts), json.dumps(acts))
         blob = json.dumps(acts).lower()
         check("never delete/key/role " + mode,
               not any(w in blob for w in ("delete", "key", "role", "iam", "binding", "member")), blob)
-        check("never legacy touched " + mode, "legacy-sa-zz" not in blob, blob)
+        check("never legacy touched " + mode, "legacy-zz-deployer" not in blob, blob)
         check("repo null + feature " + mode,
               all(a["repo"] is None and a["feature"] == "service-accounts" for a in acts), blob)
         check("exact keys " + mode,
@@ -255,27 +255,34 @@ def main():
     expect("unknown keys ignored", reg, state(live(N)), [insync()])
 
     # 12. determinism, bad version
-    reg = register([entry("sa-one-aa"), entry("sa-two-bb")])
+    reg = register([entry("one-aa-deployer"), entry("two-bb-deployer")])
     a1, a2 = plan("determinism 1", reg, state()), plan("determinism 2", reg, state())
     check("determinism", a1 is not None and a1 == a2)
     bad = register([entry(N)])
     bad["version"] = 2
     expect_error("version != 1", bad, state(), "register")
 
-    # 13. B1: F6 never manages a protected SA (repo-admin always; the input adds more)
+    # 13. ruling 21: F6 creates/updates only `<d>-deployer` SAs and never adopts any other name
+    # (so repo-admin, github-releaser and every JGD-declared SA are refused by name, in both modes).
     for mode in ("enforce", "report"):
-        expect_error("B1 repo-admin refused create (" + mode + ")",
-                     register([entry("sa-one-aa"), entry("repo-admin")], mode=mode), state(),
-                     "repo-admin")
-        expect_error("B1 repo-admin refused update (" + mode + ")",
+        expect_error("not a project SA: repo-admin create (" + mode + ")",
+                     register([entry("one-aa-deployer"), entry("repo-admin")], mode=mode), state(),
+                     "repo-admin is not a project SA")
+        expect_error("not a project SA: repo-admin update (" + mode + ")",
                      register([entry("repo-admin", description="changed")], mode=mode),
-                     state(live("repo-admin")), "repo-admin")
-    expect_error("B1 input list adds a protected SA", register([entry("github-releaser")]), state(),
-                 "github-releaser", extra=["--protected-service-accounts", "github-releaser,other-sa-xx"])
-    expect_error("B1 newline list", register([entry("github-releaser")]), state(), "github-releaser",
-                 extra=["--protected-service-accounts", "other-sa-xx\ngithub-releaser"])
-    expect("B1 unprotected SA unaffected by a list", register([entry("sa-one-aa")]),
-           state(live("sa-one-aa")), [insync()])
+                     state(live("repo-admin")), "repo-admin is not a project SA")
+        expect_error("never adopt an existing non-deployer SA (" + mode + ")",
+                     register([entry("github-releaser")], mode=mode), state(live("github-releaser")),
+                     "github-releaser is not a project SA")
+        expect_error("a runtime SA is JGD's (" + mode + ")",
+                     register([entry("payments-api-run")], mode=mode), state(),
+                     "payments-api-run is not a project SA")
+    # the deprecated input is accepted and ignored
+    expect("deprecated input is a no-op", register([entry("one-aa-deployer")]),
+           state(live("one-aa-deployer")), [insync()],
+           extra=["--protected-service-accounts", "one-aa-deployer,x"])
+    expect_error("deprecated input cannot lift the rule", register([entry("github-releaser")]), state(),
+                 "github-releaser is not a project SA", extra=["--protected-service-accounts", ""])
 
     print("repos_sa_plan: %d checks, %d failed" % (COUNT[0], len(FAILURES)))
     for f in FAILURES:

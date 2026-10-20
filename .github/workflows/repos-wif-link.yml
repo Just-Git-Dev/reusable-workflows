@@ -37,7 +37,7 @@ on:
         required: true
         type: string
       protected_service_accounts:
-        description: 'Comma or newline list of service account names this workflow must never link, merged with the always-protected repo-admin (use it for the CI accounts the access-provisioning config declares).'
+        description: 'DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.'
         required: false
         type: string
         default: ''
@@ -86,7 +86,6 @@ jobs:
       POOL: ${{ inputs.pool }}
       PROJECT_NUMBER: ${{ inputs.project_number }}
       REGISTER: ${{ inputs.register_path }}
-      PROTECTED_SERVICE_ACCOUNTS: ${{ inputs.protected_service_accounts }}
     steps:
       - name: Refuse unless repo-admin on the main branch
         env:
@@ -171,8 +170,7 @@ jobs:
       - name: Plan
         run: |
           python3 .repos-src/scripts/repos_wif_plan.py --feature wif-link \
-            --register "$REGISTER" --state state.json \
-            --protected-service-accounts "$PROTECTED_SERVICE_ACCOUNTS" > plan.json
+            --register "$REGISTER" --state state.json > plan.json
           echo "actions: $(jq length plan.json)"
 
       - name: Report

@@ -17,23 +17,22 @@ parts the doc leaves to "the fixtures", so it is the implementer's contract:
                  "gar_repositories":   {"<location>/<repo>": {"iam": [POLICY]}},
                }
                POLICY = {"role": "roles/..", "members": ["serviceAccount:..", ..]}
-
   Flags        --repo-admin-sa-email <email> is REQUIRED (the repo-admin SA; missing -> rc 2, no
-               stdout). --protected-service-accounts <comma|newline list> is optional and merged
-               with the hard-coded `repo-admin`. A protected runtime SA, or a derived deployer
-               name that is protected, is `error: <repo>: ...` (rc 1, empty stdout).
-  Repo-admin   before create-service (and before any binding) of a Cloud Run entry: one
-               add-resource-binding{iam.serviceAccount, <runtime SA email>, serviceAccountUser,
-               serviceAccount:<repo-admin email>}, only when missing from the runtime SA's live
-               policy, at most once per runtime SA per repo.
+               stdout). --protected-service-accounts is a DEPRECATED NO-OP (accepted, ignored).
+  Ruling 21    F7 writes NO service-account policy. The runtime SA is DERIVED: `<d>-run`
+               (`runtime_service_account` optional; if present it must equal `<d>-run`, else
+               `error: <repo>: ...` rc 1). F7 only READS `<d>-run`'s policy and reports
+               needs-jgd{resource_type, resource (runtime SA email), role serviceAccountUser,
+               member, needs: "deployed_by: <d>-deployer" | "act_as: repo-admin"} in BOTH modes
+               when the line is not live (act_as only while the service is still to be created).
   Names        deployer SA = "<deployable>-deployer" (deployable = Cloud Run service name, or
                GKE workload). member = "serviceAccount:<sa>@<project_id>.iam.gserviceaccount.com".
                add-resource-binding.resource: run.service -> service name;
-               iam.serviceAccount -> the runtime SA's EMAIL; artifactregistry.repository ->
+               artifactregistry.repository ->
                "<location>/<repo>" (the register's image_repository). GKE has no cluster-level IAM,
                so there is no container.cluster resource_type.
-  Order        per repo: create-service, run.developer on the service, serviceAccountUser on the
-               runtime SA, artifactregistry.writer. A run.service binding's details also carry
+  Order        per deployable: create-service, run.developer on the service,
+               artifactregistry.writer, then needs-jgd lines. A run.service binding's details also carry
                "region" (the register's region; no live lookup is ever needed).
   GKE          ruling 19: a `gke` entry yields exactly one unsupported{"key": "gke", "reason"} in
                BOTH modes and nothing else (no apply-k8s-rbac verb exists, no cluster state is
@@ -59,7 +58,7 @@ PLANNER = Path(os.environ.get("REPOS_DEPLOY_PLANNER", ROOT / "scripts" / "repos_
 FIX = Path(__file__).resolve().parent / "fixtures-repos-deploy"
 
 WRITE_VERBS = {"create-service", "add-resource-binding"}
-NON_WRITE = {"in-sync", "skip", "drift", "unsupported"}
+NON_WRITE = {"in-sync", "skip", "drift", "unsupported", "needs-jgd"}
 RUN_DEV = "roles/run.developer"
 SA_USER = "roles/iam.serviceAccountUser"
 GAR_W = "roles/artifactregistry.writer"
@@ -131,14 +130,23 @@ def binding(rtype, res, role, mem, region="europe-west1"):
 
 
 def run_bindings(svc, runtime, sa, gar="europe-west1/services"):
+    # ruling 21: F7 writes NO service-account policy, so no iam.serviceAccount binding appears here
     m = member(sa)
     return [binding("run.service", svc, RUN_DEV, m),
-            binding("iam.serviceAccount", email(runtime), SA_USER, m),
             binding("artifactregistry.repository", gar, GAR_W, m)]
 
 
-def admin_bind(runtime):
-    return binding("iam.serviceAccount", email(runtime), SA_USER, "serviceAccount:" + ADMIN_EMAIL)
+def needs_jgd(runtime, line, mem):
+    return ("needs-jgd", {"resource_type": "iam.serviceAccount", "resource": email(runtime),
+                          "role": SA_USER, "member": mem, "needs": line})
+
+
+def needs_deployed_by(runtime, sa):
+    return needs_jgd(runtime, "deployed_by: " + sa, member(sa))
+
+
+def needs_act_as(runtime):
+    return needs_jgd(runtime, "act_as: repo-admin", "serviceAccount:" + ADMIN_EMAIL)
 
 
 def create(svc, runtime, region="europe-west1"):
@@ -173,8 +181,9 @@ def case(fn):
 @case
 def missing_service_is_created_then_bound():
     acts = of(plan(load_register(), load_state()), "payments-api")
-    exp = [admin_bind("payments-api-run"), create("payments-api", "payments-api-run")] + run_bindings(
-        "payments-api", "payments-api-run", "payments-api-deployer")
+    exp = [create("payments-api", "payments-api-run")] + run_bindings(
+        "payments-api", "payments-api-run", "payments-api-deployer") + [
+        needs_act_as("payments-api-run"), needs_deployed_by("payments-api-run", "payments-api-deployer")]
     assert shape(acts) == exp, "got %s" % json.dumps(shape(acts))
 
 
@@ -182,15 +191,16 @@ def missing_service_is_created_then_bound():
 def create_comes_before_every_binding():
     acts = of(plan(load_register(), load_state()), "payments-api")
     names = [a["action"] for a in acts]
-    assert names[:2] == ["add-resource-binding", "create-service"] and names.count("create-service") == 1, names
-    assert names.index("create-service") < names.index("add-resource-binding", 1), names
+    assert names[0] == "create-service" and names.count("create-service") == 1, names
+    assert names.index("create-service") < names.index("add-resource-binding"), names
 
 
 @case
 def existing_service_is_not_recreated():
     acts = of(plan(load_register(), load_state()), "ledger-worker")
-    assert shape(acts) == [admin_bind("ledger-worker-run")] + run_bindings(
-        "ledger-worker", "ledger-worker-run", "ledger-worker-deployer"), json.dumps(shape(acts))
+    assert shape(acts) == run_bindings(
+        "ledger-worker", "ledger-worker-run", "ledger-worker-deployer") + [
+        needs_deployed_by("ledger-worker-run", "ledger-worker-deployer")], json.dumps(shape(acts))
 
 
 @case
@@ -199,8 +209,8 @@ def partially_bound_adds_only_the_missing_bindings():
     st["cloud_run_services"]["ledger-worker"]["iam"] = [
         {"role": RUN_DEV, "members": [member("ledger-worker-deployer")]}]
     acts = of(plan(load_register(), st), "ledger-worker")
-    exp = [admin_bind("ledger-worker-run")] + run_bindings(
-        "ledger-worker", "ledger-worker-run", "ledger-worker-deployer")[1:]
+    exp = run_bindings("ledger-worker", "ledger-worker-run", "ledger-worker-deployer")[1:] + [
+        needs_deployed_by("ledger-worker-run", "ledger-worker-deployer")]
     assert shape(acts) == exp, json.dumps(shape(acts))
 
 
@@ -211,8 +221,7 @@ def run_developer_only_on_the_service_never_project_level():
         if a["action"] != "add-resource-binding":
             continue
         d = a["details"]
-        assert d["resource_type"] in {"run.service", "iam.serviceAccount",
-                                      "artifactregistry.repository"}, d
+        assert d["resource_type"] in {"run.service", "artifactregistry.repository"}, d
         if d["role"] == RUN_DEV:
             assert d["resource_type"] == "run.service", d
     devs = [a for a in acts if a["action"] == "add-resource-binding" and a["details"]["role"] == RUN_DEV]
@@ -220,13 +229,63 @@ def run_developer_only_on_the_service_never_project_level():
 
 
 @case
-def service_account_user_only_on_the_runtime_sa():
-    acts = of(plan(load_register(), load_state()), "payments-api")
-    users = [a["details"] for a in acts
-             if a["action"] == "add-resource-binding" and a["details"]["role"] == SA_USER]
-    assert users == [admin_bind("payments-api-run")[1],
-                     {"resource_type": "iam.serviceAccount", "resource": email("payments-api-run"),
-                      "role": SA_USER, "member": member("payments-api-deployer")}], users
+def r21_f7_writes_no_service_account_policy_in_any_state():
+    # ruling 21: the runtime SA's policy has exactly one writer (JGD). F7 may only READ it.
+    for st in (load_state(), fully_bound_state()):
+        for mode in ("enforce", "report"):
+            reg = load_register()
+            reg["defaults"]["mode"] = mode
+            for a in plan(reg, st):
+                d = a["details"]
+                assert d.get("resource_type") != "iam.serviceAccount" or a["action"] == "needs-jgd", a
+                assert d.get("would") != "add-resource-binding" or d["resource_type"] != "iam.serviceAccount", a
+
+
+@case
+def r21_runtime_sa_deployed_by_line_missing_is_needs_jgd_in_both_modes():
+    for mode in ("enforce", "report"):
+        reg = load_register()
+        reg["defaults"]["mode"] = mode
+        got = shape(of(plan(reg, load_state()), "ledger-worker"))
+        assert needs_deployed_by("ledger-worker-run", "ledger-worker-deployer") in got, got
+        assert "add-resource-binding" not in [g[0] for g in got if g[1].get("resource_type") == "iam.serviceAccount"], got
+
+
+@case
+def r21_deployed_by_line_live_means_no_needs_jgd():
+    st = load_state()
+    st["service_accounts"]["ledger-worker-run"]["iam"] = [
+        {"role": SA_USER, "members": [member("ledger-worker-deployer")]}]
+    got = shape(of(plan(load_register(), st), "ledger-worker"))
+    assert got == run_bindings("ledger-worker", "ledger-worker-run", "ledger-worker-deployer"), got
+    # another role or another member does not count as live
+    st["service_accounts"]["ledger-worker-run"]["iam"] = [
+        {"role": "roles/iam.serviceAccountTokenCreator", "members": [member("ledger-worker-deployer")]},
+        {"role": SA_USER, "members": [member("someone-else-aa")]}]
+    got = shape(of(plan(load_register(), st), "ledger-worker"))
+    assert needs_deployed_by("ledger-worker-run", "ledger-worker-deployer") in got, got
+
+
+@case
+def r21_runtime_sa_absent_from_state_is_needs_jgd_not_an_error():
+    st = load_state()
+    st["service_accounts"].pop("ledger-worker-run")
+    got = shape(of(plan(load_register(), st), "ledger-worker"))
+    assert needs_deployed_by("ledger-worker-run", "ledger-worker-deployer") in got, got
+
+
+@case
+def r21_act_as_for_repo_admin_is_reported_only_when_creating_a_service():
+    # existing service (ledger-worker): repo-admin act_as is not needed, so never reported
+    got = shape(of(plan(load_register(), load_state()), "ledger-worker"))
+    assert needs_act_as("ledger-worker-run") not in got, got
+    # new service (payments-api): reported until the line is live; then gone
+    st = load_state()
+    st["service_accounts"]["payments-api-run"]["iam"] = [
+        {"role": SA_USER, "members": ["serviceAccount:" + ADMIN_EMAIL]}]
+    got = shape(of(plan(load_register(), st), "payments-api"))
+    assert needs_act_as("payments-api-run") not in got and needs_deployed_by(
+        "payments-api-run", "payments-api-deployer") in got, got
 
 
 @case
@@ -241,19 +300,18 @@ def artifact_registry_writer_on_the_image_repository():
 @case
 def cross_service_isolation_each_deployer_only_its_own_service():
     st = load_state()
-    # the other repo's deployer already sits on payments-api's runtime SA: still no action for it
+    # the other repo's deployer already sits on payments-api's runtime SA: it is not payments-api's line
     st["service_accounts"]["payments-api-run"]["iam"] = [
         {"role": SA_USER, "members": [member("ledger-worker-deployer")]}]
     acts = plan(load_register(), st)
-    mine = [a for a in of(acts, "payments-api") if a["action"] == "add-resource-binding"
-            and a["details"]["member"] != "serviceAccount:" + ADMIN_EMAIL]
+    mine = [a for a in of(acts, "payments-api") if a["action"] == "add-resource-binding"]
     assert mine and all(a["details"]["member"] == member("payments-api-deployer") for a in mine), mine
     assert not any(a["details"]["resource"] == "ledger-worker" for a in mine), mine
-    theirs = [a for a in of(acts, "ledger-worker") if a["action"] == "add-resource-binding"
-              and a["details"]["member"] != "serviceAccount:" + ADMIN_EMAIL]
+    assert needs_deployed_by("payments-api-run", "payments-api-deployer") in shape(of(acts, "payments-api"))
+    theirs = [a for a in of(acts, "ledger-worker") if a["action"] == "add-resource-binding"]
     assert theirs and all(a["details"]["member"] == member("ledger-worker-deployer") for a in theirs), theirs
     assert not any(a["details"]["resource"] == "payments-api" for a in theirs), theirs
-    assert not any(email("payments-api-run") == a["details"]["resource"] for a in theirs), theirs
+    assert not any(email("payments-api-run") == a["details"]["resource"] for a in of(acts, "ledger-worker")), acts
 
 
 @case
@@ -330,11 +388,12 @@ def report_mode_emits_only_drift_legacy_and_in_sync():
     reg["defaults"]["mode"] = "report"
     acts = plan(reg, load_state())
     assert acts, "no actions"
-    assert {a["action"] for a in acts} <= {"drift", "in-sync", "unsupported"}, {a["action"] for a in acts}
+    assert {a["action"] for a in acts} <= {"drift", "in-sync", "unsupported", "needs-jgd"}, {a["action"] for a in acts}
     pay = of(acts, "payments-api")
     exp = [("drift", dict(would=v, **d)) for v, d in
-           [admin_bind("payments-api-run"), create("payments-api", "payments-api-run")] + run_bindings(
-               "payments-api", "payments-api-run", "payments-api-deployer")]
+           [create("payments-api", "payments-api-run")] + run_bindings(
+               "payments-api", "payments-api-run", "payments-api-deployer")] + [
+        needs_act_as("payments-api-run"), needs_deployed_by("payments-api-run", "payments-api-deployer")]
     assert shape(pay) == exp, json.dumps(shape(pay))
 
 
@@ -343,7 +402,7 @@ def report_mode_default_when_no_mode_set():
     reg = load_register()
     reg["defaults"].pop("mode")
     acts = plan(reg, load_state())
-    assert acts and {a["action"] for a in acts} <= {"drift", "in-sync", "unsupported"}
+    assert acts and {a["action"] for a in acts} <= {"drift", "in-sync", "unsupported", "needs-jgd"}
 
 
 @case
@@ -359,7 +418,7 @@ def per_repo_mode_overrides_default():
     reg = load_register()
     repo(reg, "ledger-worker")["mode"] = "report"
     acts = plan(reg, load_state())
-    assert {a["action"] for a in of(acts, "ledger-worker")} == {"drift"}
+    assert {a["action"] for a in of(acts, "ledger-worker")} == {"drift", "needs-jgd"}
     assert "create-service" in {a["action"] for a in of(acts, "payments-api")}
 
 
@@ -379,9 +438,10 @@ def deployer_name_of_exactly_30_chars_is_accepted():
     reg, st = load_register(), load_state()
     svc = "a" * 21                                       # 21 + 9 = 30
     repo(reg, "payments-api")["deploys"][0]["cloud_run"] = svc
+    repo(reg, "payments-api")["deploys"][0]["runtime_service_account"] = svc + "-run"
     repo(reg, "payments-api")["gcp"]["service_accounts"] = [svc + "-deployer"]
     acts = of(plan(reg, st), "payments-api")
-    assert acts[1]["action"] == "create-service" and acts[1]["details"]["service"] == svc, acts[:2]
+    assert acts[0]["action"] == "create-service" and acts[0]["details"]["service"] == svc, acts[:2]
     assert member(svc + "-deployer") in json.dumps(acts)
 
 
@@ -443,74 +503,64 @@ def every_repo_examined_yields_an_entry():
 
 
 @case
-def repo_admin_binding_comes_first_and_is_skipped_when_held():
-    # missing: first action; held in the live policy: absent (the rest of the plan is unchanged)
-    got = shape(of(plan(load_register(), load_state()), "ledger-worker"))
-    assert got[0] == admin_bind("ledger-worker-run"), got[0]
-    st = load_state()
-    st["service_accounts"]["ledger-worker-run"]["iam"] = [
-        {"role": SA_USER, "members": ["serviceAccount:" + ADMIN_EMAIL]}]
-    got = shape(of(plan(load_register(), st), "ledger-worker"))
-    assert admin_bind("ledger-worker-run") not in got and got[0][1]["role"] == RUN_DEV, got
-    # another role, or another member, does not count as held
-    st["service_accounts"]["ledger-worker-run"]["iam"] = [
-        {"role": "roles/iam.serviceAccountTokenCreator", "members": ["serviceAccount:" + ADMIN_EMAIL]},
-        {"role": SA_USER, "members": [member("someone-else-aa")]}]
-    got = shape(of(plan(load_register(), st), "ledger-worker"))
-    assert got[0] == admin_bind("ledger-worker-run"), got[0]
+def r21_runtime_sa_is_derived_when_the_key_is_absent():
+    # runtime_service_account is optional: absent means `<d>-run`, and the plan is identical
+    base = plan(load_register(), load_state())
+    reg = load_register()
+    for r in reg["repos"]:
+        for d in r["deploys"]:
+            d.pop("runtime_service_account", None)
+    assert plan(reg, load_state()) == base
 
 
 @case
-def repo_admin_binding_once_per_runtime_sa_per_repo():
+def r21_runtime_sa_present_must_equal_the_derived_name():
+    # M2: `api` can never point its service at another runtime identity, protected or not
+    for rt in ("ledger-worker-run", "repo-admin", "github-releaser", "payments-api-deployer", "payments-api-runner"):
+        for mode in ("enforce", "report"):
+            reg = load_register()
+            reg["defaults"]["mode"] = mode
+            repo(reg, "payments-api")["deploys"][0]["runtime_service_account"] = rt
+            rc, out, err = run(reg, load_state())
+            assert rc == 1 and out.strip() == "", (rt, mode, rc, out[:100])
+            assert err.startswith("error: payments-api:") and "payments-api-run" in err and rt in err, err[:300]
+            assert "ledger-worker:" not in err, "no partial plan: %s" % err[:200]
+
+
+@case
+def r21_second_deployable_in_one_repo_gets_its_own_derived_runtime_sa():
     reg, st = load_register(), load_state()
     d = repo(reg, "payments-api")["deploys"]
-    d.append(dict(d[0], cloud_run="payments-api-batch"))     # same runtime SA, second service
-    acts = of(plan(reg, st), "payments-api")
-    n = [a for a in acts if a["details"] == admin_bind("payments-api-run")[1]]
-    assert len(n) == 1, json.dumps(shape(acts))
+    d.append({"cloud_run": "payments-batch", "region": "europe-west1"})
+    repo(reg, "payments-api")["gcp"]["service_accounts"].append("payments-batch-deployer")
+    st["service_accounts"]["payments-batch-run"] = {"iam": []}
+    got = shape(of(plan(reg, st), "payments-api"))
+    assert needs_deployed_by("payments-batch-run", "payments-batch-deployer") in got, got
+    assert needs_deployed_by("payments-api-run", "payments-api-deployer") in got, got
 
 
 @case
-def repo_admin_binding_in_report_mode_is_drift():
+def r21_f7_refuses_a_deployable_under_two_repos():
     reg = load_register()
-    reg["defaults"]["mode"] = "report"
-    got = shape(of(plan(reg, load_state()), "ledger-worker"))
-    assert got[0] == ("drift", dict(would="add-resource-binding", **admin_bind("ledger-worker-run")[1])), got[0]
+    repo(reg, "ledger-worker")["deploys"][0]["cloud_run"] = "payments-api"
+    repo(reg, "ledger-worker")["deploys"][0]["runtime_service_account"] = "payments-api-run"
+    rc, out, err = run(reg, load_state())
+    assert rc == 1 and out.strip() == "", (rc, out[:100])
+    assert "payments-api" in err and "ledger-worker" in err, err[:300]
+
+
+@case
+def r21_deprecated_protected_input_is_accepted_and_ignored():
+    base = run(load_register(), load_state())
+    assert base[0] == 0, base
+    for val in ("", "payments-api-deployer", "x-yy-zz\nrepo-admin"):
+        assert run(load_register(), load_state(), extra=("--protected-service-accounts", val)) == base, val
 
 
 @case
 def repo_admin_sa_email_flag_is_required():
     rc, out, err = run(load_register(), load_state(), admin="")
     assert rc != 0 and out.strip() == "", (rc, out[:100])
-
-
-@case
-def m2_protected_runtime_sa_is_an_error():
-    for rt, extra in (("repo-admin", ()), ("github-releaser", ("--protected-service-accounts", "x-yy-zz,github-releaser")),
-                      ("github-releaser", ("--protected-service-accounts", "x-yy-zz\ngithub-releaser"))):
-        reg = load_register()
-        repo(reg, "payments-api")["deploys"][0]["runtime_service_account"] = rt
-        rc, out, err = run(reg, load_state(), extra=extra)
-        assert rc == 1 and out.strip() == "", (rt, rc, out[:100])
-        assert err.startswith("error: payments-api:") and rt in err, err[:200]
-        assert "ledger-worker" not in err, "no partial plan: %s" % err[:200]
-
-
-@case
-def m2_protected_deployer_name_is_an_error():
-    reg = load_register()
-    rc, out, err = run(reg, load_state(), extra=("--protected-service-accounts", "payments-api-deployer"))
-    assert rc == 1 and out.strip() == "", (rc, out[:100])
-    assert err.startswith("error: payments-api:") and "payments-api-deployer" in err, err[:200]
-
-
-@case
-def m2_report_mode_also_refuses_protected():
-    reg = load_register()
-    reg["defaults"]["mode"] = "report"
-    repo(reg, "payments-api")["deploys"][0]["runtime_service_account"] = "repo-admin"
-    rc, out, err = run(reg, load_state())
-    assert rc == 1 and out.strip() == "", (rc, out[:100])
 
 
 def main():

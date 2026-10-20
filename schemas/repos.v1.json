@@ -63,7 +63,7 @@
       "additionalProperties": true,
       "oneOf": [
         {
-          "required": ["cloud_run", "region", "runtime_service_account"],
+          "required": ["cloud_run", "region"],
           "not": {"required": ["gke"]},
           "properties": {
             "cloud_run": {"$ref": "#/$defs/serviceName"},

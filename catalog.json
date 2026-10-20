@@ -3207,7 +3207,7 @@
         },
         "protected_service_accounts": {
           "default": "",
-          "description": "Comma or newline list of service account names a runtime SA or deployer must never be, merged with the always-protected repo-admin (use it for the CI accounts the access-provisioning config declares).",
+          "description": "DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.",
           "required": false,
           "type": "string"
         },
@@ -3284,7 +3284,7 @@
         },
         "protected_service_accounts": {
           "default": "",
-          "description": "Comma or newline list of service account names this workflow must never create or edit, merged with the always-protected repo-admin (use it for the CI accounts the access-provisioning config declares).",
+          "description": "DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.",
           "required": false,
           "type": "string"
         },
@@ -3430,7 +3430,7 @@
         },
         "protected_service_accounts": {
           "default": "",
-          "description": "Comma or newline list of service account names this workflow must never link, merged with the always-protected repo-admin (use it for the CI accounts the access-provisioning config declares).",
+          "description": "DEPRECATED, accepted and ignored (kept so existing callers do not break): which service accounts may be managed is now decided by the `-deployer` name suffix, not by a list.",
           "required": false,
           "type": "string"
         },

@@ -10,18 +10,21 @@ defined in [repos-register.md](repos-register.md) (sections 6, 7 and 8).
 
 | Entry | Action |
 |---|---|
-| `cloud_run`, repo-admin lacks it on the runtime SA | `roles/iam.serviceAccountUser` for the repo-admin SA (the `service_account` input) ON the runtime SA, first (`gcloud iam service-accounts add-iam-policy-binding`): repo-admin has no project-wide act-as, so each "repo-admin may run as X" is a visible line on X |
 | `cloud_run`, service missing | `gcloud run deploy <service> --image=<placeholder_image> --service-account=<runtime SA> --region <region> --no-allow-unauthenticated`, once |
 | `cloud_run` | `roles/run.developer` ON that service for `<service>-deployer` (`gcloud run services add-iam-policy-binding`) |
-| `cloud_run` | `roles/iam.serviceAccountUser` ON that service's runtime SA only (`gcloud iam service-accounts add-iam-policy-binding`) |
 | `cloud_run` with `image_repository` | `roles/artifactregistry.writer` ON that repository (`gcloud artifacts repositories add-iam-policy-binding`) |
 
-A `runtime_service_account` or `<service>-deployer` that is a protected service account (`repo-admin`
-always, plus `protected_service_accounts`) is an error and refuses the whole run: otherwise the
-deployer could deploy code as `repo-admin`.
+**No service-account policy is written here** (one writer per service-account policy). The runtime
+SA is derived as `<service>-run` (`runtime_service_account` is optional; when present it must equal
+it, else the run is refused) and belongs to the access-provisioning side. The workflow only reads
+its policy and reports a `needs-jgd` warning for each line that side must still declare:
+`deployed_by: <service>-deployer` (the deployer's `roles/iam.serviceAccountUser` on it) and, while
+the service is still to be created, `act_as: repo-admin`. The apply step's allow-list has no
+`iam.serviceAccount` write, so a plan that carried one is refused before anything runs.
 
-Order per repo: the repo-admin binding on the runtime SA, then the service, then the other bindings. The workflow never grants a project-level
-role, never deletes anything and never creates a service-account key.
+Order per deployable: the service, then the other bindings, then the `needs-jgd` reports. The
+workflow never grants a project-level role, never deletes anything and never creates a
+service-account key.
 
 ## Modes
 
@@ -37,7 +40,7 @@ the first failure stops the job.
 | `workload_identity_provider` | yes | | WIF provider used to authenticate |
 | `service_account` | yes | | the repo-admin SA email |
 | `project_id` | yes | | GCP project of the services, runtime SAs and GAR repositories |
-| `protected_service_accounts` | no | empty | comma or newline list of SA names a runtime SA or deployer must never be; merged with the always-protected `repo-admin` |
+| `protected_service_accounts` | no | empty | DEPRECATED no-op: accepted so existing callers do not break, ignored (the `-deployer` name suffix decides which accounts are managed) |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
 | `placeholder_image` | no | `us-docker.pkg.dev/cloudrun/container/hello` | image of the first, placeholder revision |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
