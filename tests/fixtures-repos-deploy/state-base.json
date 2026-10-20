@@ -1,0 +1,21 @@
+{
+  "project_id": "example-proj",
+  "cloud_run_services": {
+    "ledger-worker": {"iam": []}
+  },
+  "service_accounts": {
+    "payments-api-run": {"iam": []},
+    "ledger-worker-run": {"iam": []}
+  },
+  "gar_repositories": {
+    "europe-west1/services": {"iam": []}
+  },
+  "gke_clusters": {
+    "europe-west1/main": {"iam": [], "rbac": []}
+  },
+  "project_roles": {
+    "payments-api-deployer": [],
+    "ledger-worker-deployer": [],
+    "batch-runner-deployer": []
+  }
+}
