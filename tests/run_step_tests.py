@@ -2227,7 +2227,7 @@ SYNC_VALIDATE = "Validate payload"
 SYNC_UPSERT = "Upsert payload keys into bundle"
 
 
-def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8):
+def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8, strict=False):
     """Execute a sync-bundle-key run: body with /tmp redirected into a sandbox.
 
     Returns rc, combined output and the resulting bundle bytes. No gcloud stub is
@@ -2239,6 +2239,7 @@ def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8):
         env = dict(os.environ)
         env["PAYLOAD_JSON"] = payload if isinstance(payload, str) else json.dumps(payload)
         env["MIN_VALUE_LEN"] = str(min_len)
+        env["STRICT_VALUES"] = "true" if strict else "false"
         proc = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
              body.replace("/tmp/", f"{tmp}/")],
@@ -2247,82 +2248,14 @@ def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8):
                 "bundle": (tmp / "bundle.env").read_bytes().decode()}
 
 
-def run_destroy_step(body: str, *, disabled=(), dry_run=False, destroy_fails=()):
-    """Run the destroy body against a gcloud stub whose DISABLED list is `disabled`
-    (newest first). Returns rc, output and the versions `destroy` was called on."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        stub = tmp / "bin"
-        stub.mkdir()
-        calls = tmp / "calls"
-        calls.write_text("")
-        rows = "".join(f'  echo "{v}"\n' for v in disabled)
-        fails = " ".join(destroy_fails)
-        gcloud = stub / "gcloud"
-        gcloud.write_text(
-            '#!/usr/bin/env bash\n'
-            f'echo "$*" >> {calls}\n'
-            'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
-            '  case "$*" in *state=DISABLED*) ;; *) echo "unfiltered list" >&2; exit 9;; esac\n'
-            f'{rows}  exit 0\nfi\n'
-            'if [ "$2" = "versions" ] && [ "$3" = "destroy" ]; then\n'
-            f'  for f in {fails}; do [ "$4" = "$f" ] && exit 1; done\n'
-            '  exit 0\nfi\nexit 0\n')
-        gcloud.chmod(0o755)
-        env = dict(os.environ)
-        env["PATH"] = f"{stub}:{env['PATH']}"
-        env.update(BUNDLE_SECRET="app-secrets", GCP_PROJECT="p",
-                   DRY_RUN="true" if dry_run else "false")
-        proc = subprocess.run(
-            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
-             body.replace("/tmp/", f"{tmp}/")],
-            capture_output=True, text=True, env=env, cwd=tmp)
-        destroyed = [ln.split()[3] for ln in calls.read_text().splitlines()
-                     if ln.startswith("secrets versions destroy")]
-        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
-                "destroyed": destroyed}
-
-
-def sync_destroy_cases():
-    print("\nsync-bundle-key · Destroy old disabled bundle version(s)")
-    step = "Destroy old disabled bundle version(s)"
-    body = extract_step(SYNC, "sync", step)
-    doc = yaml.safe_load(SYNC.read_text())
-    steps = doc["jobs"]["sync"]["steps"]
-    names = [s.get("name") for s in steps]
-    spec = steps[names.index(step)]
-    inp = (doc.get("on") or doc[True])["workflow_call"]["inputs"]["destroy_old_disabled_versions"]
-    check("destroy input is an optional boolean defaulting to false",
-          inp["type"] == "boolean" and inp["required"] is False and inp["default"] is False, inp)
-    check("destroy step is gated on the input",
-          spec.get("if") == "inputs.destroy_old_disabled_versions == true", spec.get("if"))
-    check("destroy runs after the roll and the disable (a failed roll skips it)",
-          names.index(step) > names.index("Disable superseded bundle version(s)")
-          > names.index("Force new Cloud Run revision(s)"), names)
-
-    r = run_destroy_step(body, disabled=())
-    check("only v1 (nothing disabled): nothing destroyed", r["rc"] == 0 and r["destroyed"] == [], r)
-    r = run_destroy_step(body, disabled=("2",))
-    check("v1 enabled + v2 disabled: the newest disabled is kept",
-          r["rc"] == 0 and r["destroyed"] == [], r)
-    r = run_destroy_step(body, disabled=("6", "5", "4", "3", "2", "1"))
-    check("many disabled: all but the newest disabled are destroyed",
-          r["rc"] == 0 and r["destroyed"] == ["5", "4", "3", "2", "1"], r)
-    check("counts examined and destroyed are printed",
-          "examined: 6" in r["out"] and "Destroyed 5 of 5" in r["out"], r["out"])
-    r = run_destroy_step(body, disabled=("6", "5", "4"), dry_run=True)
-    check("dry run destroys nothing and prints the plan",
-          r["rc"] == 0 and r["destroyed"] == [] and "would destroy version 5" in r["out"], r)
-    r = run_destroy_step(body, disabled=("6", "5", "4", "3"), destroy_fails=("4",))
-    check("a failed destroy fails the step loudly, naming the version",
-          r["rc"] != 0 and "::error::" in r["out"] and "version 4" in r["out"], r)
-
-
 def sync_value_safety_cases():
     print("\nsync-bundle-key · value safety (Validate payload + Upsert)")
     validate = extract_step(SYNC, "sync", SYNC_VALIDATE)
     upsert = extract_step(SYNC, "sync", SYNC_UPSERT)
     url = "redis://default:p%40ss@host:6379/0?ssl=true&x=1"
+
+    def strict(body, payload, **kw):
+        return run_sync_body(body, payload, strict=True, **kw)
 
     # A normal connection string passes validation and round-trips byte-identical,
     # both appended and replacing an existing line.
@@ -2364,9 +2297,9 @@ def sync_value_safety_cases():
 
     # 3b. Keys are validated as env names.
     for bad in ("A.B", "1ABC", "A B", "A=B", "", "A-B", "A\nB", "A::B"):
-        r = run_sync_body(validate, {bad: "value-one-1"})
+        r = strict(validate, {bad: "value-one-1"})
         check(f"key {bad!r} is refused", r["rc"] != 0 and "::error::" in r["out"], r["out"])
-    r = run_sync_body(validate, {"_OK_1": "value-one-1", "lower_ok": "value-two-2"})
+    r = strict(validate, {"_OK_1": "value-one-1", "lower_ok": "value-two-2"})
     check("valid env-name keys pass", r["rc"] == 0, r["out"])
 
     # 4. Whitespace-only, empty and placeholder values (even at min_value_length 0).
@@ -2374,18 +2307,53 @@ def sync_value_safety_cases():
                 "PLACEHOLDER", "TODO", "tbd", "xxxxxxxx", "XXX", "dummy", "Example",
                 "<your-password>", "<REDIS_URL>", "${REDIS_PASSWORD}", "  changeme  "):
         for ml in (8, 0):
-            r = run_sync_body(validate, {"SECRET_K": bad}, min_len=ml)
+            r = strict(validate, {"SECRET_K": bad}, min_len=ml)
             check(f"value {bad!r} refused (min_value_length {ml})",
                   r["rc"] != 0 and "SECRET_K" in r["out"], r["out"])
-    r = run_sync_body(validate, {"SECRET_K": ""}, min_len=0)
+    r = strict(validate, {"SECRET_K": ""}, min_len=0)
     check("an empty value is refused even with min_value_length 0", r["rc"] != 0, r["out"])
-    r = run_sync_body(validate, {"SECRET_K": "xxxReal"}, min_len=0)
+    r = strict(validate, {"SECRET_K": "xxxReal"}, min_len=0)
     check("a real value that merely starts with xxx passes", r["rc"] == 0, r["out"])
-    r = run_sync_body(validate, {"SECRET_K": "my-example-password-1"}, min_len=0)
+    r = strict(validate, {"SECRET_K": "my-example-password-1"}, min_len=0)
     check("a real value that merely contains 'example' passes", r["rc"] == 0, r["out"])
-    r = run_sync_body(validate, {"SECRET_K": "changeme"})
+    r = strict(validate, {"SECRET_K": "changeme"})
     check("placeholder refusal never echoes the value",
           "changeme" not in r["out"].replace("::add-mask::changeme", ""), r["out"])
+    r = strict(validate, {"SECRET_K": "-"}, min_len=0)
+    check("strict: the lone '-' (May 2026 incident value) is refused at min 0",
+          r["rc"] != 0, r["out"])
+
+    # 5. strict_values false (default) keeps v3.7.0 behaviour for everything that
+    # never corrupted a file: these were accepted before and still are.
+    for label, payload, ml in (
+            ("hyphenated key my-key", {"my-key": "value-one-1"}, 8),
+            ("dotted key", {"A.B": "value-one-1"}, 8),
+            ("empty value at min 0", {"SECRET_K": ""}, 0),
+            ("html one-liner", {"SECRET_K": "<p>hi</p>"}, 8),
+            ("template one-liner", {"SECRET_K": "${A}:${B}"}, 8),
+            ("placeholder changeme", {"SECRET_K": "changeme"}, 8),
+            ("whitespace-only", {"SECRET_K": "          "}, 8),
+            ("lone dash at min 0", {"SECRET_K": "-"}, 0)):
+        r = run_sync_body(validate, payload, min_len=ml)
+        check(f"strict_values=false still accepts {label}", r["rc"] == 0, r["out"])
+    r = run_sync_body(validate, {"SECRET_K": "ab"}, min_len=8)
+    check("strict_values=false still enforces min_value_length", r["rc"] != 0, r["out"])
+    r = run_sync_body(validate, {"A\nB": "value-one-1"})
+    check("a newline in a KEY is refused even without strict_values", r["rc"] != 0, r["out"])
+    r = run_sync_body(validate, {"SECRET_K": "a\nb-value"}, min_len=0)
+    check("a newline value is refused even without strict_values", r["rc"] != 0, r["out"])
+    doc = yaml.safe_load(SYNC.read_text())
+    inp = (doc.get("on") or doc[True])["workflow_call"]["inputs"]["strict_values"]
+    check("strict_values is an optional boolean defaulting to false",
+          inp["type"] == "boolean" and inp["required"] is False and inp["default"] is False, inp)
+
+    # 6. Appending onto a bundle whose last line has no trailing newline.
+    r = run_sync_body(upsert, {"NEW": "value-new-1"}, bundle="OLD=x")
+    check("append adds the missing newline first (OLD kept, NEW present)",
+          r["bundle"] == "OLD=x\nNEW=value-new-1\n", r["bundle"])
+    r = run_sync_body(upsert, {"NEW": "value-new-1"}, bundle="OLD=x\n")
+    check("append onto a newline-terminated bundle adds no blank line",
+          r["bundle"] == "OLD=x\nNEW=value-new-1\n", r["bundle"])
 
 
 def main():
@@ -4169,7 +4137,6 @@ def main():
           r["rc"] != 0 and "CANNOT VERIFY" in r["out"], r["out"])
 
     sync_value_safety_cases()
-    sync_destroy_cases()
     r2_bootstrap_cases()
     r2_publish_cases()
 

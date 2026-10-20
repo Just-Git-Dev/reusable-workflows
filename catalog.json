@@ -3894,12 +3894,6 @@
           "required": false,
           "type": "string"
         },
-        "destroy_old_disabled_versions": {
-          "default": false,
-          "description": "After a successful roll and disable, DESTROY every DISABLED version of the bundle secret except the newest disabled one (kept for a quick rollback). Disabled versions are billed like enabled ones; destroyed ones are free. Irreversible, and needs secretmanager.versions.destroy, so it defaults to false; set it to true. Never touches an ENABLED version; skipped when any roll failed; a dry run prints the plan and destroys nothing.",
-          "required": false,
-          "type": "boolean"
-        },
         "dry_run": {
           "default": false,
           "description": "true = validate the payload and print the plan; write nothing, roll nothing.",
@@ -3947,6 +3941,12 @@
           "description": "Comma-separated Cloud Run service names to roll onto the new version.",
           "required": true,
           "type": "string"
+        },
+        "strict_values": {
+          "default": false,
+          "description": "true = also refuse payload keys that are not env-var names (^[A-Za-z_][A-Za-z0-9_]*$), empty or whitespace-only values (even with min_value_length 0), and values that are wholly a placeholder (\"-\", changeme, todo, xxx..., <...>, ${...}). Recommended. Default false keeps v3.7.0 behaviour for those; a future major will flip the default. A newline, CR or NUL in a key or value is refused regardless, because it corrupts the bundle.",
+          "required": false,
+          "type": "boolean"
         },
         "title": {
           "default": "secrets",

@@ -4,7 +4,7 @@
 
 103 entries total — 93 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
-- `2026-10-20` — [sync-bundle-key: value-safety guards and opt-in destruction of old disabled versions](#2026-10-20--sync-bundle-key-value-safety-guards-and-opt-in-destruction-of-old-disabled-versions)
+- `2026-10-20` — [sync-bundle-key: value-safety guards and an opt-in strict_values mode](#2026-10-20--sync-bundle-key-value-safety-guards-and-an-opt-in-strict_values-mode)
 - `2026-10-20` — [Secret values come only from GitHub secrets; no hand writes to Secret Manager](#2026-10-20--secret-values-come-only-from-github-secrets-no-hand-writes-to-secret-manager)
 - `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
 - `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
@@ -108,27 +108,38 @@
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
 
-## 2026-10-20 — sync-bundle-key: value-safety guards and opt-in destruction of old disabled versions
+## 2026-10-20 — sync-bundle-key: value-safety guards and an opt-in strict_values mode
 
 **Context.** A consumer's env blob carried a hand-written, wrong connection string; the owner ruled
 (2026-10-20, see "Secret values come only from GitHub secrets") that values reach Secret Manager only
 through `sync-bundle-key` / `manage-config-secrets`. That makes `sync-bundle-key` the single path, so
-its merge must be byte-exact and refuse anything that is not a real one-line value. A local run of its
-merge code found four gaps.
+its merge must be byte-exact. A local run of its merge code found four gaps; the pre-release review
+then found that refusing more payloads would break callers.
 
-**Decision.** (1) The replace path passes key and value to awk through `ENVIRON`, not `-v` (which
-processes backslash escapes). (2) Newline, CR and NUL in a value are refused, naming the key only.
-(3) Keys must match `^[A-Za-z_][A-Za-z0-9_]*$` and are matched literally, not as a regex. (4) Empty,
-whitespace-only and whole-value placeholders (changeme, todo, xxx..., `<...>`, `${...}`) are refused
-even at `min_value_length: 0`. No opt-out input: a real credential is never exactly a placeholder, and
-an input can be added later without a break. Also added `destroy_old_disabled_versions` (boolean,
-default false): disabled versions are billed like enabled ones, so after a green roll it destroys all
-DISABLED versions but the newest. Opt-in so callers lacking `secretmanager.versions.destroy` do not
-fail; the owner wants every consumer to enable it. It trades away cleanup-secret-versions' quarantine
-clock for the `:latest` mount this workflow manages.
+**Decision.** Always on, because each one already produced a corrupted file in v3.7.0: (1) the replace
+path passes key and value to awk through `ENVIRON`, not `-v` (which processes backslash escapes);
+(2) a newline, CR or NUL in a key or value is refused, naming the key only; (3) keys are matched
+literally, not as a regex; (4) an append onto a bundle with no trailing newline adds one first.
+Opt-in via a new `strict_values` input (boolean, default false): keys must match
+`^[A-Za-z_][A-Za-z0-9_]*$`, and empty, whitespace-only and whole-value placeholder values (`-`,
+changeme, todo, xxx..., `<...>`, `${...}`) are refused even at `min_value_length: 0`. Docs recommend
+`strict_values: true`; a future major flips the default.
 
-**Consequences.** Minor bump (v3.8.0): new optional input, and payloads that were silently corrupting
-or placeholder-valued now fail. Docs: `docs/sync-bundle-key.md` (value safety, destroy, IAM now lists
+**Why not strict by default.** README.md ("a behaviour change on a destructive path is a major bump")
+makes refusing payloads that v3.7.0 wrote correctly a major change. Probed in review: a key `my-key`,
+an empty value at `min_value_length: 0` and one-line values like `<p>hi</p>` or `${A}:${B}` were all
+accepted and corrupted nothing. Dependabot raises a minor bump and dispatch-only callers would break at
+their next rotation. With the default false, v3.8.0 is a minor.
+
+**Not shipped.** An opt-in `destroy_old_disabled_versions` step (destroy every DISABLED version but the
+newest, because disabled versions are billed) was written and then pulled: it reverses the 2026-08-17
+ruling "disable is inline, destroy stays in the sweeper" without addressing that entry's reasons, and the
+review found hazards (it can destroy what the same run just disabled or the last good version after a
+rollback, its dry run under-reports, no etag or `latest` re-check). It waits for the owner; see TODO.md
+"Secret Manager".
+
+**Consequences.** Minor bump (v3.8.0): one new optional input. Docs: `docs/sync-bundle-key.md` (value
+safety, `strict_values`, IAM now lists `secretmanager.secrets.get`).
 `secretmanager.secrets.get`).
 
 ## 2026-10-20 — Secret values come only from GitHub secrets; no hand writes to Secret Manager
