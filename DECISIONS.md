@@ -2,8 +2,9 @@
 
 ## Index
 
-101 entries total — 91 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+102 entries total — 92 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-20` — [Secret values come only from GitHub secrets; no hand writes to Secret Manager](#2026-10-20--secret-values-come-only-from-github-secrets-no-hand-writes-to-secret-manager)
 - `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
 - `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
 - `2026-10-19` — [CI pins actionlint and shellcheck](#2026-10-19--ci-pins-actionlint-and-shellcheck)
@@ -105,6 +106,28 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — Secret values come only from GitHub secrets; no hand writes to Secret Manager
+
+**Owner ruling.** Every secret value in Secret Manager comes from the app repo's GitHub Actions
+secrets, written by a workflow (`sync-bundle-key` / `manage-config-secrets`). No one writes
+Secret Manager directly by hand. The owner's words: "we should have them from github secrets.
+don't want direct access to GSM".
+
+**Why.** A consumer's production cache had never worked: its env blob carried a connection string
+that someone had typed in by hand when the blob was first created, months before the sync workflow existed. Every later sync
+kept that line, because `sync-bundle-key` is read-modify-write and upserts only the keys in its
+payload. No GitHub secret held the value, so nothing showed that it was wrong or where it came
+from. The read-modify-write design is still right, since a sync of one key must not drop the
+others. The gap was that no rule said every key needs a source.
+
+**What changes.** `docs/PLATFORM.md` §1 states the rule. Consumers move every hand-written blob
+key into a GitHub secret plus the sync payload (owned by each consumer's repo, not this one).
+
+**Not done yet (follow-ups).** Taking human write access to Secret Manager away is an access
+change for the access-provisioning repo, not this one. The workflow's value-safety gaps
+(backslash, multi-line, key matched as a regex, placeholder values) are in `TODO.md` under
+"Secret Manager".
 
 ## 2026-10-19 — Local gate is CI: one make target per check, a committed pre-push hook
 

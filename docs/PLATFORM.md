@@ -21,6 +21,13 @@ they connect end-to-end. Start here, then follow the links into each workflow's 
 shared *ops bodies* you run against them. Nothing here bakes in a project value — every
 project-specific input is a `workflow_call` input, and every secret is passed at call time.
 
+**Secret values have one source: your app repo's GitHub Actions secrets.** Every key in a
+Secret Manager secret, including each line of an env blob (`DATABASE_URL`, `REDIS_URL`, …), is
+written by a workflow (`sync-bundle-key` / `manage-config-secrets`) from a GitHub secret. No one
+writes Secret Manager by hand: no console edits, no `gcloud secrets versions add`. A key with no
+GitHub secret behind it is a defect, because the next person to rotate it can't know where its
+value came from. To change a value, update the GitHub secret, then run the sync.
+
 ```mermaid
 flowchart TB
   access["ACCESS (granted centrally):<br/>WIF identity · CF token · cross-repo read key"]
