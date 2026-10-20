@@ -26,14 +26,20 @@ parts the doc leaves to "the fixtures", so it is the implementer's contract:
                GKE workload). member = "serviceAccount:<sa>@<project_id>.iam.gserviceaccount.com".
                add-resource-binding.resource: run.service -> service name;
                iam.serviceAccount -> the runtime SA's EMAIL; artifactregistry.repository ->
-               "<location>/<repo>" (the register's image_repository); container.cluster ->
-               "<location>/<name>".
+               "<location>/<repo>" (the register's image_repository). GKE has no cluster-level IAM,
+               so there is no container.cluster resource_type.
   Order        per repo: create-service, run.developer on the service, serviceAccountUser on the
-               runtime SA, artifactregistry.writer; GKE: clusterViewer binding, apply-k8s-rbac.
+               runtime SA, artifactregistry.writer; GKE: [unsupported if no project-level
+               clusterViewer], apply-k8s-rbac.
   Mode         repo.mode, else defaults.mode, else "report". Report mode: drift{would:<verb>,
                ...that verb's details}; legacy-grant is emitted in both modes.
-  legacy-grant a deployer's project_roles entry starting "roles/run." or "roles/container."
-               (reported, never removed; no verb exists to remove it).
+  legacy-grant a deployer's project_roles entry starting "roles/run." or "roles/container.",
+               except roles/container.clusterViewer (reported, never removed; no verb removes it).
+  GKE viewer   clusterViewer exists only at project level, so F7 never grants it. A GKE deployer
+               whose project_roles lacks it gets, in BOTH modes, one non-write
+               unsupported{"key": "gke.cluster_viewer", "reason": <names the deployer SA and
+               roles/container.clusterViewer>} before apply-k8s-rbac. The state's
+               gke_clusters[].iam is not read.
   Errors       deployer name > 30 chars -> `error: <repo>: ...` on stderr, empty stdout, rc 1.
 
 Usage:  python3 tests/run_repos_deploy_plan_tests.py
@@ -142,8 +148,9 @@ def fully_bound_state():
         st["service_accounts"][rt] = {"iam": [{"role": SA_USER, "members": [member(sa)]}]}
     st["gar_repositories"]["europe-west1/services"] = {"iam": [{"role": GAR_W, "members": [
         member("payments-api-deployer"), member("ledger-worker-deployer")]}]}
+    st["project_roles"]["batch-runner-deployer"] = [CLUSTER_VIEWER]
     st["gke_clusters"]["europe-west1/main"] = {
-        "iam": [{"role": CLUSTER_VIEWER, "members": [member("batch-runner-deployer")]}],
+        "iam": [],
         "rbac": [{"namespace": "batch", "workload": "batch-runner",
                   "member": member("batch-runner-deployer"), "resource_names": ["batch-runner"]}]}
     return st
@@ -199,7 +206,7 @@ def run_developer_only_on_the_service_never_project_level():
             continue
         d = a["details"]
         assert d["resource_type"] in {"run.service", "iam.serviceAccount",
-                                      "artifactregistry.repository", "container.cluster"}, d
+                                      "artifactregistry.repository"}, d
         if d["role"] == RUN_DEV:
             assert d["resource_type"] == "run.service", d
     devs = [a for a in acts if a["action"] == "add-resource-binding" and a["details"]["role"] == RUN_DEV]
@@ -274,11 +281,38 @@ def legacy_grant_also_reported_in_report_mode():
 @case
 def gke_rbac_scoped_to_the_workload_and_cluster_viewer():
     acts = of(plan(load_register(), load_state()), "batch-runner")
-    exp = [binding("container.cluster", "europe-west1/main", CLUSTER_VIEWER, member("batch-runner-deployer")),
-           ("apply-k8s-rbac", {"cluster": "europe-west1/main", "namespace": "batch",
+    rbac = ("apply-k8s-rbac", {"cluster": "europe-west1/main", "namespace": "batch",
                                "workload": "batch-runner", "resource_names": ["batch-runner"],
-                               "member": member("batch-runner-deployer")})]
-    assert shape(acts) == exp, json.dumps(shape(acts))
+                               "member": member("batch-runner-deployer")})
+    got = shape(acts)
+    assert len(got) == 2 and got[1] == rbac, json.dumps(got)
+    verb, d = got[0]
+    assert verb == "unsupported" and d["key"] == "gke.cluster_viewer", got[0]
+    assert CLUSTER_VIEWER in d["reason"] and "batch-runner-deployer" in d["reason"], d
+
+
+@case
+def gke_cluster_viewer_is_never_a_resource_binding():
+    for mode in ("enforce", "report"):
+        reg = load_register()
+        reg["defaults"]["mode"] = mode
+        acts = plan(reg, load_state())
+        assert not [a for a in acts if a["details"].get("resource_type") == "container.cluster"
+                    or a["details"].get("role") == CLUSTER_VIEWER], mode
+        gke = of(acts, "batch-runner")
+        assert gke[0]["action"] == "unsupported", (mode, gke)   # a report, never drift{would:...}
+
+
+@case
+def gke_viewer_held_at_project_level_is_not_reported_nor_legacy():
+    st = fully_bound_state()
+    acts = of(plan(load_register(), st), "batch-runner")
+    assert shape(acts) == [("in-sync", {})], json.dumps(shape(acts))
+    st["gke_clusters"]["europe-west1/main"]["iam"] = [
+        {"role": CLUSTER_VIEWER, "members": [member("batch-runner-deployer")]}]
+    st["project_roles"]["batch-runner-deployer"] = []
+    got = shape(of(plan(load_register(), st), "batch-runner"))
+    assert got[0][0] == "unsupported", "a cluster-level policy must not count as a grant: %s" % got
 
 
 @case
@@ -295,7 +329,7 @@ def report_mode_emits_only_drift_legacy_and_in_sync():
     reg["defaults"]["mode"] = "report"
     acts = plan(reg, load_state())
     assert acts, "no actions"
-    assert {a["action"] for a in acts} <= {"drift", "legacy-grant", "in-sync"}, {a["action"] for a in acts}
+    assert {a["action"] for a in acts} <= {"drift", "legacy-grant", "in-sync", "unsupported"}, {a["action"] for a in acts}
     pay = of(acts, "payments-api")
     exp = [("drift", dict(would=v, **d)) for v, d in
            [create("payments-api", "payments-api-run")] + run_bindings(
@@ -308,7 +342,7 @@ def report_mode_default_when_no_mode_set():
     reg = load_register()
     reg["defaults"].pop("mode")
     acts = plan(reg, load_state())
-    assert acts and {a["action"] for a in acts} <= {"drift", "legacy-grant", "in-sync"}
+    assert acts and {a["action"] for a in acts} <= {"drift", "legacy-grant", "in-sync", "unsupported"}
 
 
 @case

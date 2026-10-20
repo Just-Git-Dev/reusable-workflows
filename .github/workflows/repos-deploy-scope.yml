@@ -194,6 +194,7 @@ jobs:
             jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tostring)` |"' plan.json
           } >> "$GITHUB_STEP_SUMMARY"
           jq -r '.[] | select(.action=="legacy-grant") | "::warning::\(.repo): \(.details.service_account) still holds project-level \(.details.role)"' plan.json
+          jq -r '.[] | select(.action=="unsupported") | "::warning::\(.repo): \(.details.reason)"' plan.json
 
       - name: Apply (write actions, in order)
         run: |
@@ -231,8 +232,8 @@ jobs:
                     gcloud artifacts repositories add-iam-policy-binding "${res#*/}" --location="${res%%/*}" \
                       --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet ;;
                   *)
-                    # container.cluster: GKE has no cluster-resource IAM policy, so the only way would
-                    # be a project-level grant, which this feature never makes.
+                    # The planner emits no other resource_type (GKE has no cluster-resource IAM, so
+                    # clusterViewer is reported, never bound); anything else is refused.
                     echo "::error::refusing $role on $rtype $res: no resource-level IAM exists for it (a project-level grant is never made here)"
                     exit 1 ;;
                 esac

@@ -87,7 +87,13 @@ def plan_repo(repo, mode, state, errors):
                 errors.append("error: %s: gke '%s' needs cluster and namespace" % (name, deployable))
                 continue
             cl = (state.get("gke_clusters") or {}).get(cluster) or {}
-            bind("container.cluster", cluster, CLUSTER_VIEWER, cl.get("iam"))
+            # GKE has no cluster-resource IAM: clusterViewer exists only at project level, so it
+            # is never granted here. Its absence is a report, in both modes.
+            if CLUSTER_VIEWER not in ((state.get("project_roles") or {}).get(deployer) or []):
+                writes.append(("unsupported", {
+                    "key": "gke.cluster_viewer",
+                    "reason": "%s exists only at project level (GKE has no cluster IAM); grant it "
+                              "to %s in the access-provisioning config" % (CLUSTER_VIEWER, deployer)}))
             applied = any(r.get("namespace") == ns and r.get("workload") == deployable
                           and r.get("member") == member
                           and r.get("resource_names") == [deployable]
@@ -98,13 +104,15 @@ def plan_repo(repo, mode, state, errors):
                     "resource_names": [deployable], "member": member}))
 
         for role in (state.get("project_roles") or {}).get(deployer) or []:
+            if role == CLUSTER_VIEWER:
+                continue
             if role.startswith("roles/run.") or role.startswith("roles/container."):
                 legacy.append(act(name, "legacy-grant", {
                     "service_account": deployer, "role": role, "scope": "project"}))
 
     out = []
     for verb, details in writes:
-        if mode == "enforce":
+        if verb == "unsupported" or mode == "enforce":
             out.append(act(name, verb, details))
         else:
             out.append(act(name, "drift", dict(would=verb, **details)))

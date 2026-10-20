@@ -234,10 +234,13 @@ role. A listed SA that exists is `in-sync`, or `drift` if its description or dis
   `roles/run.developer` **on that service**, `roles/iam.serviceAccountUser` **on that runtime
   SA**, and `roles/artifactregistry.writer` **on `image_repository`** (GAR IAM is per repository,
   not per image — a dedicated repository per deployable is the stricter option).
-- **GKE:** the deployer gets `roles/container.clusterViewer` on the cluster (to fetch
-  credentials) and a namespaced Kubernetes `Role` whose rules always carry
+- **GKE:** the deployer gets a namespaced Kubernetes `Role` whose rules always carry
   `resourceNames: [<workload>]`, bound to the Google identity — never `roles/container.developer`
-  (it covers every namespace).
+  (it covers every namespace). Fetching cluster credentials needs `roles/container.clusterViewer`,
+  which exists only at project level (GKE has no cluster-resource IAM policy), so F7 never grants
+  it: the SA's project-level grant is made in the access-provisioning config, like every
+  project-level grant. F7 reports a GKE deployer that lacks it as `unsupported`
+  (`gke.cluster_viewer`), in both modes, and never applies it.
 - **Migration aid:** reports (never fixes) any project-level `run.*` or `container.*` role a
   deployer still holds. Removing it is a human change in the access-provisioning config.
 
@@ -323,7 +326,8 @@ A register with no `service_accounts`, or an empty list, yields `[]`. Errors are
 
 A Cloud Run service whose key is absent from `cloud_run_services` does not exist. `iam` is a list
 of `{"role", "members"}` policy entries. `project_roles` maps a deployer SA name to the
-project-level roles it holds. A deployer name longer than 30 characters is an error
+project-level roles it holds (F7 reads it for `legacy-grant` and for the GKE
+`roles/container.clusterViewer` check; `gke_clusters[].iam` is not read). A deployer name longer than 30 characters is an error
 (`error: <repo>: ...`).
 
 ### 7.2 Naming formats, ordering and modes
@@ -341,17 +345,30 @@ project-level roles it holds. A deployer name longer than 30 characters is an er
   F7 `member` is `serviceAccount:<sa>@<project_id>.iam.gserviceaccount.com`.
 - **`add-resource-binding.resource`** by `resource_type`: `run.service` is the service name;
   `iam.serviceAccount` is the runtime SA's **email**; `artifactregistry.repository` is
-  `<location>/<repo>` (the register's `image_repository`); `container.cluster` is
-  `<location>/<name>`.
+  `<location>/<repo>` (the register's `image_repository`). There is no `container.cluster`
+  resource type: GKE has no cluster-level IAM.
 - **F7 action order per repo:** `create-service` (if the service is missing), `roles/run.developer`
   on the service, `roles/iam.serviceAccountUser` on the runtime SA,
-  `roles/artifactregistry.writer` on the repository; for GKE, the `roles/container.clusterViewer`
-  binding on the cluster, then `apply-k8s-rbac`.
+  `roles/artifactregistry.writer` on the repository; for GKE, the
+  non-write `unsupported` report when the deployer lacks the project-level
+  `roles/container.clusterViewer`, then `apply-k8s-rbac`.
 - **`legacy-grant`** (F7) is emitted in both modes for a deployer's project role starting with
-  `roles/run.` or `roles/container.`. It is reported, never removed.
+  `roles/run.` or `roles/container.`, except `roles/container.clusterViewer`, the sanctioned
+  project-level grant. It is reported, never removed.
 - **F5 `unregistered-binding`.** A binding on a registered SA that the register does not list is
-  reported with the non-write verb `unregistered-binding{service_account, role, member}`. It is
-  never removed. Reason: a drift report flags anything else on those SAs.
+  reported, in both modes, with the non-write verb
+  `unregistered-binding{service_account, role, member}`. It is never removed. Precisely:
+  - *Registered SA* = an SA named in at least one repo's `gcp.service_accounts`. An SA no repo
+    lists is not examined, whatever its policy holds.
+  - *Listed* = the binding's role is `roles/iam.workloadIdentityUser` AND its member is the F5
+    `principalSet` of some repo that lists that SA. Anything else on a registered SA is
+    unregistered: another role (even for a listed member), another repo, org or pool (a
+    near-miss), a user or group member. One entry per (role, member) pair, in policy order.
+  - *The `repo` field* is the first repo, in register order, that lists the SA; the SA is
+    reported once, not once per repo. The entries follow that repo's own `add-wif-binding` or
+    `drift`.
+  - *In-sync.* An `unregistered-binding` counts as an action: it suppresses the `in-sync` of the
+    repo it is attached to.
 - **Validation scope.** Each planner validates only the keys it reads. F1-F3 reject
   `visibility: public`; F4-F7 do not read `visibility`, so they do not reject it.
 - **F6 `display_name`** defaults to the SA name when the register omits it (used by
@@ -388,7 +405,7 @@ partial plan:** one error refuses the whole run.
 | `in-sync` | `{}` — emitted once per examined repo (or SA) with nothing to do, so a summary can list every repo examined |
 | `skip` | `{"reason": string}` — e.g. `"exists"`, `"rename already done"` |
 | `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode |
-| `unsupported` | `{"key": string, "reason": string}` — a key this org or plan cannot honour (branch protection) |
+| `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `gke.cluster_viewer`, a GKE deployer lacking the project-level `roles/container.clusterViewer` |
 | `legacy-grant` | `{"service_account": string, "role": string, "scope": "project"}` — F7 migration report |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
 
@@ -404,7 +421,7 @@ partial plan:** one error refuses the whole run.
 | `service-accounts` | `create-service-account` | `{"name": string, "display_name": string, "description": string}` |
 | `service-accounts` | `update-service-account` | `{"name": string, "field": "description"\|"display_name", "from": string, "to": string}` |
 | `deploy-scope` | `create-service` | `{"service": string, "region": string, "runtime_service_account": string, "image": "placeholder"}` |
-| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"iam.serviceAccount"\|"artifactregistry.repository"\|"container.cluster", "resource": string, "role": string, "member": string}` |
+| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"iam.serviceAccount"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}` |
 | `deploy-scope` | `apply-k8s-rbac` | `{"cluster": string, "namespace": string, "workload": string, "resource_names": [string], "member": string}` |
 
 **Invariants every planner test may assert:**

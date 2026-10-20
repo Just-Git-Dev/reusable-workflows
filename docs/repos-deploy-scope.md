@@ -38,13 +38,15 @@ the first failure stops the job.
 | `placeholder_image` | no | `us-docker.pkg.dev/cloudrun/container/hello` | image of the first, placeholder revision |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
 
-## Known limit: GKE cluster viewer
+## GKE cluster viewer is a project-level grant, made elsewhere
 
-The plan includes `roles/container.clusterViewer` on the cluster, but GKE has no cluster-resource
-IAM policy: that role can only be granted on the project. Apply therefore refuses that binding with
-an error rather than make a project-level grant. Grant it once through the access-provisioning
-config. Live state for GKE (cluster IAM and in-cluster RBAC) is not read, so GKE entries are always
-planned.
+`roles/container.clusterViewer` exists only at project level (GKE has no cluster-resource IAM
+policy), so this workflow never grants it. Make the deployer SA's project-level grant in the
+access-provisioning config, like every other project-level grant. A GKE deployer that does not
+hold it at project level gets an `unsupported` entry (key `gke.cluster_viewer`) in the plan and a
+warning, in both modes; it is never applied. A project-level `clusterViewer` is not reported as a
+`legacy-grant`. Live state for in-cluster RBAC is not read, so GKE entries always plan
+`apply-k8s-rbac`.
 
 ## Caller example
 
