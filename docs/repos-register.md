@@ -258,8 +258,107 @@ workflow: fetch live state (gh api / gcloud) ───────────�
 - Same input → same output, always. The planner reads only its two files; the workflow does every
   `gh api` / `gcloud` call. That is what lets fixture tests (`tests/run_repos_*_tests.py`) prove
   the decision logic and the NEVER list with no cloud and no GitHub.
-- The live-state JSON shape for each feature is defined by its fixtures and documented on the
-  feature's own page; the action list below is common to all.
+- The live-state JSON shape and the CLI of each planner are stated in
+  [§7.1](#71-planner-command-lines-and-live-state-json) and the naming rules in
+  [§7.2](#72-naming-formats-ordering-and-modes); the action list below is common to all.
+
+### 7.1 Planner command lines and live-state JSON
+
+All four planners take `--feature <name> --register <repos.yaml> --state <state.json>`, print the
+[§8](#8-the-planner-action-list--the-contract) action list to stdout and exit `0`, or print
+nothing to stdout, one `error: <repo|sa|register>: <reason>` line per error to stderr and exit
+`1`. An unknown `--feature` exits non-zero with nothing on stdout. The register is read as YAML
+(JSON is valid YAML, so a fixture may be JSON in a `.yaml` file).
+
+| Planner | `--feature` values | Notes on the inputs |
+|---|---|---|
+| `scripts/repos_plan.py` (F1-F4) | `register`, `create`, `settings`, `variables` | `--state` may be omitted for `register` (F1 needs no live state) |
+| `scripts/repos_wif_plan.py` (F5) | `wif-link` | |
+| `scripts/repos_sa_plan.py` (F6) | `service-accounts` | |
+| `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | |
+
+**F1-F4 live state** — one entry per repo the workflow looked up. A repo with `exists: false`, or
+absent from `repos`, does not exist. Live repos the register does not list produce no action.
+
+```json
+{"repos": {"payments-api": {"exists": true, "description": "Payments HTTP API",
+  "visibility": "private", "default_branch": "main",
+  "settings": {"delete_branch_on_merge": true}, "variables": {"GCP_WIF_PROVIDER": "projects/123/..."}}}}
+```
+
+F1 (`register`) emits one `in-sync` entry (feature `register`) per repo when the register is valid.
+
+**F5 live state** — keyed by SA account-id (the register's SA name):
+
+```json
+{"project_number": "123456789", "pool": "example-pool",
+ "service_accounts": {"payments-api-deployer": {"exists": true,
+   "policy": {"etag": "BwX...", "bindings": [{"role": "roles/iam.workloadIdentityUser", "members": ["principalSet://..."]}]}}}}
+```
+
+`project_number` is the GCP project **number** (a string), used in the principalSet. A name absent
+from `service_accounts`, or with `exists: false`, is a missing SA and an error
+(`error: <sa-or-repo>: ...`).
+
+**F6 live state** — the SAs that exist live:
+
+```json
+{"service_accounts": [{"name": "payments-api-deployer", "description": "...", "display_name": "..."}]}
+```
+
+A register with no `service_accounts`, or an empty list, yields `[]`. Errors are named
+`error: <sa>: ...`. Every F6 action has `repo: null`.
+
+**F7 live state:**
+
+```json
+{"project_id": "example-proj",
+ "cloud_run_services": {"payments-api": {"iam": [{"role": "roles/run.developer", "members": ["serviceAccount:..."]}]}},
+ "service_accounts": {"payments-api-run": {"iam": []}},
+ "gar_repositories": {"europe-west1/services": {"iam": []}},
+ "gke_clusters": {"europe-west1/main": {"iam": [],
+   "rbac": [{"namespace": "ledger", "workload": "ledger-worker", "member": "serviceAccount:...", "resource_names": ["ledger-worker"]}]}},
+ "project_roles": {"payments-api-deployer": ["roles/run.admin"]}}
+```
+
+A Cloud Run service whose key is absent from `cloud_run_services` does not exist. `iam` is a list
+of `{"role", "members"}` policy entries. `project_roles` maps a deployer SA name to the
+project-level roles it holds. A deployer name longer than 30 characters is an error
+(`error: <repo>: ...`).
+
+### 7.2 Naming formats, ordering and modes
+
+- **Mode per repo** = the repo's `mode`, else `defaults.mode`, else `report`. For F6 the unit is
+  the SA entry: its `mode`, else `defaults.mode`, else `report`. In `report` mode only non-write
+  verbs are emitted; a write that would happen becomes `drift{would: <verb>, ...}` carrying that
+  verb's details.
+- **`in-sync` emission:** exactly one per examined repo (or SA) that has nothing to do, and none
+  for a repo (or SA) that has any other action, including `drift`.
+- **Deployer SA** (F7) is `<deployable>-deployer`, where the deployable is the Cloud Run service
+  name, or the GKE workload.
+- **Member formats.** F5 `member` is
+  `principalSet://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool>/attribute.repository/<org>/<repo>`.
+  F7 `member` is `serviceAccount:<sa>@<project_id>.iam.gserviceaccount.com`.
+- **`add-resource-binding.resource`** by `resource_type`: `run.service` is the service name;
+  `iam.serviceAccount` is the runtime SA's **email**; `artifactregistry.repository` is
+  `<location>/<repo>` (the register's `image_repository`); `container.cluster` is
+  `<location>/<name>`.
+- **F7 action order per repo:** `create-service` (if the service is missing), `roles/run.developer`
+  on the service, `roles/iam.serviceAccountUser` on the runtime SA,
+  `roles/artifactregistry.writer` on the repository; for GKE, the `roles/container.clusterViewer`
+  binding on the cluster, then `apply-k8s-rbac`.
+- **`legacy-grant`** (F7) is emitted in both modes for a deployer's project role starting with
+  `roles/run.` or `roles/container.`. It is reported, never removed.
+- **F5 `unregistered-binding`.** A binding on a registered SA that the register does not list is
+  reported with the non-write verb `unregistered-binding{service_account, role, member}`. It is
+  never removed. Reason: a drift report flags anything else on those SAs.
+- **Validation scope.** Each planner validates only the keys it reads. F1-F3 reject
+  `visibility: public`; F4-F7 do not read `visibility`, so they do not reject it.
+- **F6 `display_name`** defaults to the SA name when the register omits it (used by
+  `create-service-account`). A field is compared only when the register states it, so an SA with
+  no `display_name` in the register is never reported as drifting on it.
+- **Missing dependency.** Each planner test runner FAILS, never skips, when a required Python
+  dependency (PyYAML, jsonschema) is missing.
 
 ## 8. The planner action list — the contract
 
@@ -291,6 +390,7 @@ partial plan:** one error refuses the whole run.
 | `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode |
 | `unsupported` | `{"key": string, "reason": string}` — a key this org or plan cannot honour (branch protection) |
 | `legacy-grant` | `{"service_account": string, "role": string, "scope": "project"}` — F7 migration report |
+| `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
 
 **Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each):
 
