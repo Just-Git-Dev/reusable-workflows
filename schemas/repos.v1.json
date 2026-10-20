@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Just-Git-Dev/reusable-workflows/schemas/repos.v1.json",
+  "title": "repos.yaml register, version 1",
+  "description": "Contract: docs/repos-register.md section 3. Unknown keys are ignored by every feature, so additionalProperties stays open everywhere.",
+  "type": "object",
+  "required": ["version", "org", "repos"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {"type": "integer", "const": 1},
+    "org": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"},
+    "defaults": {"$ref": "#/$defs/defaults"},
+    "service_accounts": {"type": "array", "items": {"$ref": "#/$defs/serviceAccount"}},
+    "repos": {"type": "array", "items": {"$ref": "#/$defs/repo"}}
+  },
+  "$defs": {
+    "mode": {"enum": ["report", "enforce"]},
+    "visibility": {"enum": ["private", "internal"]},
+    "repoName": {"type": "string", "pattern": "^(?!-)(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$"},
+    "branchName": {"type": "string", "pattern": "^[^\\s-]\\S*$"},
+    "serviceName": {"type": "string", "pattern": "^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"},
+    "regionName": {"type": "string", "pattern": "^[a-z]+-[a-z]+[0-9]$"},
+    "k8sName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"},
+    "slashPair": {"type": "string", "pattern": "^[^/\\s-][^/\\s]*/[^/\\s-][^/\\s]*$"},
+    "saName": {"type": "string", "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"},
+    "settings": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "delete_branch_on_merge": {"type": "boolean"},
+        "allow_auto_merge": {"type": "boolean"},
+        "allow_squash_merge": {"type": "boolean"},
+        "allow_merge_commit": {"type": "boolean"},
+        "allow_rebase_merge": {"type": "boolean"},
+        "has_issues": {"type": "boolean"},
+        "has_wiki": {"type": "boolean"},
+        "has_projects": {"type": "boolean"}
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mode": {"$ref": "#/$defs/mode"},
+        "visibility": {"$ref": "#/$defs/visibility"},
+        "default_branch": {"$ref": "#/$defs/branchName"},
+        "settings": {"$ref": "#/$defs/settings"}
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"$ref": "#/$defs/saName"},
+        "description": {"type": "string", "minLength": 1, "maxLength": 256},
+        "display_name": {"type": "string", "maxLength": 100},
+        "mode": {"$ref": "#/$defs/mode"}
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": true,
+      "oneOf": [
+        {
+          "required": ["cloud_run", "region"],
+          "not": {"required": ["gke"]},
+          "properties": {
+            "cloud_run": {"$ref": "#/$defs/serviceName"},
+            "region": {"$ref": "#/$defs/regionName"},
+            "runtime_service_account": {"$ref": "#/$defs/saName"},
+            "image_repository": {"$ref": "#/$defs/slashPair"}
+          }
+        },
+        {
+          "required": ["gke"],
+          "not": {"required": ["cloud_run"]},
+          "properties": {
+            "gke": {
+              "type": "object",
+              "required": ["cluster", "namespace", "workload"],
+              "additionalProperties": true,
+              "properties": {
+                "cluster": {"$ref": "#/$defs/slashPair"},
+                "namespace": {"$ref": "#/$defs/k8sName"},
+                "workload": {"$ref": "#/$defs/k8sName"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "repo": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"$ref": "#/$defs/repoName"},
+        "kind": {"type": "string"},
+        "description": {"type": "string", "maxLength": 350},
+        "status": {"enum": ["new", "existing"]},
+        "rename_from": {"$ref": "#/$defs/repoName"},
+        "mode": {"$ref": "#/$defs/mode"},
+        "visibility": {"$ref": "#/$defs/visibility"},
+        "default_branch": {"$ref": "#/$defs/branchName"},
+        "settings": {"$ref": "#/$defs/settings"},
+        "variables": {
+          "type": "object",
+          "propertyNames": {"pattern": "^(?!GITHUB_)[A-Z_][A-Z0-9_]*$"},
+          "additionalProperties": {"type": "string"}
+        },
+        "gcp": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "service_accounts": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"$ref": "#/$defs/saName"}
+            }
+          }
+        },
+        "deploys": {"type": "array", "items": {"$ref": "#/$defs/deploy"}}
+      }
+    }
+  }
+}

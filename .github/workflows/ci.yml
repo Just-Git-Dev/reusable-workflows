@@ -239,6 +239,18 @@ jobs:
       - name: Run sweep-plan fixtures
         run: make secret-plan-fixtures
 
+  repos-plan-fixtures:
+    name: repos-as-code planner fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The four repos-register planners (F1-F7) are pure; this proves the decision logic and the
+      # never-do list with no GitHub or cloud (docs/repos-register.md section 7).
+      - name: Run repos planner fixtures
+        run: make repos-plan-fixtures
+
   concurrency-groups:
     name: bundle writers share one lock
     runs-on: ubuntu-latest

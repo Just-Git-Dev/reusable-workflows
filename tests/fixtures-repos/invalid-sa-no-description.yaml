@@ -1,0 +1,5 @@
+version: 1
+org: Example-Org
+service_accounts:
+  - name: payments-api-deployer
+repos: []

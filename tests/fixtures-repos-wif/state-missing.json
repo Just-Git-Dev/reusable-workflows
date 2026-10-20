@@ -1,0 +1,2 @@
+{"project_number": "123456789", "pool": "example-pool",
+ "service_accounts": {"payments-api-deployer": {"exists": true, "policy": {"etag": "BwXXXX", "bindings": []}}}}

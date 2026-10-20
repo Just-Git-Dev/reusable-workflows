@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "org": "Example-Org",
+  "defaults": {"mode": "enforce"},
+  "repos": [
+    {"name": "payments-api",
+     "gcp": {"service_accounts": ["payments-api-deployer"]},
+     "deploys": [{"cloud_run": "payments-api", "region": "europe-west1",
+                  "runtime_service_account": "payments-api-run",
+                  "image_repository": "europe-west1/services"}]},
+    {"name": "ledger-worker",
+     "gcp": {"service_accounts": ["ledger-worker-deployer"]},
+     "deploys": [{"cloud_run": "ledger-worker", "region": "europe-west1",
+                  "runtime_service_account": "ledger-worker-run",
+                  "image_repository": "europe-west1/services"}]},
+    {"name": "batch-runner",
+     "gcp": {"service_accounts": ["batch-runner-deployer"]},
+     "deploys": [{"gke": {"cluster": "europe-west1/main", "namespace": "batch",
+                          "workload": "batch-runner"}}]}
+  ]
+}
