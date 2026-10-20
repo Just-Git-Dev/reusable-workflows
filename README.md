@@ -79,6 +79,18 @@ Composite actions under `actions/`, used as a **step** (`uses: Just-Git-Dev/reus
 | [`rotate-worker-signing-secret.yml`](docs/rotate-worker-signing-secret.md) | Rotate an HMAC secret shared by a Cloudflare Worker + Cloud Run signer, zero-downtime via a two-slot grace window |
 | [`rotate-cloudflare-token.yml`](docs/rotate-cloudflare-token.md) | Verify the Cloudflare API token is active + print a rotation runbook |
 
+### Repos as code
+
+A project lists its GitHub repos in one `repos.yaml`; each feature below is a separate workflow over
+a pure planner. Contract: [repos-register](docs/repos-register.md).
+
+| Workflow | Purpose |
+|---|---|
+| [`repos-register-check.yml`](docs/repos-register-check.md) | F1: validate `repos.yaml` against `schemas/repos.v1.json`. No token, writes nothing |
+| [`repos-create.yml`](docs/repos-create.md) | F2: create `status: new` repos that are missing; rename only via `rename_from`. Report or enforce |
+| [`repos-settings.yml`](docs/repos-settings.md) | F3: description, visibility (never public), default branch and settings against live. Report or enforce |
+| [`repos-variables.yml`](docs/repos-variables.md) | F4: the listed NON-secret repository variables. Never deletes one. Report or enforce |
+
 ### Backups, alerts & housekeeping
 
 | Workflow | Purpose |

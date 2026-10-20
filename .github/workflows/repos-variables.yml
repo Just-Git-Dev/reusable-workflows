@@ -1,0 +1,211 @@
+name: Repos variables (reusable)
+
+# F4 of the repos-as-code family (docs/repos-register.md, docs/repos-variables.md): report or enforce the NON-secret repository variables the register lists.
+#
+# EVERY EDIT TO THIS FILE IS A SECURITY CHANGE. What bounds it:
+#   - The decision is made by scripts/repos_plan.py, a pure planner checked out from this repo at
+#     WORKFLOW_VERSION. Its vocabulary has no delete, archive, make-public or rename-without-
+#     rename_from verb; this workflow additionally refuses any action outside the allow-lists below.
+#   - The job refuses to start unless `environment` is `repo-admin` and the ref is the caller's
+#     main branch, BEFORE any token is minted. The App key is one declared secret, passed by name,
+#     and is named only as the `private-key` of the two mint steps.
+#   - A READ token (metadata:read, actions_variables:read) is minted first and is all a `report` run ever holds. The
+#     actions_variables:write token is minted only when the plan holds at least one write action.
+#   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
+#   - No step runs caller code: only the planner and the pinned requirements of this repo.
+
+on:
+  workflow_call:
+    inputs:
+      register:
+        description: 'Path of the register in the caller repo (a plain relative path)'
+        type: string
+        required: false
+        default: repos.yaml
+      app-id:
+        description: 'The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID'
+        type: string
+        required: true
+      environment:
+        description: 'The caller environment holding REPO_ADMIN_APP_KEY; must be repo-admin'
+        type: string
+        required: false
+        default: repo-admin
+    secrets:
+      REPO_ADMIN_APP_KEY:
+        description: 'The second private key of the App. Pass it BY NAME (inherit is same-org only)'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.7.0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  repos:
+    name: repos-variables
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse unless repo-admin on the main branch
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          REF: ${{ github.ref }}
+          REGISTER: ${{ inputs.register }}
+        run: |
+          set -euo pipefail
+          [ "$ENVIRONMENT" = "repo-admin" ] || { echo "::error::environment is '$ENVIRONMENT', this workflow runs only in repo-admin"; exit 1; }
+          [ "$REF" = "refs/heads/main" ] || { echo "::error::ref is '$REF'; repos-as-code runs only on refs/heads/main"; exit 1; }
+          [[ "$REGISTER" =~ ^[A-Za-z0-9._/-]+$ && "$REGISTER" != *..* && "$REGISTER" != /* ]] || { echo "::error::register '$REGISTER' is not a plain relative path"; exit 1; }
+
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the planner at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .repos-src
+          persist-credentials: false
+
+      - name: Install the pinned planner dependencies
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet --disable-pip-version-check -r .repos-src/requirements-ci.txt
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Validate the register (F1) and list the repos to look up
+        id: reg
+        env:
+          REGISTER: ${{ inputs.register }}
+        run: |
+          set -euo pipefail
+          python3 .repos-src/scripts/repos_plan.py --feature register --register "$REGISTER" > /dev/null
+          python3 - <<'PY'
+          import os, yaml
+          reg = yaml.safe_load(open(os.environ["REGISTER"]))
+          names = []
+          for r in reg["repos"]:
+              for n in (r.get("rename_from"), r["name"]):
+                  if n and n not in names:
+                      names.append(n)
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "names.txt"), "w") as f:
+              f.write("\n".join(names) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("org=%s\n" % reg["org"])
+          PY
+
+      - name: Mint App token (READ-ONLY)
+        id: app-ro
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.REPO_ADMIN_APP_KEY }}
+          owner: ${{ steps.reg.outputs.org }}
+          permission-metadata: read
+          permission-actions-variables: read
+
+      - name: Fetch live state
+        env:
+          GH_TOKEN: ${{ steps.app-ro.outputs.token }}
+          ORG: ${{ steps.reg.outputs.org }}
+        run: |
+          set -euo pipefail
+          state='{"repos":{}}'
+          while IFS= read -r n; do
+            [ -n "$n" ] || continue
+            if body=$(gh api "repos/$ORG/$n" 2> "$RUNNER_TEMP/gh.err"); then
+              # A renamed repo answers its old name with a redirect to the new one: not the same name, not "exists".
+              entry=$(jq -c --arg n "$n" 'if (.name | ascii_downcase) == ($n | ascii_downcase) then {exists: true, description: (.description // ""), visibility: .visibility, default_branch: .default_branch, settings: {delete_branch_on_merge, allow_auto_merge, allow_squash_merge, allow_merge_commit, allow_rebase_merge, has_issues, has_wiki, has_projects}} else {exists: false} end' <<<"$body")
+            elif grep -q "HTTP 404" "$RUNNER_TEMP/gh.err"; then
+              entry='{"exists":false}'
+            else
+              cat "$RUNNER_TEMP/gh.err"; echo "::error::could not read repo $n"; exit 1
+            fi
+            if [ "$(jq -r .exists <<<"$entry")" = "true" ]; then
+              vars=$(gh api "repos/$ORG/$n/actions/variables" --paginate --jq '.variables[] | {(.name): .value}' | jq -cs 'add // {}')
+              entry=$(jq -c --argjson v "$vars" '.variables = $v' <<<"$entry")
+            fi
+            state=$(jq -c --arg n "$n" --argjson e "$entry" '.repos[$n] = $e' <<<"$state")
+          done < "$RUNNER_TEMP/names.txt"
+          echo "$state" > "$RUNNER_TEMP/state.json"
+
+      - name: Plan
+        id: plan
+        env:
+          REGISTER: ${{ inputs.register }}
+        run: |
+          set -euo pipefail
+          if ! python3 .repos-src/scripts/repos_plan.py --feature variables --register "$REGISTER" --state "$RUNNER_TEMP/state.json" > "$RUNNER_TEMP/plan.json" 2> "$RUNNER_TEMP/plan.err"; then
+            sed 's/^error: /::error::/' "$RUNNER_TEMP/plan.err"
+            exit 1
+          fi
+          # Defence in depth: nothing outside this feature's verbs may appear in the plan.
+          bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","set-variable"] | index($a) | not)] | length' "$RUNNER_TEMP/plan.json")
+          [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list"; exit 1; }
+          writes=$(jq '[.[] | select(.action as $a | ["set-variable"] | index($a))] | length' "$RUNNER_TEMP/plan.json")
+          examined=$(jq '[.[].repo] | unique | length' "$RUNNER_TEMP/plan.json")
+          echo "writes=$writes" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Repos variables"
+            echo
+            echo "Examined **$examined** repo(s); **$writes** write action(s) in the plan."
+            echo
+            echo "| repo | action | details |"
+            echo "|---|---|---|"
+            jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tojson | gsub("[|]"; "/"))` |"' "$RUNNER_TEMP/plan.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$examined" != "0" ] || echo "::warning::the register lists no repos; nothing was examined"
+
+      - name: Mint App token (actions_variables:write)
+        id: app-rw
+        if: ${{ steps.plan.outputs.writes != '0' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.REPO_ADMIN_APP_KEY }}
+          owner: ${{ steps.reg.outputs.org }}
+          permission-metadata: read
+          permission-actions-variables: write
+
+      - name: Apply the write actions in order
+        if: ${{ steps.plan.outputs.writes != '0' }}
+        env:
+          GH_TOKEN: ${{ steps.app-rw.outputs.token }}
+          ORG: ${{ steps.reg.outputs.org }}
+        run: |
+          set -euo pipefail
+          applied=0
+          while IFS= read -r a; do
+            repo=$(jq -r .repo <<<"$a")
+            verb=$(jq -r .action <<<"$a")
+            d=$(jq -c .details <<<"$a")
+            case "$verb" in
+              set-variable)
+                name=$(jq -r .name <<<"$d")
+                value=$(jq -r .to <<<"$d")
+                if [ "$(jq -r '.from == null' <<<"$d")" = "true" ]; then
+                  gh api -X POST "repos/$ORG/$repo/actions/variables" -f "name=$name" -f "value=$value" > /dev/null
+                else
+                  gh api -X PATCH "repos/$ORG/$repo/actions/variables/$name" -f "value=$value" > /dev/null
+                fi ;;
+              *) continue ;;
+            esac
+            applied=$((applied + 1))
+            echo "applied $verb on $repo"
+          done < <(jq -c '.[]' "$RUNNER_TEMP/plan.json")
+          echo "Applied **$applied** write action(s)." >> "$GITHUB_STEP_SUMMARY"

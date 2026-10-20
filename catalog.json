@@ -3145,6 +3145,323 @@
       },
       "workflow": "release-publish.yml"
     },
+    "repos-create": {
+      "inputs": {
+        "app-id": {
+          "default": null,
+          "description": "The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID",
+          "required": true,
+          "type": "string"
+        },
+        "environment": {
+          "default": "repo-admin",
+          "description": "The caller environment holding REPO_ADMIN_APP_KEY; must be repo-admin",
+          "required": false,
+          "type": "string"
+        },
+        "register": {
+          "default": "repos.yaml",
+          "description": "Path of the register in the caller repo (a plain relative path)",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "repos": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Repos create (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/repos-create.yml",
+      "secrets": {
+        "REPO_ADMIN_APP_KEY": {
+          "description": "The second private key of the App. Pass it BY NAME (inherit is same-org only)",
+          "required": true
+        }
+      },
+      "workflow": "repos-create.yml"
+    },
+    "repos-deploy-scope": {
+      "inputs": {
+        "environment": {
+          "default": "repo-admin",
+          "description": "GitHub environment the job runs in (holds the approval gate for the repo-admin identity).",
+          "required": false,
+          "type": "string"
+        },
+        "placeholder_image": {
+          "default": "us-docker.pkg.dev/cloudrun/container/hello",
+          "description": "Image the service is first created with (only when the service is missing). Must be pullable by Cloud Run.",
+          "required": false,
+          "type": "string"
+        },
+        "project_id": {
+          "default": null,
+          "description": "GCP project id that hosts the Cloud Run services, runtime SAs and GAR repositories.",
+          "required": true,
+          "type": "string"
+        },
+        "register_path": {
+          "default": "repos.yaml",
+          "description": "Path of the register file in the caller repository.",
+          "required": false,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "The repo-admin service account email (acted as through WIF).",
+          "required": true,
+          "type": "string"
+        },
+        "tooling_ref": {
+          "default": "main",
+          "description": "Tag of Just-Git-Dev/reusable-workflows to fetch the planner from (a called workflow cannot discover its own ref). Pass the same tag you pin the workflow to.",
+          "required": false,
+          "type": "string"
+        },
+        "workload_identity_provider": {
+          "default": null,
+          "description": "WIF provider resource name used to authenticate as the repo-admin SA.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "deploy-scope": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read",
+            "id-token": "write"
+          }
+        }
+      },
+      "name": "repos-deploy-scope",
+      "outputs": {},
+      "path": ".github/workflows/repos-deploy-scope.yml",
+      "secrets": {},
+      "workflow": "repos-deploy-scope.yml"
+    },
+    "repos-register-check": {
+      "inputs": {
+        "register": {
+          "default": "repos.yaml",
+          "description": "Path of the register in the caller repo (a plain relative path)",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "check": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Repos register check (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/repos-register-check.yml",
+      "secrets": {},
+      "workflow": "repos-register-check.yml"
+    },
+    "repos-service-accounts": {
+      "inputs": {
+        "environment": {
+          "default": "repo-admin",
+          "description": "GitHub environment the job runs in (holds the approval gate for the repo-admin identity).",
+          "required": false,
+          "type": "string"
+        },
+        "project_id": {
+          "default": null,
+          "description": "GCP project id the service accounts are created in.",
+          "required": true,
+          "type": "string"
+        },
+        "register_path": {
+          "default": "repos.yaml",
+          "description": "Path of the register file in the caller repository.",
+          "required": false,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "The repo-admin service account email (acted as through WIF).",
+          "required": true,
+          "type": "string"
+        },
+        "tooling_ref": {
+          "default": "main",
+          "description": "Tag of Just-Git-Dev/reusable-workflows to fetch the planner from (a called workflow cannot discover its own ref). Pass the same tag you pin the workflow to.",
+          "required": false,
+          "type": "string"
+        },
+        "workload_identity_provider": {
+          "default": null,
+          "description": "WIF provider resource name used to authenticate as the repo-admin SA.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "service-accounts": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read",
+            "id-token": "write"
+          }
+        }
+      },
+      "name": "repos-service-accounts",
+      "outputs": {},
+      "path": ".github/workflows/repos-service-accounts.yml",
+      "secrets": {},
+      "workflow": "repos-service-accounts.yml"
+    },
+    "repos-settings": {
+      "inputs": {
+        "app-id": {
+          "default": null,
+          "description": "The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID",
+          "required": true,
+          "type": "string"
+        },
+        "environment": {
+          "default": "repo-admin",
+          "description": "The caller environment holding REPO_ADMIN_APP_KEY; must be repo-admin",
+          "required": false,
+          "type": "string"
+        },
+        "register": {
+          "default": "repos.yaml",
+          "description": "Path of the register in the caller repo (a plain relative path)",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "repos": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Repos settings (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/repos-settings.yml",
+      "secrets": {
+        "REPO_ADMIN_APP_KEY": {
+          "description": "The second private key of the App. Pass it BY NAME (inherit is same-org only)",
+          "required": true
+        }
+      },
+      "workflow": "repos-settings.yml"
+    },
+    "repos-variables": {
+      "inputs": {
+        "app-id": {
+          "default": null,
+          "description": "The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID",
+          "required": true,
+          "type": "string"
+        },
+        "environment": {
+          "default": "repo-admin",
+          "description": "The caller environment holding REPO_ADMIN_APP_KEY; must be repo-admin",
+          "required": false,
+          "type": "string"
+        },
+        "register": {
+          "default": "repos.yaml",
+          "description": "Path of the register in the caller repo (a plain relative path)",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "repos": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Repos variables (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/repos-variables.yml",
+      "secrets": {
+        "REPO_ADMIN_APP_KEY": {
+          "description": "The second private key of the App. Pass it BY NAME (inherit is same-org only)",
+          "required": true
+        }
+      },
+      "workflow": "repos-variables.yml"
+    },
+    "repos-wif-link": {
+      "inputs": {
+        "environment": {
+          "default": "repo-admin",
+          "description": "GitHub environment the job runs in (holds the approval gate for the repo-admin identity).",
+          "required": false,
+          "type": "string"
+        },
+        "pool": {
+          "default": null,
+          "description": "Id of the org-level workload identity pool the repo principalSets live in.",
+          "required": true,
+          "type": "string"
+        },
+        "project_id": {
+          "default": null,
+          "description": "GCP project id that hosts the service accounts.",
+          "required": true,
+          "type": "string"
+        },
+        "register_path": {
+          "default": "repos.yaml",
+          "description": "Path of the register file in the caller repository.",
+          "required": false,
+          "type": "string"
+        },
+        "service_account": {
+          "default": null,
+          "description": "The repo-admin service account email (acted as through WIF).",
+          "required": true,
+          "type": "string"
+        },
+        "tooling_ref": {
+          "default": "main",
+          "description": "Tag of Just-Git-Dev/reusable-workflows to fetch the planner from (a called workflow cannot discover its own ref). Pass the same tag you pin the workflow to.",
+          "required": false,
+          "type": "string"
+        },
+        "workload_identity_provider": {
+          "default": null,
+          "description": "WIF provider resource name used to authenticate as the repo-admin SA.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "wif-link": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read",
+            "id-token": "write"
+          }
+        }
+      },
+      "name": "repos-wif-link",
+      "outputs": {},
+      "path": ".github/workflows/repos-wif-link.yml",
+      "secrets": {},
+      "workflow": "repos-wif-link.yml"
+    },
     "retire-gar-packages": {
       "inputs": {
         "dry_run": {
