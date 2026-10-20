@@ -1,0 +1,178 @@
+# repos-wif-link.yml — F5 of repos-as-code: link each repo to the deploy identity it may act as.
+#
+# For each SA in a repo's `gcp.service_accounts`, make sure the SA's IAM policy holds
+# `roles/iam.workloadIdentityUser` for that repo's principalSet in the ORG-level WIF pool.
+# A thin shell over scripts/repos_wif_plan.py: fetch each SA's policy -> plan -> report or apply.
+#
+# Never: removes a binding, grants any other role, creates an SA (a missing SA is an error; F6
+# creates SAs), touches the pool or provider, or grants a project-level role. Bindings on a
+# registered SA that the register does not list are REPORTED (unregistered-binding), never removed.
+# Contract and action list: docs/repos-register.md. Page: docs/repos-wif-link.md.
+#
+# Caller example (pin the tag; pass the same tag as tooling_ref):
+#   jobs:
+#     wif-link:
+#       uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-wif-link.yml@vX.Y.Z
+#       with:
+#         workload_identity_provider: projects/123/locations/global/workloadIdentityPools/p/providers/github
+#         service_account: repo-admin@example-proj.iam.gserviceaccount.com
+#         project_id: example-proj
+#         pool: example-pool
+#         tooling_ref: vX.Y.Z
+name: repos-wif-link
+
+on:
+  workflow_call:
+    inputs:
+      workload_identity_provider:
+        description: 'WIF provider resource name used to authenticate as the repo-admin SA.'
+        required: true
+        type: string
+      service_account:
+        description: 'The repo-admin service account email (acted as through WIF).'
+        required: true
+        type: string
+      project_id:
+        description: 'GCP project id that hosts the service accounts.'
+        required: true
+        type: string
+      pool:
+        description: 'Id of the org-level workload identity pool the repo principalSets live in.'
+        required: true
+        type: string
+      register_path:
+        description: 'Path of the register file in the caller repository.'
+        required: false
+        type: string
+        default: 'repos.yaml'
+      tooling_ref:
+        description: 'Tag of Just-Git-Dev/reusable-workflows to fetch the planner from (a called workflow cannot discover its own ref). Pass the same tag you pin the workflow to.'
+        required: false
+        type: string
+        default: 'main'
+      environment:
+        description: 'GitHub environment the job runs in (holds the approval gate for the repo-admin identity).'
+        required: false
+        type: string
+        default: 'repo-admin'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  wif-link:
+    name: wif-link
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ inputs.project_id }}
+      POOL: ${{ inputs.pool }}
+      REGISTER: ${{ inputs.register_path }}
+    steps:
+      - name: Checkout the caller (the register)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the planner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ inputs.tooling_ref }}
+          path: .rw-tooling
+          persist-credentials: false
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml==6.0.3
+
+      - name: Fetch live state
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          import yaml
+
+          project, pool = os.environ["PROJECT_ID"], os.environ["POOL"]
+          reg = yaml.safe_load(open(os.environ["REGISTER"]))
+
+          def gcloud(*args, missing_ok=False):
+              p = subprocess.run(["gcloud", *args, "--format=json"], capture_output=True, text=True)
+              if p.returncode == 0:
+                  return json.loads(p.stdout or "null")
+              if missing_ok and ("NOT_FOUND" in p.stderr or "not found" in p.stderr.lower()):
+                  return None
+              sys.exit("error: register: gcloud %s failed: %s" % (" ".join(args[:4]), p.stderr.strip()[:300]))
+
+          number = str(gcloud("projects", "describe", project)["projectNumber"])
+          wanted = []
+          for repo in reg.get("repos") or []:
+              for sa in (repo.get("gcp") or {}).get("service_accounts") or []:
+                  if sa not in wanted:
+                      wanted.append(sa)
+          state = {"project_number": number, "pool": pool, "service_accounts": {}}
+          for sa in wanted:
+              email = "%s@%s.iam.gserviceaccount.com" % (sa, project)
+              pol = gcloud("iam", "service-accounts", "get-iam-policy", email, "--project", project,
+                           missing_ok=True)
+              if pol is None:
+                  state["service_accounts"][sa] = {"exists": False}
+              else:
+                  state["service_accounts"][sa] = {"exists": True, "policy": {
+                      "etag": pol.get("etag"),
+                      "bindings": [{"role": b["role"], "members": b.get("members", [])}
+                                   for b in pol.get("bindings", [])]}}
+          json.dump(state, open("state.json", "w"), indent=2)
+          print("live state written: %d service account(s)" % len(state["service_accounts"]))
+          PY
+
+      - name: Plan
+        run: |
+          python3 .rw-tooling/scripts/repos_wif_plan.py --feature wif-link \
+            --register "$REGISTER" --state state.json > plan.json
+          echo "actions: $(jq length plan.json)"
+
+      - name: Report
+        run: |
+          examined=$(jq '[.[].repo] | unique | length' plan.json)
+          {
+            echo "## repos-wif-link"
+            echo
+            echo "Examined **${examined}** repo(s); **$(jq length plan.json)** plan entr(ies)."
+            echo
+            echo "| repo | action | details |"
+            echo "|---|---|---|"
+            jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tostring)` |"' plan.json
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.[] | select(.action=="unregistered-binding") | "::warning::\(.repo): \(.details.service_account) has a binding the register does not list: \(.details.role) \(.details.member)"' plan.json
+
+      - name: Apply (add-wif-binding only, in order)
+        run: |
+          writes=$(jq '[.[] | select(.action=="add-wif-binding")] | length' plan.json)
+          echo "write actions to apply: $writes"
+          [ "$writes" -gt 0 ] || exit 0
+          # fd 3, not a pipe: gcloud would otherwise eat the loop's stdin.
+          while read -r a <&3; do
+            sa=$(jq -r .details.service_account <<<"$a")
+            role=$(jq -r .details.role <<<"$a")
+            mem=$(jq -r .details.member <<<"$a")
+            # defence in depth: the planner can only emit this role, the workflow re-checks it
+            [ "$role" = "roles/iam.workloadIdentityUser" ] || { echo "::error::refusing role $role"; exit 1; }
+            echo "add-wif-binding $sa <- $mem"
+            gcloud iam service-accounts add-iam-policy-binding "${sa}@${PROJECT_ID}.iam.gserviceaccount.com" \
+              --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet
+          done 3< <(jq -c '.[] | select(.action=="add-wif-binding")' plan.json)
