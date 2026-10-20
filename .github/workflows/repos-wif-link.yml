@@ -178,6 +178,11 @@ jobs:
         run: |
           writes=$(jq '[.[] | select(.action=="add-wif-binding")] | length' plan.json)
           echo "write actions to apply: $writes"
+          # Re-check the whole plan BEFORE the first write: an unknown verb or a role other than WIF-user fails with nothing applied.
+          bad=$(jq '[.[] | select(.action as $a | ["in-sync","drift","unregistered-binding","add-wif-binding"] | index($a) | not)] | length' plan.json)
+          [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
+          badrole=$(jq '[.[] | select(.action=="add-wif-binding" and .details.role != "roles/iam.workloadIdentityUser")] | length' plan.json)
+          [ "$badrole" = "0" ] || { echo "::error::refusing $badrole binding(s) with a role other than roles/iam.workloadIdentityUser; nothing applied"; exit 1; }
           [ "$writes" -gt 0 ] || exit 0
           # fd 3, not a pipe: gcloud would otherwise eat the loop's stdin.
           while read -r a <&3; do

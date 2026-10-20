@@ -184,6 +184,9 @@ jobs:
           ORG: ${{ steps.reg.outputs.org }}
         run: |
           set -euo pipefail
+          # Re-check the whole plan BEFORE the first write: a verb outside the allow-list fails the step with nothing applied.
+          bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","create-repo","rename-repo"] | index($a) | not)] | length' "$RUNNER_TEMP/plan.json")
+          [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
           applied=0
           while IFS= read -r a; do
             repo=$(jq -r .repo <<<"$a")
