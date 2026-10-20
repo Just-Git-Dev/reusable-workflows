@@ -140,8 +140,7 @@ their next rotation. With the default false, v3.8.0 is a minor.
 newest, because disabled versions are billed) was written and then pulled: it reverses the 2026-08-17
 ruling "disable is inline, destroy stays in the sweeper" without addressing that entry's reasons, and the
 review found hazards (it can destroy what the same run just disabled or the last good version after a
-rollback, its dry run under-reports, no etag or `latest` re-check). It waits for the owner; see TODO.md
-"Secret Manager".
+rollback, its dry run under-reports, no etag or `latest` re-check). Owner decision 2026-10-20: old versions are destroyed by the EXISTING `cleanup-secret-versions` sweeper with `enable_destroy: true` on a schedule, which already has the quarantine clock, the `--etag` re-check and the consumer scan; sync-bundle-key stays disable-only. Disabled versions are billed, so consumers should schedule it. The pulled code is in commit 56ff8c0 (TODO.md "Secret Manager", closed as superseded).
 
 **Consequences.** Minor bump (v3.8.0): one new optional input. Docs: `docs/sync-bundle-key.md` (value
 safety, `strict_values`, IAM now lists `secretmanager.secrets.get`).
