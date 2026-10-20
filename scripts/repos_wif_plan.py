@@ -16,6 +16,8 @@ import sys
 
 import yaml
 
+import repos_protected
+
 ROLE = "roles/iam.workloadIdentityUser"
 FEATURE = "wif-link"
 SA_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
@@ -27,7 +29,7 @@ def act(repo, action, details):
     return {"feature": FEATURE, "repo": repo, "action": action, "details": details}
 
 
-def validate(reg, errors):
+def validate(reg, errors, protected=frozenset(repos_protected.ALWAYS)):
     """Validate only the keys F5 reads. Returns the usable repo list."""
     if not isinstance(reg, dict):
         errors.append(("register", "register is not a mapping"))
@@ -59,6 +61,10 @@ def validate(reg, errors):
         if not isinstance(sas, list) or not all(isinstance(s, str) and SA_RE.match(s) for s in sas):
             errors.append((name, "gcp.service_accounts must be a list of valid service account names"))
             continue
+        for s in dict.fromkeys(sas):
+            if s in protected:
+                errors.append((s, "protected service account: F5 never links it (docs/repos-register.md "
+                                  "section 5, item 9)"))
         out.append((name, mode, list(dict.fromkeys(sas))))
     return out
 
@@ -68,6 +74,7 @@ def main(argv=None):
     ap.add_argument("--feature", required=True)
     ap.add_argument("--register", required=True)
     ap.add_argument("--state", required=True)
+    repos_protected.add_argument(ap)
     args = ap.parse_args(argv)
     if args.feature != FEATURE:
         print("error: register: unknown feature %r" % args.feature, file=sys.stderr)
@@ -79,7 +86,7 @@ def main(argv=None):
         state = json.load(f)
 
     errors = []
-    repos = validate(reg, errors)
+    repos = validate(reg, errors, repos_protected.parse(args.protected_service_accounts))
     number, pool = state.get("project_number"), state.get("pool")
     if not number or not pool:
         errors.append(("register", "state needs project_number and pool"))

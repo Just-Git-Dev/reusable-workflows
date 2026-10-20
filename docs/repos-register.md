@@ -166,7 +166,13 @@ No feature, in any mode, ever:
    service, one Artifact Registry repository; project-level grants are the access-provisioning
    owner's, done by a human config change);
 8. removes or changes a binding it did not add — F5 only ever **adds**
-   `roles/iam.workloadIdentityUser` principalSets; it never removes one.
+   `roles/iam.workloadIdentityUser` principalSets; it never removes one;
+9. **links, creates or edits a protected service account.** `repo-admin` is ALWAYS protected: the
+   name is hard-coded in every GCP planner and nothing in the register or the inputs can lift it.
+   The caller may protect more accounts with the `protected_service_accounts` input (a comma or
+   newline list, merged with `repo-admin`; use it for the CI accounts the access-provisioning
+   config declares). Why: linking `repo-admin` to a repo would hand its power to every branch and
+   pull-request job of that repo, with no environment review in the way.
 
 **Removing a repo (or SA, variable, link, deploy entry) from the register = stop managing it.**
 
@@ -221,10 +227,16 @@ Inputs: the GCP project id and number, pool id, the `repo-admin` SA email and th
 The SA must already exist — a missing SA is an error (F5 never creates one; that is F6). The
 ORG-level pool and provider are set up once by the access-provisioning owner and are never
 touched here; the provider's condition limits every link to repos of the same org.
+**A protected service account is never linked** ([§5](#5-the-never-list), item 9): a repo whose
+`gcp.service_accounts` names `repo-admin`, or any account in `protected_service_accounts`, makes
+the planner exit `1` with `error: <sa>: protected service account ...` and no plan at all (not a
+partial one), in report and enforce mode alike.
 
 **F6 — the project's own service accounts.** Creates each listed SA that does not exist, with its
 required description. Never deletes one, never creates a key, never grants it a project-level
-role. A listed SA that exists is `in-sync`, or `drift` if its description or display name differ
+role, and refuses (error, exit `1`, no plan) a register entry that names a protected service
+account (`repo-admin` always, plus `protected_service_accounts`): the access-provisioning config
+owns those accounts and their descriptions. A listed SA that exists is `in-sync`, or `drift` if its description or display name differ
 (enforce updates them).
 
 **F7 — deploy scope.** Per `deploys:` entry, so a repo can deploy only its own service:
@@ -272,12 +284,14 @@ All four planners take `--feature <name> --register <repos.yaml> --state <state.
 nothing to stdout, one `error: <repo|sa|register>: <reason>` line per error to stderr and exit
 `1`. An unknown `--feature` exits non-zero with nothing on stdout. The register is read as YAML
 (JSON is valid YAML, so a fixture may be JSON in a `.yaml` file).
+`--protected-service-accounts` (F5-F7) takes a comma or newline separated list of account names; the
+planner merges it with the hard-coded `repo-admin`, so omitting it still protects `repo-admin`.
 
 | Planner | `--feature` values | Notes on the inputs |
 |---|---|---|
 | `scripts/repos_plan.py` (F1-F4) | `register`, `create`, `settings`, `variables` | `--state` may be omitted for `register` (F1 needs no live state) |
-| `scripts/repos_wif_plan.py` (F5) | `wif-link` | |
-| `scripts/repos_sa_plan.py` (F6) | `service-accounts` | |
+| `scripts/repos_wif_plan.py` (F5) | `wif-link` | optional `--protected-service-accounts <list>` |
+| `scripts/repos_sa_plan.py` (F6) | `service-accounts` | optional `--protected-service-accounts <list>` |
 | `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | |
 
 **F1-F4 live state** — one entry per repo the workflow looked up. A repo with `exists: false`, or

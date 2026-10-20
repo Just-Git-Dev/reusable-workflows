@@ -18,6 +18,11 @@ For each service account in a repo's `gcp.service_accounts`, the SA's IAM policy
 | `in-sync` | every pair of the repo is linked and nothing else is on its SAs | nothing |
 | `unregistered-binding` | a binding on a registered SA that the register does not list | nothing: reported (job warning), never removed |
 
+**Protected service accounts.** `repo-admin` is always protected (hard-coded in the planner); the
+`protected_service_accounts` input adds more. A repo that lists a protected SA makes the planner exit
+`1` with `error: <sa>: protected service account ...` and no plan, in both modes: linking it would give
+every branch and pull-request job of that repo the identity that creates SAs and sets IAM.
+
 The workflow never removes a binding, grants any other role, creates a service account (a missing
 SA is an error; use [F6](repos-service-accounts.md)), or touches the pool or provider.
 
@@ -35,6 +40,8 @@ nothing to do and the job summary lists every repo examined (with the count). In
 | `service_account` | yes | | the repo-admin SA email |
 | `project_id` | yes | | GCP project of the service accounts |
 | `pool` | yes | | org-level workload identity pool id used in the principalSet |
+| `project_number` | yes | | the GCP project NUMBER (digits) of `project_id`; an input, so the repo-admin SA needs no `projects.get` |
+| `protected_service_accounts` | no | empty | comma or newline list of SA names F5 must never link; merged with the always-protected `repo-admin` |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
 
@@ -49,4 +56,5 @@ jobs:
       service_account: repo-admin@example-proj.iam.gserviceaccount.com
       project_id: example-proj
       pool: example-pool
+      project_number: '123456789'
 ```

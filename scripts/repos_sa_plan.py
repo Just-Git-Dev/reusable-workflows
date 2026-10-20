@@ -17,6 +17,8 @@ import sys
 
 import yaml
 
+import repos_protected
+
 FEATURE = "service-accounts"
 SA_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
@@ -26,7 +28,7 @@ def act(action, details):
     return {"feature": FEATURE, "repo": None, "action": action, "details": details}
 
 
-def validate(reg, errors):
+def validate(reg, errors, protected=frozenset(repos_protected.ALWAYS)):
     if not isinstance(reg, dict):
         errors.append(("register", "register is not a mapping"))
         return []
@@ -51,6 +53,10 @@ def validate(reg, errors):
         ok = True
         if not isinstance(name, str) or not SA_RE.match(name):
             errors.append((who, "name must be 6-30 chars, ^[a-z][a-z0-9-]*$, no trailing hyphen"))
+            ok = False
+        if name in protected:
+            errors.append((who, "protected service account: F6 never manages it (docs/repos-register.md "
+                                "section 5, item 9)"))
             ok = False
         desc = e.get("description")
         if not isinstance(desc, str) or not desc.strip():
@@ -77,6 +83,7 @@ def main(argv=None):
     ap.add_argument("--feature", required=True)
     ap.add_argument("--register", required=True)
     ap.add_argument("--state", required=True)
+    repos_protected.add_argument(ap)
     args = ap.parse_args(argv)
     if args.feature != FEATURE:
         print("error: register: unknown feature %r" % args.feature, file=sys.stderr)
@@ -88,7 +95,7 @@ def main(argv=None):
         state = json.load(f)
 
     errors = []
-    entries = validate(reg, errors)
+    entries = validate(reg, errors, repos_protected.parse(args.protected_service_accounts))
     if errors:
         for who, why in dict.fromkeys(errors):
             print("error: %s: %s" % (who, why), file=sys.stderr)

@@ -18,6 +18,10 @@ Name rule: 6-30 chars, `^[a-z][a-z0-9-]*$`, no trailing hyphen. `description` is
 is for, who owns it, when and why it was made). `display_name` defaults to the name on create and
 is compared only when the register states it. An invalid entry refuses the whole run.
 
+A register entry that names a protected service account (`repo-admin` always, plus the
+`protected_service_accounts` input) is an error: the run is refused with no plan. The
+access-provisioning config owns those accounts and their descriptions.
+
 The workflow never deletes a service account, never creates a key and never grants any role.
 
 ## Modes
@@ -33,6 +37,7 @@ the write actions run in plan order and the first failure stops the job.
 | `workload_identity_provider` | yes | | WIF provider used to authenticate |
 | `service_account` | yes | | the repo-admin SA email |
 | `project_id` | yes | | GCP project the service accounts live in |
+| `protected_service_accounts` | no | empty | comma or newline list of SA names F6 must never manage; merged with the always-protected `repo-admin` |
 | `register_path` | no | `repos.yaml` | register file in the caller repo |
 | `environment` | no | `repo-admin` | GitHub environment holding the approval gate |
 

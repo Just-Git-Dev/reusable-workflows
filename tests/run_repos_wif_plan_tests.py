@@ -91,7 +91,7 @@ def unreg(r, s, role, m):
             "details": {"service_account": s, "role": role, "member": m}}
 
 
-def run(reg, st, tmp, reg_is_path=False):
+def run(reg, st, tmp, reg_is_path=False, extra=()):
     d = Path(tmp)
     rp, sp = d / "repos.yaml", d / "state.json"
     if reg_is_path:
@@ -101,7 +101,7 @@ def run(reg, st, tmp, reg_is_path=False):
         sp.write_text(json.dumps(st))
     p = subprocess.run(
         [sys.executable, str(PLANNER), "--feature", "wif-link", "--register", str(rp),
-         "--state", str(sp)], capture_output=True, text=True)
+         "--state", str(sp), *extra], capture_output=True, text=True)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -137,9 +137,9 @@ def expect(name, reg, st, want):
     return acts
 
 
-def expect_error(name, reg, st, needle):
+def expect_error(name, reg, st, needle, extra=()):
     with tempfile.TemporaryDirectory() as t:
-        rc, out, err = run(reg, st, t)
+        rc, out, err = run(reg, st, t, extra=extra)
     lines = [ln for ln in err.splitlines() if ln.strip()]
     check(name + " (exit 1)", rc == 1, "exit %d" % rc)
     check(name + " (no stdout)", out.strip() == "", "stdout=%r" % out[:100])
@@ -285,6 +285,28 @@ def main():
     bad = register([repo("payments-api", [D])])
     bad["version"] = 2
     expect_error("version != 1", bad, state({D: sa()}), "register")
+
+    # 14. B1: a protected SA is never linked. repo-admin is hard-coded (no input needed), the
+    # input adds more; the error is total (no partial plan) in report and enforce mode alike.
+    for mode in ("enforce", "report"):
+        ok_repo, bad_repo = repo("payments-api", [D]), repo("project", ["repo-admin"])
+        st = state({D: sa(), "repo-admin": sa()})
+        expect_error("B1 repo-admin refused (" + mode + ")",
+                     register([ok_repo, bad_repo], mode=mode), st, "repo-admin")
+        expect_error("B1 repo-admin refused when it does not exist live (" + mode + ")",
+                     register([bad_repo], mode=mode), state({}), "protected")
+        expect_error("B1 input list adds a protected SA (" + mode + ")",
+                     register([repo("payments-api", ["github-releaser"])], mode=mode),
+                     state({"github-releaser": sa()}), "github-releaser",
+                     extra=["--protected-service-accounts", "ci-deployer-x,github-releaser"])
+    expect_error("B1 newline list", register([repo("a-repo", ["ci-deployer-x"])]),
+                 state({"ci-deployer-x": sa()}), "ci-deployer-x",
+                 extra=["--protected-service-accounts", "foo-bar-baz\nci-deployer-x\n"])
+    # a lookalike is not protected; an empty list still leaves repo-admin protected
+    expect("B1 unprotected SA still linked with a list given",
+           register([repo("payments-api", [D])]), state({D: sa()}), [add("payments-api", D)])
+    expect_error("B1 empty list keeps repo-admin protected", register([repo("p", ["repo-admin"])]),
+                 state({"repo-admin": sa()}), "repo-admin", extra=["--protected-service-accounts", ""])
 
     print("repos_wif_plan: %d checks, %d failed" % (COUNT[0], len(FAILURES)))
     for f in FAILURES:

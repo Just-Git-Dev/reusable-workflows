@@ -18,6 +18,7 @@
 #         service_account: repo-admin@example-proj.iam.gserviceaccount.com
 #         project_id: example-proj
 #         pool: example-pool
+#         project_number: '123456789'
 name: repos-wif-link
 
 on:
@@ -33,6 +34,15 @@ on:
         type: string
       project_id:
         description: 'GCP project id that hosts the service accounts.'
+        required: true
+        type: string
+      protected_service_accounts:
+        description: 'Comma or newline list of service account names this workflow must never link, merged with the always-protected repo-admin (use it for the CI accounts the access-provisioning config declares).'
+        required: false
+        type: string
+        default: ''
+      project_number:
+        description: 'GCP project NUMBER (digits) of project_id, used in the principalSet; an input so the repo-admin SA needs no projects.get.'
         required: true
         type: string
       pool:
@@ -74,17 +84,21 @@ jobs:
     env:
       PROJECT_ID: ${{ inputs.project_id }}
       POOL: ${{ inputs.pool }}
+      PROJECT_NUMBER: ${{ inputs.project_number }}
       REGISTER: ${{ inputs.register_path }}
+      PROTECTED_SERVICE_ACCOUNTS: ${{ inputs.protected_service_accounts }}
     steps:
       - name: Refuse unless repo-admin on the main branch
         env:
           ENVIRONMENT: ${{ inputs.environment }}
           REF: ${{ github.ref }}
           REGISTER_PATH: ${{ inputs.register_path }}
+          PROJECT_NUMBER: ${{ inputs.project_number }}
         run: |
           set -euo pipefail
           [ "$ENVIRONMENT" = "repo-admin" ] || { echo "::error::environment is '$ENVIRONMENT', this workflow runs only in repo-admin"; exit 1; }
           [ "$REF" = "refs/heads/main" ] || { echo "::error::ref is '$REF'; repos-as-code runs only on refs/heads/main"; exit 1; }
+          [[ "$PROJECT_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::project_number must be digits only"; exit 1; }
           [[ "$REGISTER_PATH" =~ ^[A-Za-z0-9._/-]+$ && "$REGISTER_PATH" != *..* && "$REGISTER_PATH" != /* ]] || { echo "::error::register_path '$REGISTER_PATH' is not a plain relative path"; exit 1; }
 
       - name: Checkout the caller (the register)
@@ -132,7 +146,7 @@ jobs:
                   return None
               sys.exit("error: register: gcloud %s failed: %s" % (" ".join(args[:4]), p.stderr.strip()[:300]))
 
-          number = str(gcloud("projects", "describe", project)["projectNumber"])
+          number = os.environ["PROJECT_NUMBER"]
           wanted = []
           for repo in reg.get("repos") or []:
               for sa in (repo.get("gcp") or {}).get("service_accounts") or []:
@@ -157,7 +171,8 @@ jobs:
       - name: Plan
         run: |
           python3 .repos-src/scripts/repos_wif_plan.py --feature wif-link \
-            --register "$REGISTER" --state state.json > plan.json
+            --register "$REGISTER" --state state.json \
+            --protected-service-accounts "$PROTECTED_SERVICE_ACCOUNTS" > plan.json
           echo "actions: $(jq length plan.json)"
 
       - name: Report

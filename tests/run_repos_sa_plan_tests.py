@@ -81,7 +81,7 @@ def insync(name=None):
     return act("in-sync")
 
 
-def run(reg, st, tmp, paths=False):
+def run(reg, st, tmp, paths=False, extra=()):
     d = Path(tmp)
     rp, sp = d / "repos.yaml", d / "state.json"
     if paths:
@@ -91,7 +91,7 @@ def run(reg, st, tmp, paths=False):
         sp.write_text(json.dumps(st))
     p = subprocess.run(
         [sys.executable, str(PLANNER), "--feature", "service-accounts", "--register", str(rp),
-         "--state", str(sp)], capture_output=True, text=True)
+         "--state", str(sp), *extra], capture_output=True, text=True)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -130,9 +130,9 @@ def expect(name, reg, st, want, ordered=True):
     return acts
 
 
-def expect_error(name, reg, st, needle):
+def expect_error(name, reg, st, needle, extra=()):
     with tempfile.TemporaryDirectory() as t:
-        rc, out, err = run(reg, st, t)
+        rc, out, err = run(reg, st, t, extra=extra)
     lines = [ln for ln in err.splitlines() if ln.strip()]
     check(name + " (exit 1)", rc == 1, "exit %d" % rc)
     check(name + " (no stdout)", out.strip() == "", "stdout=%r" % out[:100])
@@ -261,6 +261,21 @@ def main():
     bad = register([entry(N)])
     bad["version"] = 2
     expect_error("version != 1", bad, state(), "register")
+
+    # 13. B1: F6 never manages a protected SA (repo-admin always; the input adds more)
+    for mode in ("enforce", "report"):
+        expect_error("B1 repo-admin refused create (" + mode + ")",
+                     register([entry("sa-one-aa"), entry("repo-admin")], mode=mode), state(),
+                     "repo-admin")
+        expect_error("B1 repo-admin refused update (" + mode + ")",
+                     register([entry("repo-admin", description="changed")], mode=mode),
+                     state(live("repo-admin")), "repo-admin")
+    expect_error("B1 input list adds a protected SA", register([entry("github-releaser")]), state(),
+                 "github-releaser", extra=["--protected-service-accounts", "github-releaser,other-sa-xx"])
+    expect_error("B1 newline list", register([entry("github-releaser")]), state(), "github-releaser",
+                 extra=["--protected-service-accounts", "other-sa-xx\ngithub-releaser"])
+    expect("B1 unprotected SA unaffected by a list", register([entry("sa-one-aa")]),
+           state(live("sa-one-aa")), [insync()])
 
     print("repos_sa_plan: %d checks, %d failed" % (COUNT[0], len(FAILURES)))
     for f in FAILURES:
