@@ -20,7 +20,6 @@ FEATURE = "deploy-scope"
 RUN_DEV = "roles/run.developer"
 SA_USER = "roles/iam.serviceAccountUser"
 GAR_WRITER = "roles/artifactregistry.writer"
-CLUSTER_VIEWER = "roles/container.clusterViewer"
 MAX_SA_LEN = 30
 
 
@@ -39,15 +38,17 @@ def plan_repo(repo, mode, state, errors, protected, admin_email):
     name = repo["name"]
     project = state.get("project_id")
     writes = []  # (verb, details) in apply order
-    legacy = []
     admin_done = set()          # runtime SAs whose repo-admin binding is already planned for this repo
     for d in repo.get("deploys") or []:
-        if "cloud_run" in d:
-            deployable = d["cloud_run"]
-        elif isinstance(d.get("gke"), dict):
-            deployable = d["gke"].get("workload")
-        else:
+        if "gke" in d:
+            # ruling 19: GKE is deferred; no kubectl path exists, so the entry is only reported
+            writes.append(("unsupported", {
+                "key": "gke",
+                "reason": "GKE deploy scope is not supported yet: F7 acts on cloud_run entries only"}))
             continue
+        if "cloud_run" not in d:
+            continue
+        deployable = d["cloud_run"]
         if not deployable:
             errors.append("error: %s: deploys entry without a deployable name" % name)
             continue
@@ -62,10 +63,12 @@ def plan_repo(repo, mode, state, errors, protected, admin_email):
             continue
         member = "serviceAccount:%s@%s.iam.gserviceaccount.com" % (deployer, project)
 
-        def bind(rtype, res, role, iam):
+        def bind(rtype, res, role, iam, region=None):
             if not held(iam, role, member):
-                writes.append(("add-resource-binding", {
-                    "resource_type": rtype, "resource": res, "role": role, "member": member}))
+                det = {"resource_type": rtype, "resource": res, "role": role, "member": member}
+                if region:
+                    det["region"] = region      # from the register: no live lookup is ever needed
+                writes.append(("add-resource-binding", det))
 
         if "cloud_run" in d:
             region, runtime = d.get("region"), d.get("runtime_service_account")
@@ -93,41 +96,12 @@ def plan_repo(repo, mode, state, errors, protected, admin_email):
                 writes.append(("create-service", {
                     "service": deployable, "region": region,
                     "runtime_service_account": runtime, "image": "placeholder"}))
-            bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"))
+            bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"), region)
             bind("iam.serviceAccount", runtime_email, SA_USER, sa.get("iam"))
             gar = d.get("image_repository")
             if gar:
                 bind("artifactregistry.repository", gar, GAR_WRITER,
                      ((state.get("gar_repositories") or {}).get(gar) or {}).get("iam"))
-        else:
-            g = d["gke"]
-            cluster, ns = g.get("cluster"), g.get("namespace")
-            if not cluster or not ns:
-                errors.append("error: %s: gke '%s' needs cluster and namespace" % (name, deployable))
-                continue
-            cl = (state.get("gke_clusters") or {}).get(cluster) or {}
-            # GKE has no cluster-resource IAM: clusterViewer exists only at project level, so it
-            # is never granted here. Its absence is a report, in both modes.
-            if CLUSTER_VIEWER not in ((state.get("project_roles") or {}).get(deployer) or []):
-                writes.append(("unsupported", {
-                    "key": "gke.cluster_viewer",
-                    "reason": "%s exists only at project level (GKE has no cluster IAM); grant it "
-                              "to %s in the access-provisioning config" % (CLUSTER_VIEWER, deployer)}))
-            applied = any(r.get("namespace") == ns and r.get("workload") == deployable
-                          and r.get("member") == member
-                          and r.get("resource_names") == [deployable]
-                          for r in cl.get("rbac") or [])
-            if not applied:
-                writes.append(("apply-k8s-rbac", {
-                    "cluster": cluster, "namespace": ns, "workload": deployable,
-                    "resource_names": [deployable], "member": member}))
-
-        for role in (state.get("project_roles") or {}).get(deployer) or []:
-            if role == CLUSTER_VIEWER:
-                continue
-            if role.startswith("roles/run.") or role.startswith("roles/container."):
-                legacy.append(act(name, "legacy-grant", {
-                    "service_account": deployer, "role": role, "scope": "project"}))
 
     out = []
     for verb, details in writes:
@@ -135,7 +109,6 @@ def plan_repo(repo, mode, state, errors, protected, admin_email):
             out.append(act(name, verb, details))
         else:
             out.append(act(name, "drift", dict(would=verb, **details)))
-    out.extend(legacy)
     if not out:
         out.append(act(name, "in-sync", {}))
     return out

@@ -9,13 +9,5 @@
   },
   "gar_repositories": {
     "europe-west1/services": {"iam": []}
-  },
-  "gke_clusters": {
-    "europe-west1/main": {"iam": [], "rbac": []}
-  },
-  "project_roles": {
-    "payments-api-deployer": [],
-    "ledger-worker-deployer": [],
-    "batch-runner-deployer": []
   }
 }

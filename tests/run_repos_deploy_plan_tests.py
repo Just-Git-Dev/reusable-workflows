@@ -15,10 +15,6 @@ parts the doc leaves to "the fixtures", so it is the implementer's contract:
                  "cloud_run_services": {"<service>": {"iam": [POLICY]}},   # absent key = missing
                  "service_accounts":   {"<sa name>":  {"iam": [POLICY]}},  # runtime SAs
                  "gar_repositories":   {"<location>/<repo>": {"iam": [POLICY]}},
-                 "gke_clusters":       {"<location>/<name>": {"iam": [POLICY],
-                                         "rbac": [{"namespace", "workload", "member",
-                                                   "resource_names": [..]}]}},
-                 "project_roles":      {"<deployer sa name>": ["roles/..", ..]}
                }
                POLICY = {"role": "roles/..", "members": ["serviceAccount:..", ..]}
 
@@ -37,17 +33,14 @@ parts the doc leaves to "the fixtures", so it is the implementer's contract:
                "<location>/<repo>" (the register's image_repository). GKE has no cluster-level IAM,
                so there is no container.cluster resource_type.
   Order        per repo: create-service, run.developer on the service, serviceAccountUser on the
-               runtime SA, artifactregistry.writer; GKE: [unsupported if no project-level
-               clusterViewer], apply-k8s-rbac.
+               runtime SA, artifactregistry.writer. A run.service binding's details also carry
+               "region" (the register's region; no live lookup is ever needed).
+  GKE          ruling 19: a `gke` entry yields exactly one unsupported{"key": "gke", "reason"} in
+               BOTH modes and nothing else (no apply-k8s-rbac verb exists, no cluster state is
+               read).
   Mode         repo.mode, else defaults.mode, else "report". Report mode: drift{would:<verb>,
-               ...that verb's details}; legacy-grant is emitted in both modes.
-  legacy-grant a deployer's project_roles entry starting "roles/run." or "roles/container.",
-               except roles/container.clusterViewer (reported, never removed; no verb removes it).
-  GKE viewer   clusterViewer exists only at project level, so F7 never grants it. A GKE deployer
-               whose project_roles lacks it gets, in BOTH modes, one non-write
-               unsupported{"key": "gke.cluster_viewer", "reason": <names the deployer SA and
-               roles/container.clusterViewer>} before apply-k8s-rbac. The state's
-               gke_clusters[].iam is not read.
+               ...that verb's details}.
+  No legacy    F7 reads no project-level IAM: there is no legacy-grant verb and no project_roles.
   Errors       deployer name > 30 chars -> `error: <repo>: ...` on stderr, empty stdout, rc 1.
 
 Usage:  python3 tests/run_repos_deploy_plan_tests.py
@@ -65,12 +58,11 @@ ROOT = Path(__file__).resolve().parent.parent
 PLANNER = Path(os.environ.get("REPOS_DEPLOY_PLANNER", ROOT / "scripts" / "repos_deploy_plan.py"))
 FIX = Path(__file__).resolve().parent / "fixtures-repos-deploy"
 
-WRITE_VERBS = {"create-service", "add-resource-binding", "apply-k8s-rbac"}
-NON_WRITE = {"in-sync", "skip", "drift", "unsupported", "legacy-grant"}
+WRITE_VERBS = {"create-service", "add-resource-binding"}
+NON_WRITE = {"in-sync", "skip", "drift", "unsupported"}
 RUN_DEV = "roles/run.developer"
 SA_USER = "roles/iam.serviceAccountUser"
 GAR_W = "roles/artifactregistry.writer"
-CLUSTER_VIEWER = "roles/container.clusterViewer"
 SUFFIX = ".iam.gserviceaccount.com"
 ADMIN_EMAIL = "repo-admin@example-proj.iam.gserviceaccount.com"
 
@@ -131,8 +123,11 @@ def shape(acts):
     return [(a["action"], a["details"]) for a in acts]
 
 
-def binding(rtype, res, role, mem):
-    return ("add-resource-binding", {"resource_type": rtype, "resource": res, "role": role, "member": mem})
+def binding(rtype, res, role, mem, region="europe-west1"):
+    d = {"resource_type": rtype, "resource": res, "role": role, "member": mem}
+    if rtype == "run.service":
+        d["region"] = region
+    return ("add-resource-binding", d)
 
 
 def run_bindings(svc, runtime, sa, gar="europe-west1/services"):
@@ -163,11 +158,6 @@ def fully_bound_state():
             member(sa), "serviceAccount:" + ADMIN_EMAIL]}]}
     st["gar_repositories"]["europe-west1/services"] = {"iam": [{"role": GAR_W, "members": [
         member("payments-api-deployer"), member("ledger-worker-deployer")]}]}
-    st["project_roles"]["batch-runner-deployer"] = [CLUSTER_VIEWER]
-    st["gke_clusters"]["europe-west1/main"] = {
-        "iam": [],
-        "rbac": [{"namespace": "batch", "workload": "batch-runner",
-                  "member": member("batch-runner-deployer"), "resource_names": ["batch-runner"]}]}
     return st
 
 
@@ -269,77 +259,46 @@ def cross_service_isolation_each_deployer_only_its_own_service():
 @case
 def already_bound_is_in_sync():
     acts = plan(load_register(), fully_bound_state())
-    for name in ("payments-api", "ledger-worker", "batch-runner"):
+    for name in ("payments-api", "ledger-worker"):
         assert shape(of(acts, name)) == [("in-sync", {})], (name, json.dumps(shape(of(acts, name))))
 
 
 @case
-def legacy_project_level_grants_are_reported_never_removed():
-    st = fully_bound_state()
-    st["project_roles"]["payments-api-deployer"] = [
-        "roles/run.developer", "roles/container.developer", "roles/run.admin", "roles/viewer"]
-    acts = plan(load_register(), st)
-    leg = [a["details"] for a in of(acts, "payments-api") if a["action"] == "legacy-grant"]
-    exp = [{"service_account": "payments-api-deployer", "role": r, "scope": "project"}
-           for r in ("roles/run.developer", "roles/container.developer", "roles/run.admin")]
-    key = lambda d: d["role"]
-    assert sorted(leg, key=key) == sorted(exp, key=key), leg
-    assert not [a for a in acts if a["action"] in WRITE_VERBS], "legacy grants must plan no write"
-
-
-@case
-def legacy_grant_also_reported_in_report_mode():
-    reg, st = load_register(), fully_bound_state()
-    repo(reg, "payments-api")["mode"] = "report"
-    st["project_roles"]["payments-api-deployer"] = ["roles/run.developer"]
-    acts = of(plan(reg, st), "payments-api")
-    assert {"service_account": "payments-api-deployer", "role": RUN_DEV, "scope": "project"} in \
-        [a["details"] for a in acts if a["action"] == "legacy-grant"], json.dumps(shape(acts))
-
-
-@case
-def gke_rbac_scoped_to_the_workload_and_cluster_viewer():
-    acts = of(plan(load_register(), load_state()), "batch-runner")
-    rbac = ("apply-k8s-rbac", {"cluster": "europe-west1/main", "namespace": "batch",
-                               "workload": "batch-runner", "resource_names": ["batch-runner"],
-                               "member": member("batch-runner-deployer")})
-    got = shape(acts)
-    assert len(got) == 2 and got[1] == rbac, json.dumps(got)
-    verb, d = got[0]
-    assert verb == "unsupported" and d["key"] == "gke.cluster_viewer", got[0]
-    assert CLUSTER_VIEWER in d["reason"] and "batch-runner-deployer" in d["reason"], d
-
-
-@case
-def gke_cluster_viewer_is_never_a_resource_binding():
+def r19_gke_entry_is_unsupported_in_both_modes_and_nothing_else():
     for mode in ("enforce", "report"):
         reg = load_register()
         reg["defaults"]["mode"] = mode
-        acts = plan(reg, load_state())
-        assert not [a for a in acts if a["details"].get("resource_type") == "container.cluster"
-                    or a["details"].get("role") == CLUSTER_VIEWER], mode
-        gke = of(acts, "batch-runner")
-        assert gke[0]["action"] == "unsupported", (mode, gke)   # a report, never drift{would:...}
+        got = shape(of(plan(reg, load_state()), "batch-runner"))
+        assert len(got) == 1 and got[0][0] == "unsupported", (mode, got)
+        d = got[0][1]
+        assert d["key"] == "gke" and isinstance(d["reason"], str) and "GKE" in d["reason"], d
+        assert set(d) == {"key", "reason"}, d
+    blob = json.dumps(plan(load_register(), load_state()))
+    for bad in ("apply-k8s-rbac", "container.developer", "clusterViewer", "legacy-grant"):
+        assert bad not in blob, bad
 
 
 @case
-def gke_viewer_held_at_project_level_is_not_reported_nor_legacy():
-    st = fully_bound_state()
-    acts = of(plan(load_register(), st), "batch-runner")
-    assert shape(acts) == [("in-sync", {})], json.dumps(shape(acts))
-    st["gke_clusters"]["europe-west1/main"]["iam"] = [
-        {"role": CLUSTER_VIEWER, "members": [member("batch-runner-deployer")]}]
-    st["project_roles"]["batch-runner-deployer"] = []
+def r19_gke_needs_no_cluster_or_project_state():
+    st = load_state()
+    st.pop("gke_clusters", None)
+    st.pop("project_roles", None)
     got = shape(of(plan(load_register(), st), "batch-runner"))
-    assert got[0][0] == "unsupported", "a cluster-level policy must not count as a grant: %s" % got
+    assert got[0][0] == "unsupported", got
 
 
 @case
-def gke_never_grants_container_developer_and_resource_names_never_empty():
-    acts = plan(load_register(), load_state())
-    assert "roles/container.developer" not in json.dumps(acts), "container.developer planned"
-    rbac = [a["details"] for a in acts if a["action"] == "apply-k8s-rbac"]
-    assert rbac and all(d["resource_names"] and d["resource_names"] == [d["workload"]] for d in rbac), rbac
+def region_comes_from_the_register_for_existing_and_new_services():
+    reg = load_register()
+    repo(reg, "ledger-worker")["deploys"][0]["region"] = "us-central1"      # existing service
+    repo(reg, "payments-api")["deploys"][0]["region"] = "asia-east1"        # missing service
+    acts = plan(reg, load_state())
+    got = {a["details"]["resource"]: a["details"].get("region") for a in acts
+           if a["action"] == "add-resource-binding" and a["details"]["resource_type"] == "run.service"}
+    assert got == {"ledger-worker": "us-central1", "payments-api": "asia-east1"}, got
+    for a in acts:
+        if a["action"] == "add-resource-binding" and a["details"]["resource_type"] != "run.service":
+            assert "region" not in a["details"], a
 
 
 @case
@@ -348,7 +307,7 @@ def report_mode_emits_only_drift_legacy_and_in_sync():
     reg["defaults"]["mode"] = "report"
     acts = plan(reg, load_state())
     assert acts, "no actions"
-    assert {a["action"] for a in acts} <= {"drift", "legacy-grant", "in-sync", "unsupported"}, {a["action"] for a in acts}
+    assert {a["action"] for a in acts} <= {"drift", "in-sync", "unsupported"}, {a["action"] for a in acts}
     pay = of(acts, "payments-api")
     exp = [("drift", dict(would=v, **d)) for v, d in
            [admin_bind("payments-api-run"), create("payments-api", "payments-api-run")] + run_bindings(
@@ -361,7 +320,7 @@ def report_mode_default_when_no_mode_set():
     reg = load_register()
     reg["defaults"].pop("mode")
     acts = plan(reg, load_state())
-    assert acts and {a["action"] for a in acts} <= {"drift", "legacy-grant", "in-sync", "unsupported"}
+    assert acts and {a["action"] for a in acts} <= {"drift", "in-sync", "unsupported"}
 
 
 @case
@@ -369,8 +328,7 @@ def report_mode_in_sync_when_bound():
     reg = load_register()
     reg["defaults"]["mode"] = "report"
     acts = plan(reg, fully_bound_state())
-    assert [shape(of(acts, n)) for n in ("payments-api", "ledger-worker", "batch-runner")] == \
-        [[("in-sync", {})]] * 3
+    assert [shape(of(acts, n)) for n in ("payments-api", "ledger-worker")] == [[("in-sync", {})]] * 2
 
 
 @case
@@ -436,7 +394,6 @@ def unknown_keys_are_ignored():
 @case
 def never_list_no_delete_key_or_project_verbs_ever():
     st = fully_bound_state()
-    st["project_roles"]["payments-api-deployer"] = ["roles/run.admin"]
     for s in (load_state(), st):
         acts = plan(load_register(), s)
         assert acts, "empty plan"

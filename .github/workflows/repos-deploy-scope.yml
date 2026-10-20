@@ -2,11 +2,13 @@
 #
 # Per `deploys:` entry of the register (`repos.yaml`): create the Cloud Run service once with a
 # placeholder image if it is missing, then bind the repo's `<deployable>-deployer` SA on THAT
-# service only (resource-level IAM). GKE: a namespaced Role limited by resourceNames=[workload].
+# service only (resource-level IAM). Before creating a service, repo-admin adds
+# roles/iam.serviceAccountUser for itself on the runtime SA's own policy (no project-wide act-as).
+# GKE is deferred: a `gke` entry is only reported as unsupported (no kubectl path exists).
 # A thin shell over scripts/repos_deploy_plan.py: fetch live state -> plan -> report or apply.
 #
-# Never: a project-level grant, a delete, an SA key. Project-level run.* / container.* roles a
-# deployer still holds are REPORTED (legacy-grant), never removed.
+# Never: a project-level grant, a delete, an SA key. No project-level IAM is read; the region of
+# every service comes from the register.
 # Contract and action list: docs/repos-register.md. Page: docs/repos-deploy-scope.md.
 #
 # Caller example (pin the tag; the planner is fetched at the version stamped in WORKFLOW_VERSION):
@@ -145,41 +147,33 @@ jobs:
               return [{"role": b["role"], "members": b.get("members", [])}
                       for b in (policy or {}).get("bindings", [])]
 
+          # Read-only calls only: run services describe/get-iam-policy, SA get-iam-policy, GAR
+          # get-iam-policy. The region always comes from the register (never `run services list`);
+          # no project-level IAM and no cluster is read (GKE entries are only reported).
           state = {"project_id": project, "cloud_run_services": {}, "service_accounts": {},
-                   "gar_repositories": {}, "gke_clusters": {}, "project_roles": {}}
+                   "gar_repositories": {}}
           for repo in reg.get("repos") or []:
               for d in repo.get("deploys") or []:
-                  if "cloud_run" in d:
-                      svc, region = d["cloud_run"], d["region"]
-                      if gcloud("run", "services", "describe", svc, "--region", region,
-                                missing_ok=True) is not None:
-                          pol = gcloud("run", "services", "get-iam-policy", svc, "--region", region)
-                          state["cloud_run_services"][svc] = {"iam": iam(pol)}
-                      rt = d["runtime_service_account"]
-                      email = "%s@%s.iam.gserviceaccount.com" % (rt, project)
-                      state["service_accounts"][rt] = {"iam": iam(
-                          gcloud("iam", "service-accounts", "get-iam-policy", email))}
-                      gar = d.get("image_repository")
-                      if gar:
-                          loc, name = gar.split("/", 1)
-                          state["gar_repositories"][gar] = {"iam": iam(gcloud(
-                              "artifacts", "repositories", "get-iam-policy", name, "--location", loc))}
-                      deployable = svc
-                  else:
-                      g = d["gke"]
-                      deployable = g["workload"]
-                      # Cluster-level IAM and in-cluster RBAC are not readable without cluster
-                      # credentials; state them as empty so the plan always lists them.
-                      state["gke_clusters"].setdefault(g["cluster"], {"iam": [], "rbac": []})
-                  deployer = deployable + "-deployer"
-                  member = "serviceAccount:%s@%s.iam.gserviceaccount.com" % (deployer, project)
-                  pp = gcloud("projects", "get-iam-policy", project)
-                  state["project_roles"][deployer] = sorted(
-                      b["role"] for b in pp.get("bindings", []) if member in b.get("members", []))
+                  if "cloud_run" not in d:
+                      continue
+                  svc, region = d["cloud_run"], d["region"]
+                  if gcloud("run", "services", "describe", svc, "--region", region,
+                            missing_ok=True) is not None:
+                      pol = gcloud("run", "services", "get-iam-policy", svc, "--region", region)
+                      state["cloud_run_services"][svc] = {"iam": iam(pol)}
+                  rt = d["runtime_service_account"]
+                  email = "%s@%s.iam.gserviceaccount.com" % (rt, project)
+                  state["service_accounts"][rt] = {"iam": iam(
+                      gcloud("iam", "service-accounts", "get-iam-policy", email))}
+                  gar = d.get("image_repository")
+                  if gar:
+                      loc, name = gar.split("/", 1)
+                      state["gar_repositories"][gar] = {"iam": iam(gcloud(
+                          "artifacts", "repositories", "get-iam-policy", name, "--location", loc))}
           json.dump(state, open("state.json", "w"), indent=2)
-          print("live state written: %d service(s), %d runtime SA(s), %d GAR repo(s), %d cluster(s)" % (
+          print("live state written: %d service(s), %d runtime SA(s), %d GAR repo(s)" % (
               len(state["cloud_run_services"]), len(state["service_accounts"]),
-              len(state["gar_repositories"]), len(state["gke_clusters"])))
+              len(state["gar_repositories"])))
           PY
 
       - name: Plan
@@ -202,16 +196,34 @@ jobs:
             echo "|---|---|---|"
             jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tostring)` |"' plan.json
           } >> "$GITHUB_STEP_SUMMARY"
-          jq -r '.[] | select(.action=="legacy-grant") | "::warning::\(.repo): \(.details.service_account) still holds project-level \(.details.role)"' plan.json
-          jq -r '.[] | select(.action=="unsupported") | "::warning::\(.repo): \(.details.reason)"' plan.json
+          jq -r '.[] | select(.action=="unsupported") | "::warning::\(.repo): \(.details.key): \(.details.reason)"' plan.json
+          [ "$examined" != "0" ] || echo "::warning::the register lists no repos; nothing was examined"
 
       - name: Apply (write actions, in order)
         run: |
-          writes=$(jq '[.[] | select(.action=="create-service" or .action=="add-resource-binding" or .action=="apply-k8s-rbac")] | length' plan.json)
+          writes=$(jq '[.[] | select(.action=="create-service" or .action=="add-resource-binding")] | length' plan.json)
           echo "write actions to apply: $writes"
+          # Re-check the WHOLE plan before the first write: an unknown verb (there is no kubectl or
+          # k8s verb any more), a role/resource pair outside the allow-list, a member that is not a
+          # service account, or a name of the wrong shape fails with nothing applied.
+          bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","create-service","add-resource-binding"] | index($a) | not)] | length' plan.json)
+          [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
+          badbind=$(jq '[.[] | select(.action=="add-resource-binding") | select(
+              ((.details.resource_type=="run.service" and .details.role=="roles/run.developer"
+                  and (.details.resource | test("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"))
+                  and ((.details.region // "") | test("^[a-z]+-[a-z]+[0-9]$")))
+               or (.details.resource_type=="iam.serviceAccount" and .details.role=="roles/iam.serviceAccountUser")
+               or (.details.resource_type=="artifactregistry.repository" and .details.role=="roles/artifactregistry.writer"))
+              and (.details.member | startswith("serviceAccount:")) | not)] | length' plan.json)
+          [ "$badbind" = "0" ] || { echo "::error::refusing $badbind binding(s) outside the role/resource allow-list; nothing applied"; exit 1; }
+          badsvc=$(jq '[.[] | select(.action=="create-service") | select(
+              (.details.service | test("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"))
+              and (.details.region | test("^[a-z]+-[a-z]+[0-9]$"))
+              and (.details.runtime_service_account | test("^[a-z][a-z0-9-]{4,28}[a-z0-9]$")) | not)] | length' plan.json)
+          [ "$badsvc" = "0" ] || { echo "::error::refusing $badsvc create-service action(s) with a malformed name or region; nothing applied"; exit 1; }
           [ "$writes" -gt 0 ] || exit 0
-          # fd 3, not a pipe: gcloud/kubectl would otherwise eat the loop's stdin, and a pipe
-          # would run the loop in a subshell.
+          # fd 3, not a pipe: gcloud would otherwise eat the loop's stdin, and a pipe would run the
+          # loop in a subshell.
           while read -r a <&3; do
             act=$(jq -r .action <<<"$a")
             d=$(jq -c .details <<<"$a")
@@ -229,9 +241,7 @@ jobs:
                 echo "bind $role on $rtype $res"
                 case "$rtype" in
                   run.service)
-                    region=$(jq -r --arg s "$res" '[.[] | select(.action=="create-service" and .details.service==$s)][0].details.region // empty' plan.json)
-                    [ -n "$region" ] || region=$(gcloud run services list --project="$PROJECT_ID" --filter="metadata.name=$res" --format='value(metadata.labels."cloud.googleapis.com/location")')
-                    [ -n "$region" ] || { echo "::error::cannot resolve region of service $res"; exit 1; }
+                    region=$(jq -r .region <<<"$d")
                     gcloud run services add-iam-policy-binding "$res" --region="$region" \
                       --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet ;;
                   iam.serviceAccount)
@@ -241,34 +251,10 @@ jobs:
                     gcloud artifacts repositories add-iam-policy-binding "${res#*/}" --location="${res%%/*}" \
                       --member="$mem" --role="$role" --project="$PROJECT_ID" --quiet ;;
                   *)
-                    # The planner emits no other resource_type (GKE has no cluster-resource IAM, so
-                    # clusterViewer is reported, never bound); anything else is refused.
+                    # unreachable after the allow-list above; kept as defence in depth
                     echo "::error::refusing $role on $rtype $res: no resource-level IAM exists for it (a project-level grant is never made here)"
                     exit 1 ;;
                 esac
                 ;;
-              apply-k8s-rbac)
-                cluster=$(jq -r .cluster <<<"$d"); ns=$(jq -r .namespace <<<"$d"); wl=$(jq -r .workload <<<"$d")
-                mem=$(jq -r .member <<<"$d"); user="${mem#serviceAccount:}"
-                echo "apply-k8s-rbac $ns/$wl on $cluster"
-                gcloud container clusters get-credentials "${cluster#*/}" --location "${cluster%%/*}" --project "$PROJECT_ID"
-                kubectl apply -f - <<EOF
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: Role
-          metadata: {name: ${wl}-deployer, namespace: ${ns}}
-          rules:
-            - apiGroups: ["apps"]
-              resources: ["deployments"]
-              resourceNames: ["${wl}"]
-              verbs: ["get", "patch", "update"]
-          ---
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: RoleBinding
-          metadata: {name: ${wl}-deployer, namespace: ${ns}}
-          roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ${wl}-deployer}
-          subjects:
-            - {apiGroup: rbac.authorization.k8s.io, kind: User, name: ${user}}
-          EOF
-                ;;
             esac
-          done 3< <(jq -c '.[] | select(.action=="create-service" or .action=="add-resource-binding" or .action=="apply-k8s-rbac")' plan.json)
+          done 3< <(jq -c '.[] | select(.action=="create-service" or .action=="add-resource-binding")' plan.json)

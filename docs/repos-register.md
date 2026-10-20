@@ -68,7 +68,7 @@ repos:
     status: new                   # F2 creates it if missing
     mode: enforce                 # overrides defaults.mode for this repo only
     deploys:
-      - gke: {cluster: europe-west1/main, namespace: ledger, workload: ledger-worker}
+      - gke: {cluster: europe-west1/main, namespace: ledger, workload: ledger-worker}  # reported unsupported
   - name: billing-web
     rename_from: legacy-billing   # the ONLY way a rename ever happens
 ```
@@ -86,7 +86,7 @@ repos:
 | `repos[].variables` | F4 variables | NON-secret values only |
 | `repos[].gcp.service_accounts` | F5 WIF link | SAs must already exist; F5 never creates one |
 | top-level `service_accounts:` | F6 service accounts | create-if-missing only |
-| `repos[].deploys` | F7 deploy scope | Cloud Run or GKE entries |
+| `repos[].deploys` | F7 deploy scope | Cloud Run entries; a GKE entry is reported `unsupported` |
 | `repos[].kind` | nobody yet | inventory only |
 
 **Unknown keys are ignored by every feature** — at any level, including inside a repo entry. A
@@ -127,7 +127,10 @@ F1 validates against it; every planner validates the parts it reads before plann
     - `cloud_run` (string, the service name) — then `region` (string) and
       `runtime_service_account` (SA name) are required, `image_repository`
       (`<location>/<repository>`) is optional;
-    - `gke` (object, all required: `cluster` as `<location>/<name>`, `namespace`, `workload`).
+    - `gke` (object, all required: `cluster` as `<location>/<name>`, `namespace`, `workload`). The
+      schema accepts it so a register can record intent, but F7 does not act on it
+      ([§6](#6-features-f1-f7-adopt-any-one-alone)).
+
 - **`service_accounts[]`** — object; required: `name` and `description`.
   - `name`: string, **6-30 chars, `^[a-z][a-z0-9-]*$`** (the GCP account-id rule; the schema
     pattern is `^[a-z][a-z0-9-]{4,28}[a-z0-9]$`, which also forbids a trailing hyphen as GCP does).
@@ -253,15 +256,17 @@ owns those accounts and their descriptions. A listed SA that exists is `in-sync`
   is a protected service account (`repo-admin` always, plus `protected_service_accounts`; see
   [§5](#5-the-never-list), item 9) is an error: exit `1`, `error: <repo>: ...`, no plan. Otherwise
   a register entry could make the deployer impersonate `repo-admin` by deploying code as it.
-- **GKE:** the deployer gets a namespaced Kubernetes `Role` whose rules always carry
-  `resourceNames: [<workload>]`, bound to the Google identity — never `roles/container.developer`
-  (it covers every namespace). Fetching cluster credentials needs `roles/container.clusterViewer`,
-  which exists only at project level (GKE has no cluster-resource IAM policy), so F7 never grants
-  it: the SA's project-level grant is made in the access-provisioning config, like every
-  project-level grant. F7 reports a GKE deployer that lacks it as `unsupported`
-  (`gke.cluster_viewer`), in both modes, and never applies it.
-- **Migration aid:** reports (never fixes) any project-level `run.*` or `container.*` role a
-  deployer still holds. Removing it is a human change in the access-provisioning config.
+- **GKE is deferred.** No project uses GKE, and in-cluster Role/RoleBinding creation needs
+  Kubernetes rights nothing here holds. A `deploys` entry with `gke` yields
+  `unsupported{key: "gke", reason}` in both modes and nothing else; F7 never runs `kubectl`. It is
+  built, with its own tests, the day a project moves to GKE.
+- **The region comes from the register**, never from a live lookup: the `region` of the `deploys`
+  entry travels in the `details` of every `run.service` binding, so the workflow needs no
+  `run.services.list` permission, for new and existing services alike.
+- **No legacy-grant scan.** F7 does not read project-level IAM. The scan only ever looked at the
+  new `<deployable>-deployer` accounts, which never held project roles, so it could not report the
+  shared accounts it was meant to migrate; moving a project off a shared account's project-level
+  roles is a human change in the access-provisioning config.
 
 ## 7. Planner / workflow split
 
@@ -341,17 +346,13 @@ A register with no `service_accounts`, or an empty list, yields `[]`. Errors are
 {"project_id": "example-proj",
  "cloud_run_services": {"payments-api": {"iam": [{"role": "roles/run.developer", "members": ["serviceAccount:..."]}]}},
  "service_accounts": {"payments-api-run": {"iam": []}},
- "gar_repositories": {"europe-west1/services": {"iam": []}},
- "gke_clusters": {"europe-west1/main": {"iam": [],
-   "rbac": [{"namespace": "ledger", "workload": "ledger-worker", "member": "serviceAccount:...", "resource_names": ["ledger-worker"]}]}},
- "project_roles": {"payments-api-deployer": ["roles/run.admin"]}}
+ "gar_repositories": {"europe-west1/services": {"iam": []}}}
 ```
 
 A Cloud Run service whose key is absent from `cloud_run_services` does not exist. `iam` is a list
-of `{"role", "members"}` policy entries. `project_roles` maps a deployer SA name to the
-project-level roles it holds (F7 reads it for `legacy-grant` and for the GKE
-`roles/container.clusterViewer` check; `gke_clusters[].iam` is not read). A deployer name longer than 30 characters is an error
-(`error: <repo>: ...`).
+of `{"role", "members"}` policy entries. `service_accounts` is keyed by runtime SA name and holds
+that SA's own policy. F7 reads no project-level IAM and no cluster. A deployer name longer than 30
+characters is an error (`error: <repo>: ...`).
 
 ### 7.2 Naming formats, ordering and modes
 
@@ -361,26 +362,22 @@ project-level roles it holds (F7 reads it for `legacy-grant` and for the GKE
   verb's details.
 - **`in-sync` emission:** exactly one per examined repo (or SA) that has nothing to do, and none
   for a repo (or SA) that has any other action, including `drift`.
-- **Deployer SA** (F7; never a protected one) is `<deployable>-deployer`, where the deployable is the Cloud Run service
-  name, or the GKE workload.
+- **Deployer SA** (F7; never a protected one) is `<deployable>-deployer`, where the deployable is the
+  Cloud Run service name.
 - **Member formats.** F5 `member` is
   `principalSet://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool>/attribute.repository/<org>/<repo>`.
   F7 `member` is `serviceAccount:<sa>@<project_id>.iam.gserviceaccount.com`.
 - **`add-resource-binding.resource`** by `resource_type`: `run.service` is the service name;
   `iam.serviceAccount` is the runtime SA's **email**; `artifactregistry.repository` is
-  `<location>/<repo>` (the register's `image_repository`). There is no `container.cluster`
-  resource type: GKE has no cluster-level IAM.
+  `<location>/<repo>` (the register's `image_repository`). A `run.service` binding also carries
+  `region` in its `details` (the register's `region`); no other resource type does.
 - **F7 action order per repo:** for each Cloud Run entry, first `roles/iam.serviceAccountUser` for
   the repo-admin SA (`member` `serviceAccount:<repo-admin email>`) on the runtime SA, emitted only
   when that binding is missing from the runtime SA's live policy and at most once per runtime SA
   per repo; then `create-service` (if the service is missing), `roles/run.developer`
   on the service, `roles/iam.serviceAccountUser` on the runtime SA,
-  `roles/artifactregistry.writer` on the repository; for GKE, the
-  non-write `unsupported` report when the deployer lacks the project-level
-  `roles/container.clusterViewer`, then `apply-k8s-rbac`.
-- **`legacy-grant`** (F7) is emitted in both modes for a deployer's project role starting with
-  `roles/run.` or `roles/container.`, except `roles/container.clusterViewer`, the sanctioned
-  project-level grant. It is reported, never removed.
+  `roles/artifactregistry.writer` on the repository; a `gke` entry yields one `unsupported`
+  (`key: "gke"`) and nothing else.
 - **F5 `unregistered-binding`.** A binding on a registered SA that the register does not list is
   reported, in both modes, with the non-write verb
   `unregistered-binding{service_account, role, member}`. It is never removed. Precisely:
@@ -431,8 +428,7 @@ partial plan:** one error refuses the whole run.
 | `in-sync` | `{}` — emitted once per examined repo (or SA) with nothing to do, so a summary can list every repo examined |
 | `skip` | `{"reason": string}` — e.g. `"exists"`, `"rename already done"` |
 | `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode |
-| `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `gke.cluster_viewer`, a GKE deployer lacking the project-level `roles/container.clusterViewer` |
-| `legacy-grant` | `{"service_account": string, "role": string, "scope": "project"}` — F7 migration report |
+| `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `key: "gke"`, a `deploys` entry the feature does not act on |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
 
 **Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each):
@@ -447,8 +443,7 @@ partial plan:** one error refuses the whole run.
 | `service-accounts` | `create-service-account` | `{"name": string, "display_name": string, "description": string}` |
 | `service-accounts` | `update-service-account` | `{"name": string, "field": "description"\|"display_name", "from": string, "to": string}` |
 | `deploy-scope` | `create-service` | `{"service": string, "region": string, "runtime_service_account": string, "image": "placeholder"}` |
-| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"iam.serviceAccount"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}` |
-| `deploy-scope` | `apply-k8s-rbac` | `{"cluster": string, "namespace": string, "workload": string, "resource_names": [string], "member": string}` |
+| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"iam.serviceAccount"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}`; a `run.service` binding adds `"region": string` (from the register) |
 
 **Invariants every planner test may assert:**
 - a repo in `report` mode yields only non-write verbs;
@@ -457,8 +452,7 @@ partial plan:** one error refuses the whole run.
 - `rename-repo` appears only for a repo whose entry has `rename_from`;
 - `update-repo` with `field: "visibility"` never has `to: "public"`;
 - `add-wif-binding.role` is always `roles/iam.workloadIdentityUser`;
-- `add-resource-binding.resource_type` is never a project, and `apply-k8s-rbac.resource_names` is
-  never empty;
+- `add-resource-binding.resource_type` is never a project;
 - a repo absent from the register yields no action at all.
 
 Example (F3, one repo enforced, one reported):

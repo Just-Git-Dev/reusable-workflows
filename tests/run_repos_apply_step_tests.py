@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Stubbed-command tests for the APPLY bash of repos-create.yml (F2) and repos-wif-link.yml (F5).
+"""Stubbed-command tests for the APPLY bash of repos-create.yml (F2), repos-wif-link.yml (F5) and
+repos-deploy-scope.yml (F7).
 
 The `run:` body is extracted as shipped (as tests/run_step_tests.py does) and run under
 `bash -eo pipefail` with stub `gh` / `gcloud` on PATH. A stub appends one line per call (argv joined
@@ -29,6 +30,7 @@ RAN = 0
 
 CREATE_STEP = "Apply the write actions in order"
 WIF_STEP = "Apply (add-wif-binding only, in order)"
+DEPLOY_STEP = "Apply (write actions, in order)"
 
 STUB = """#!/bin/bash
 n=$(( $(cat "$STUB_DIR/count" 2>/dev/null || echo 0) + 1 ))
@@ -186,9 +188,122 @@ def wif_cases():
         check(f"F5 metachar {v!r}: literal single arguments", r["calls"] == [wif_call(v, v)], r["calls"])
 
 
+# ---------------------------------------------------------------- F7 repos-deploy-scope
+RUN_DEV, SA_USER, GAR_W = ("roles/run.developer", "roles/iam.serviceAccountUser",
+                           "roles/artifactregistry.writer")
+DEPLOYER = "serviceAccount:payments-api-deployer@example-proj.iam.gserviceaccount.com"
+ADMIN = "serviceAccount:repo-admin@example-proj.iam.gserviceaccount.com"
+SUFFIX = "@example-proj.iam.gserviceaccount.com"
+
+
+def deploy_run(plan, **kw):
+    return run_apply(extract_step("repos-deploy-scope.yml", DEPLOY_STEP), plan,
+                     env={"PROJECT_ID": "example-proj", "PLACEHOLDER_IMAGE": "img.example/hello"}, **kw)
+
+
+def d_create(svc="payments-api", region="europe-west1", rt="payments-api-run"):
+    return act("deploy-scope", "r", "create-service", {
+        "service": svc, "region": region, "runtime_service_account": rt, "image": "placeholder"})
+
+
+def d_bind(rtype, res, role, mem, region=None):
+    d = {"resource_type": rtype, "resource": res, "role": role, "member": mem}
+    if region:
+        d["region"] = region
+    return act("deploy-scope", "r", "add-resource-binding", d)
+
+
+def d_run(svc="payments-api", region="europe-west1", mem=DEPLOYER, role=RUN_DEV):
+    return d_bind("run.service", svc, role, mem, region)
+
+
+def d_sa(res="payments-api-run" + SUFFIX, mem=DEPLOYER, role=SA_USER):
+    return d_bind("iam.serviceAccount", res, role, mem)
+
+
+def d_gar(res="europe-west1/services", mem=DEPLOYER, role=GAR_W):
+    return d_bind("artifactregistry.repository", res, role, mem)
+
+
+def g_bind(kind, res, mem, role, extra=()):
+    return ["gcloud", *kind, res, *extra, f"--member={mem}", f"--role={role}",
+            "--project=example-proj", "--quiet"]
+
+
+def deploy_cases():
+    r = deploy_run([act("deploy-scope", "r", "in-sync", {}), act("deploy-scope", "r", "skip", {}),
+                    act("deploy-scope", "r", "unsupported", {"key": "gke", "reason": "x"}),
+                    act("deploy-scope", "r", "drift", {"would": "create-service"})])
+    check("F7 report plan: rc 0", r["rc"] == 0, r["out"])
+    check("F7 report plan: no gcloud call", r["calls"] == [], r["calls"])
+
+    r = deploy_run([d_sa(mem=ADMIN), act("deploy-scope", "r", "in-sync", {}), d_create(),
+                    d_run(), d_sa(), d_gar()])
+    check("F7 enforce: rc 0", r["rc"] == 0, r["out"])
+    check("F7 enforce: exactly the planned calls in order", r["calls"] == [
+        g_bind(["iam", "service-accounts", "add-iam-policy-binding"], "payments-api-run" + SUFFIX, ADMIN, SA_USER),
+        ["gcloud", "run", "deploy", "payments-api", "--image=img.example/hello",
+         "--service-account=payments-api-run" + SUFFIX, "--region=europe-west1",
+         "--no-allow-unauthenticated", "--project=example-proj", "--quiet"],
+        g_bind(["run", "services", "add-iam-policy-binding"], "payments-api", DEPLOYER, RUN_DEV,
+               ["--region=europe-west1"]),
+        g_bind(["iam", "service-accounts", "add-iam-policy-binding"], "payments-api-run" + SUFFIX, DEPLOYER, SA_USER),
+        ["gcloud", "artifacts", "repositories", "add-iam-policy-binding", "services",
+         "--location=europe-west1", f"--member={DEPLOYER}", f"--role={GAR_W}",
+         "--project=example-proj", "--quiet"],
+    ], r["calls"])
+
+    for bad in ("apply-k8s-rbac", "delete-service", "create-sa-key", "grant-project-role", "legacy-grant"):
+        r = deploy_run([d_run(), act("deploy-scope", "r", bad, {}), d_sa()])
+        check(f"F7 verb {bad}: step fails", r["rc"] != 0, r["out"])
+        check(f"F7 verb {bad}: no call made (even the valid action before it)", r["calls"] == [], r["calls"])
+
+    foreign = {
+        "run.service with roles/run.admin": d_run(role="roles/run.admin"),
+        "run.service with roles/owner": d_run(role="roles/owner"),
+        "run.service with serviceAccountUser": d_run(role=SA_USER),
+        "serviceAccount with roles/iam.serviceAccountTokenCreator": d_sa(role="roles/iam.serviceAccountTokenCreator"),
+        "serviceAccount with roles/owner": d_sa(role="roles/owner"),
+        "repository with roles/artifactregistry.admin": d_gar(role="roles/artifactregistry.admin"),
+        "project resource type": d_bind("project", "example-proj", RUN_DEV, DEPLOYER),
+        "user member": d_run(mem="user:someone@example.com"),
+        "run.service without a region": d_bind("run.service", "payments-api", RUN_DEV, DEPLOYER),
+    }
+    for label, bad in foreign.items():
+        r = deploy_run([d_sa(), bad, d_gar()])
+        check(f"F7 foreign binding ({label}): step fails", r["rc"] != 0, r["out"])
+        check(f"F7 foreign binding ({label}): no call made (even the valid actions around it)",
+              r["calls"] == [], r["calls"])
+
+    r = deploy_run([d_sa(), d_run(), d_gar()], fail_on=2)
+    check("F7 first failure: rc != 0", r["rc"] != 0, r["out"])
+    check("F7 first failure: loop stopped after the failing call", len(r["calls"]) == 2, r["calls"])
+
+    # names that reach a command line must have the planner's shape; anything else never runs
+    for v in NASTY + ["--ingress=all", "-x"]:
+        for label, plan in (("service", [d_create(svc=v)]), ("region", [d_create(region=v)]),
+                            ("runtime SA", [d_create(rt=v)]), ("binding service", [d_run(svc=v)]),
+                            ("binding region", [d_run(region=v)])):
+            r = deploy_run(plan)
+            check(f"F7 malformed {label} {v!r}: step fails, no call, nothing executed",
+                  r["rc"] != 0 and r["calls"] == [] and "pwned" not in r["files"], (r["rc"], r["calls"]))
+
+    # free-form fields (member suffix, SA email, GAR path) arrive as ONE literal argument
+    for v in NASTY:
+        r = deploy_run([d_sa(res=v, mem="serviceAccount:" + v), d_gar(res="loc/" + v, mem="serviceAccount:" + v)])
+        check(f"F7 metachar {v!r}: rc 0", r["rc"] == 0, r["out"])
+        check(f"F7 metachar {v!r}: nothing executed", "pwned" not in r["files"], r["files"])
+        check(f"F7 metachar {v!r}: literal single arguments", r["calls"] == [
+            g_bind(["iam", "service-accounts", "add-iam-policy-binding"], v, "serviceAccount:" + v, SA_USER),
+            ["gcloud", "artifacts", "repositories", "add-iam-policy-binding", v, "--location=loc",
+             f"--member=serviceAccount:{v}", f"--role={GAR_W}", "--project=example-proj", "--quiet"],
+        ], r["calls"])
+
+
 def main():
     create_cases()
     wif_cases()
+    deploy_cases()
     print(f"repos apply step tests: {RAN} cases run, {RAN - len(FAILURES)} passed, {len(FAILURES)} failed")
     if RAN == 0 or FAILURES:
         sys.exit(1)

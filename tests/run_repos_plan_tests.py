@@ -43,11 +43,11 @@ SCHEMA = ROOT / "schemas" / "repos.v1.json"
 FIX = Path(__file__).resolve().parent / "fixtures-repos"
 WORK = FIX / ".work"
 
-NON_WRITE = {"in-sync", "skip", "drift", "unsupported", "legacy-grant"}
+NON_WRITE = {"in-sync", "skip", "drift", "unsupported"}
 WRITE = {"create-repo", "rename-repo", "update-repo", "set-variable"}  # F1-F4 share of section 8
 ALL_VERBS = NON_WRITE | WRITE | {
     "add-wif-binding", "create-service-account", "update-service-account",
-    "create-service", "add-resource-binding", "apply-k8s-rbac"}
+    "create-service", "add-resource-binding"}
 FEATURES = ["register", "create", "settings", "variables"]
 
 CASES = []
