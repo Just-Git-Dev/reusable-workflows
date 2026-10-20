@@ -17,7 +17,7 @@ export PATH := $(CURDIR)/.tools/bin:$(PATH)
 # Order = CI's order. Add a check by adding a target and listing it here AND in ci.yml.
 CHECKS := tools actionlint canary shellcheck \
   venv catalog docs-coverage doc-anchors version-sweep stamp-tests v1-frozen v1-selftest \
-  doc-examples plan-fixtures secret-plan-fixtures concurrency-groups \
+  doc-examples plan-fixtures secret-plan-fixtures repos-plan-fixtures concurrency-groups \
   step-bodies release-gate refresh-api-spec release-flow compile-actions \
   tools-promtool alertgen alert-catalog pinned ci-gate-tests
 
@@ -150,6 +150,13 @@ plan-fixtures: venv
 
 secret-plan-fixtures: venv
 	$(PY) tests/run_secret_plan_tests.py
+
+# Repos-as-code planners (docs/repos-register.md): pure planners, fixture-tested with no cloud.
+repos-plan-fixtures: venv
+	$(PY) tests/run_repos_plan_tests.py
+	$(PY) tests/run_repos_wif_plan_tests.py
+	$(PY) tests/run_repos_sa_plan_tests.py
+	$(PY) tests/run_repos_deploy_plan_tests.py
 
 # Bundle writers of the same blob serialise only if their concurrency-group strings are identical.
 concurrency-groups: venv

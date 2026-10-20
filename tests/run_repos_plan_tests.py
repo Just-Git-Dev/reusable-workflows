@@ -220,12 +220,13 @@ def schema_allows_unknown_keys_everywhere_the_doc_says():
 
 
 @case
-def schema_validates_fixtures_when_jsonschema_is_installed():
+def schema_validates_fixtures():
+    # docs/repos-register.md 7.2: a missing dependency FAILS the suite, never skips it
     try:
         import jsonschema
         import yaml
-    except ImportError:
-        return  # counted as run; the planner cases below carry the behaviour proof
+    except ImportError as e:
+        raise AssertionError(f"required dependency missing ({e}); run via `make venv`'s python")
     v = jsonschema.Draft202012Validator(_schema())
     ok = yaml.safe_load((FIX / "valid-register.yaml").read_text())
     assert not list(v.iter_errors(ok)), "valid-register.yaml must validate"
