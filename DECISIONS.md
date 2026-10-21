@@ -2,8 +2,10 @@
 
 ## Index
 
-120 entries total — 110 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+122 entries total — 112 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [deploy-cloud-run image input — digest only](#2026-10-21--deploy-cloud-run-image-input--digest-only)
+- `2026-10-21` — [bootstrap-cf-service retarget_from — a remap fails where a fresh map warns](#2026-10-21--bootstrap-cf-service-retarget_from--a-remap-fails-where-a-fresh-map-warns)
 - `2026-10-21` — [sync-bundle-key: environment secrets do not reach the sync from another organisation (doc corrected)](#2026-10-21--sync-bundle-key-environment-secrets-do-not-reach-the-sync-from-another-organisation-doc-corrected)
 - `2026-10-21` — [Doc fixes: app key names, rollback bundle_secret, sync never destroys](#2026-10-21--doc-fixes-app-key-names-rollback-bundle_secret-sync-never-destroys)
 - `2026-10-21` — [repos-* workflows: one App key, no second REPO_ADMIN key (owner)](#2026-10-21--repos--workflows-one-app-key-no-second-repo_admin-key-owner)
@@ -236,6 +238,48 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — deploy-cloud-run image input — digest only
+
+**What:** `deploy-cloud-run` gains `image`: deploy a prebuilt image, skipping docker configure,
+buildx and build & push, while keeping the full deploy path (checkout, env render, bundle pin,
+Deploy, Deployment record, manifest, summary). A new `Verify prebuilt image` step describes the
+image in Artifact Registry and fails if it is absent; the manifest's IMAGE_DIGEST falls back to it.
+
+**Why digest-only (owner ruling 4, 2026-10-21):** the use case is a gate that tests an image and
+must deploy exactly those bytes. A tag can be moved between the gate's test and this deploy; a
+digest cannot. So `image` must match
+`^[a-z0-9.-]+-docker\.pkg\.dev/[^@:[:space:]]+@sha256:[0-9a-f]{64}$` and a tag reference is refused.
+`image` + `build_only` is refused as a contradiction; `also_tag_latest`, `docker_target` and
+`build_args` are ignored with a notice (`context`/`dockerfile`/`platforms` have defaults, so they
+cannot be detected as set and are ignored silently).
+
+**Not done, on purpose:** comparing the image's OCI revision label with the checked-out commit —
+images from other build systems may carry none. The caller passes the same tag for both. Use
+`promote-image` instead when only the image should move (it skips env/bundle/labels/manifest).
+
+## 2026-10-21 — bootstrap-cf-service retarget_from — a remap fails where a fresh map warns
+
+**What:** `bootstrap-cf-service` gains `retarget_from`: when the hostname is mapped to exactly that
+service, the run pre-flights the target (exists, Ready, 100% traffic on its latest revision, its
+run.app URL answers `smoke_path` with `smoke_status || 200`), deletes the mapping, creates it on
+`service`, waits for the managed cert and probes the hostname. Default `''` refuses as before.
+
+**Why a remap FAILS where a fresh map only WARNS:** on a fresh map nothing was serving the hostname
+before, so a slow cert means "not live yet", and a warning keeps a green run from meaning "Google was
+quick today". On a remap the old service is already unmapped when the cert wait starts, so every
+minute past the timeout is an outage — the run fails, and the summary prints the outage window and
+the exact map-back command. There is no auto-rollback: mapping back is a second cert issue with the
+same outage, so it is the operator's call, not the workflow's.
+
+**Owner rulings (2026-10-21), not re-litigated:** reuse `smoke_path`/`smoke_status` (no
+`probe_path`/`expected_status`; `smoke_path` required with `retarget_from`); reuse
+`certificate_timeout_seconds` (default 1800; docs advise 3600 for a remap) — no new timeout input.
+Inferred, not in the ruling: `retarget_from` refused with `mode: proxied` (no domain mapping to move);
+a remap forces the cert wait even with `wait_for_certificate: false`, and floors the poll at 30s.
+A re-run after a completed remap (`current == service`) is a no-op whose cert wait and probe stay
+strict, because strictness keys off the input. CAA records that exclude `pki.goog` only warn.
+IAM: `run.domainmappings.delete` + `run.services.get` via a documented custom role, never `run.admin`.
 
 ## 2026-10-21 — sync-bundle-key: environment secrets do not reach the sync from another organisation (doc corrected)
 
