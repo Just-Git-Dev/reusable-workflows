@@ -2,8 +2,9 @@
 
 ## Index
 
-124 entries total — 114 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+125 entries total — 115 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [v4.1.0 review fixes — composite-action inputs and the remap fail closed](#2026-10-21--v410-review-fixes--composite-action-inputs-and-the-remap-fail-closed)
 - `2026-10-21` — [sync-bundle-key + rotate-worker-signing-secret as composite actions; rotator secret via env (RCA)](#2026-10-21--sync-bundle-key--rotate-worker-signing-secret-as-composite-actions-rotator-secret-via-env-rca)
 - `2026-10-21` — [pinned gate allows own composite actions at an exact vX.Y.Z tag](#2026-10-21--pinned-gate-allows-own-composite-actions-at-an-exact-vxyz-tag)
 - `2026-10-21` — [deploy-cloud-run image input — digest only](#2026-10-21--deploy-cloud-run-image-input--digest-only)
@@ -240,6 +241,28 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — v4.1.0 review fixes — composite-action inputs and the remap fail closed
+
+**What:** the fixes from the pre-merge review of v4.1.0, made before anything shipped. They tighten
+the rules for composite actions and the remap so that a mistake fails closed.
+
+- **Secret names from `toJSON(secrets)` are matched case-insensitively.** GitHub secret names are
+  case-insensitive and are often stored in uppercase. The exception is the caller-listed
+  `secret_keys_file` keys, which are matched exactly because they become the payload's key names.
+- **Boolean action inputs accept only `true` or `false`, and a first step validates them.** A
+  composite input is a string. GitHub's `if:` compares case-insensitively and bash `=` does not, so
+  `dry_run: True` used to be dry for one and live for the other, and `yes`/`1` were live writes.
+- **The remap records `T_DELETE` only after the delete succeeded.** Before this fix, a failed
+  delete (a missing `run.domainmappings.delete`) printed a map-back command that would have deleted
+  the mapping that still works. The map-back now works in both states: `delete … || true`, then
+  `create`.
+- **The CAA check runs before Converge.** Its only purpose is to warn before the outage starts.
+- **A checkout inside a composite action goes to a dedicated workspace subdirectory**
+  (`.rw-sync-bundle-key`), never the workspace root. The root checkout's `clean: true` wiped the
+  caller's own tree, which the old isolated reusable job never had to care about.
+- **A digest reference needs three path segments** (`<project>/<repo>/<name>`), and the pin gate's
+  own-action name must start with an alphanumeric character.
 
 ## 2026-10-21 — sync-bundle-key + rotate-worker-signing-secret as composite actions; rotator secret via env (RCA)
 
