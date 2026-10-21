@@ -203,6 +203,7 @@ alert-catalog: venv
 # A moved tag on an action is a supply-chain event. Python, not `grep -P`: BSD grep has no -P, so
 # locally the grep errored and the step still passed.
 pinned: venv
+	$(PY) tests/run_pinned_actions_tests.py
 	$(PY) scripts/check_pinned_actions.py .github/workflows actions
 
 # The gate's own tests: ci.yml == make ci, and the pre-push hook guards.

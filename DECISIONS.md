@@ -2,8 +2,9 @@
 
 ## Index
 
-122 entries total — 112 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+123 entries total — 113 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [pinned gate allows own composite actions at an exact vX.Y.Z tag](#2026-10-21--pinned-gate-allows-own-composite-actions-at-an-exact-vxyz-tag)
 - `2026-10-21` — [deploy-cloud-run image input — digest only](#2026-10-21--deploy-cloud-run-image-input--digest-only)
 - `2026-10-21` — [bootstrap-cf-service retarget_from — a remap fails where a fresh map warns](#2026-10-21--bootstrap-cf-service-retarget_from--a-remap-fails-where-a-fresh-map-warns)
 - `2026-10-21` — [sync-bundle-key: environment secrets do not reach the sync from another organisation (doc corrected)](#2026-10-21--sync-bundle-key-environment-secrets-do-not-reach-the-sync-from-another-organisation-doc-corrected)
@@ -238,6 +239,26 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — pinned gate allows own composite actions at an exact vX.Y.Z tag
+
+**What:** `scripts/check_pinned_actions.py` (the `pinned` gate) now accepts
+`Just-Git-Dev/reusable-workflows/actions/<name>@vX.Y.Z` — this repo's own composite actions at an
+exact release tag. Every other ref still needs a 40-hex SHA: third-party actions, a partial tag
+(`@v4`), a branch, a pre-release tag, a look-alike org, and our own reusable WORKFLOWS. Cases in
+`tests/run_pinned_actions_tests.py`, run by `make pinned`.
+
+**Why (owner ruling, 2026-10-21):** v4.1.0 turns `sync-bundle-key` and
+`rotate-worker-signing-secret` into composite actions wrapped by the old workflows. The wrapper
+must call the action REMOTELY (a `./` ref resolves to the caller's repo), and it cannot SHA-pin an
+action that first exists in its own release commit. The tag form is what `stamp_version.py`
+already sweeps at release, so workflow vX.Y.Z always runs action vX.Y.Z. It matches the zizmor
+"Fleet ruling 2" policy for calls into our own repo. Rejected: checking out this repo at the
+running workflow's SHA (an extra step on every run, and the context value was unverified), and a
+two-step release (v4.1.0 could not pass its own CI).
+
+**Trade-off accepted:** a tag is mutable where a SHA is not. The release flow is the only writer
+of `vX.Y.Z` tags in this repo, and consumers pin those same tags for the workflows already.
 
 ## 2026-10-21 — deploy-cloud-run image input — digest only
 
