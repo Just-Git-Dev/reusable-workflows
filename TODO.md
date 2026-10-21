@@ -1,13 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-50 open across 17 live sections. 8 closed items archived.
+51 open across 17 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 2 open
+- **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 3 open
 - **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
 - **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open, 5 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
@@ -26,6 +26,12 @@ section opens or closes. Closed sections live in
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
 
 ## Owner rulings to build (opened 2026-10-21)
+
+- [ ] `.github/workflows/sync-bundle-key.yml` — DESIGN NEEDED (owner): environment-level secrets
+  cannot reach the sync from a caller in another organisation. Two cross-org dry runs on
+  2026-10-21 refused with "No environment secret for listed key(s)". `payload_source: caller`
+  reads repo/org secrets only, because the caller job cannot declare `environment:`. Until it's
+  fixed, cross-org callers keep sync-read values at repo level (docs/sync-bundle-key.md).
 
 - [ ] `catalog.json` + `scripts/workflow_preflight.py` (fleet) — ship the list of workflows that
   receive the App private key (workflow, secret input name, required caller environment) with rw,

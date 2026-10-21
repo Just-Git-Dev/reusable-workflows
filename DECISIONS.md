@@ -2,8 +2,9 @@
 
 ## Index
 
-119 entries total — 109 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+120 entries total — 110 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [sync-bundle-key: environment secrets do not reach the sync from another organisation (doc corrected)](#2026-10-21--sync-bundle-key-environment-secrets-do-not-reach-the-sync-from-another-organisation-doc-corrected)
 - `2026-10-21` — [Doc fixes: app key names, rollback bundle_secret, sync never destroys](#2026-10-21--doc-fixes-app-key-names-rollback-bundle_secret-sync-never-destroys)
 - `2026-10-21` — [repos-* workflows: one App key, no second REPO_ADMIN key (owner)](#2026-10-21--repos--workflows-one-app-key-no-second-repo_admin-key-owner)
 - `2026-10-21` — [release.yml: tag push carries its own token after the credential-less checkout (v4.0.0 release failure RCA)](#2026-10-21--releaseyml-tag-push-carries-its-own-token-after-the-credential-less-checkout-v400-release-failure-rca)
@@ -235,6 +236,25 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — sync-bundle-key: environment secrets do not reach the sync from another organisation (doc corrected)
+
+**What changed.** docs/sync-bundle-key.md no longer calls `payload_source: caller` "the supported
+path" for environment secrets. It now states that neither path reads environment secrets from a
+caller in another organisation.
+
+**Evidence.** A consumer's review found the documented example was wrong: `payload_json` was
+built from `${{ secrets.X }}` in a `uses:` job, plus an `environment:` input. GitHub's
+reusable-workflow docs (read 2026-10-21) say that the caller job "can't use the `environment`
+keyword", and that a callee job with `environment:` receives an environment value only for a
+secret the caller passes. Two cross-org dry runs of `payload_source: environment` (v4.0.0) then
+refused with "No environment secret for listed key(s)". That happened both for a key held in the
+environment and for a key held only at repo level. Both failed closed and wrote nothing.
+
+**Consequence.** The caller path silently reads repo/org copies, which may be stale. The
+environment path gets nothing cross-org. Cross-org callers keep values a sync must read at repo
+level until a design change lands (TODO "Owner rulings to build"). No code changed; the refusal
+in environment mode is already fail-closed.
 
 ## 2026-10-21 — Doc fixes: app key names, rollback bundle_secret, sync never destroys
 

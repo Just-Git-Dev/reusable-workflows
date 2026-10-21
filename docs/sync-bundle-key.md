@@ -201,11 +201,25 @@ Values still come only from the owning repo's workflow, never by hand.
 
 ### `payload_source: environment` is UNPROVEN
 
-Whether an environment-scoped secret reaches a reusable-workflow callee in **another
-organisation** when the callee job sets `environment:` has not been demonstrated. Until a real
-dry run proves it, treat `payload_source: environment` as experimental: the supported path is
-`payload_source: caller` with `payload_json` built from the caller's own environment secrets, as
-in the example below. This page will drop the marker only after that proof.
+> **`payload_source: caller` cannot read ENVIRONMENT secrets.** `payload_json` is evaluated in
+> the CALLER job, and a job that calls a reusable workflow cannot declare `environment:` (GitHub:
+> "The job that calls the reusable workflow can't use the `environment` keyword"). So
+> `${{ secrets.X }}` there is the REPO or ORG secret `X`, or empty. Passing `environment: prod`
+> as an input does not change that. If a repo-level copy of `X` also exists, the bundle silently
+> gets that copy, which may be stale. Use `caller` only with repo- or org-level secrets.
+
+**`payload_source: environment` does NOT work from a caller in another organisation** (proven
+by two cross-org dry runs on 2026-10-21). The callee job did run in the caller's environment
+(step S0 passed), but refused with "No environment secret for listed key(s): ...", both for a
+key held in the environment and for a key held only at repo level. It fails closed and writes
+nothing. Why: GitHub gives a callee job the environment's value only for a secret the caller
+PASSES ("The caller workflow must still pass the secret"; one not passed "resolves to an empty
+string"). This workflow reads `toJSON(secrets)` but declares only `payload_json`, and
+`secrets: inherit` works within one organisation only. A same-org caller using
+`secrets: inherit` is expected to work, but that is not demonstrated either.
+
+**So today there is NO working path for environment-level secrets from another organisation.**
+Keep values that a v4 sync must read at repo level there. A design change is tracked in TODO.md.
 
 The `actions: read` permission is required in the caller (step S0 reads the environment).
 
@@ -264,6 +278,8 @@ jobs:
       title: DB + Redis passwords
       dry_run: ${{ inputs.dry_run }}
     secrets:
+      # Evaluated in THIS caller job: these are REPO/ORG secrets, never the `stage` environment's
+      # (see "payload_source: environment is UNPROVEN" above).
       payload_json: |
         {"DB_PASSWORD": ${{ toJSON(secrets.DB_PASSWORD) }},
          "REDIS_PASSWORD": ${{ toJSON(secrets.REDIS_PASSWORD) }}}

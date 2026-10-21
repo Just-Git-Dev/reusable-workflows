@@ -34,7 +34,10 @@ in home 3. This also removes any "derived key" (a URL built from other keys) and
 ## Where the secret VALUES come from (GitHub side)
 
 Secret values are held only as GitHub **environment** secrets (for example `stage`, `prod`), split
-by how many repos consume them:
+by how many repos consume them. **Gap (2026-10-21):** `sync-bundle-key` cannot yet read
+environment secrets from a caller in another organisation (see
+[sync-bundle-key](sync-bundle-key.md#payload_source-environment-is-unproven)). Until that is
+fixed, values a sync must read stay at repo level in such callers.
 
 - **One consuming repo** (a database password): held only in that repo's environment secrets.
 - **Two or more consuming repos** (an object-storage key pair): held in the project repo and
