@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "org": "Example-Org",
+  "defaults": {"mode": "enforce"},
+  "repos": [
+    {"name": "issuer",
+     "environments": [
+       {"name": "prod", "branches": ["main"]},
+       {"name": "stage", "branches": ["main"], "tags": ["v*"]}
+     ]},
+    {"name": "api",
+     "environments": [
+       {"name": "prod", "branches": ["main"]}
+     ]},
+    {"name": "web"}
+  ]
+}

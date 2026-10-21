@@ -1,0 +1,12 @@
+{
+  "repos": {
+    "issuer": {"exists": true, "environments": {
+      "prod":  {"custom_branch_policies": true, "policies": [{"name": "main", "type": "branch"}]},
+      "stage": {"custom_branch_policies": true, "policies": [{"name": "main", "type": "branch"}, {"name": "v*", "type": "tag"}]}
+    }},
+    "api": {"exists": true, "environments": {
+      "prod": {"custom_branch_policies": true, "policies": [{"name": "main", "type": "branch"}]}
+    }},
+    "web": {"exists": true, "environments": {}}
+  }
+}
