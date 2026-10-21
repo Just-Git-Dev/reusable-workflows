@@ -95,6 +95,16 @@ here, with two differences:
   secret named `payload_json`; that name is matched case-insensitively (`PAYLOAD_JSON` works).
   The keys listed in `secret_keys_file` (environment source) are matched exactly, because they
   become the payload's key names.
+- **"Environment source" means the job's MERGED secrets, not the environment's alone.** In a job
+  that declares `environment:`, GitHub's `secrets` context holds the org, repo AND environment
+  secrets together, with the environment winning a name clash. `toJSON(secrets)` cannot tell them
+  apart. So a key listed in `secret_keys_file` but missing from the environment is read silently
+  from a repo- or org-level secret of the same name. A consumer's live run proved this
+  (2026-10-21): a key held only at repo level was upserted from the `prod` environment job. The
+  action cannot guard against it, because a `GITHUB_TOKEN` cannot list an environment's secret
+  names. **Caller hygiene is therefore required:** define every listed key in the environment,
+  and delete any repo- or org-level secret that shares a name with a listed key, or a stale copy
+  will ship the day the environment copy is removed.
 - **Booleans are exactly `'true'` or `'false'`.** `dry_run`, `strict_values`,
   `require_branch_policy`, `pin_versions` and `concurrency_declared` are checked by the first
   step, which refuses anything else (`yes`, `1`, `True`). GitHub's `if:` compares
