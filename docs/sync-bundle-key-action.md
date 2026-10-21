@@ -91,7 +91,10 @@ here, with two differences:
 - **`secrets_json` (required)** replaces the `payload_json` secret: set it to
   `${{ toJSON(secrets) }}` in the job that declares `environment:`. The action reads only
   `payload_json` (caller source) or the keys listed in `secret_keys_file` (environment source)
-  out of it; nothing else leaves its step.
+  out of it; nothing else leaves its step. With the caller source the caller must define a
+  secret named `payload_json`; that name is matched case-insensitively (`PAYLOAD_JSON` works).
+  The keys listed in `secret_keys_file` (environment source) are matched exactly, because they
+  become the payload's key names.
 - **`environment`** is only the name for the S0 guard. The action cannot read its own job's
   `environment:`, so the caller repeats it. Leave it empty to skip S0.
 

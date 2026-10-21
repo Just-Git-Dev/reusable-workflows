@@ -615,6 +615,9 @@ def action_cases():
               "must-not-leak-9" not in out and "github_token" not in out, out)
         check("caller source: every payload value is registered with ::add-mask::",
               "::add-mask::pw-one-1" in r["out"] and "::add-mask::pw-two-2" in r["out"], r["out"])
+        r = run_body(body, {"SECRETS_JSON": json.dumps({"PAYLOAD_JSON": json.dumps(payload), "OTHER": "must-not-leak-9"})})
+        check("F2: an UPPERCASE PAYLOAD_JSON key is found (secret names are case-insensitive)",
+              r["rc"] == 0 and "DB_PASSWORD" in r["outputs"] and "must-not-leak-9" not in r["outputs"], r["out"] + r["outputs"])
         r = run_body(body, {"SECRETS_JSON": json.dumps({"OTHER": "y"})})
         check("caller source: no payload_json secret leaves an empty payload for Validate to refuse",
               r["rc"] == 0 and '"y"' not in r["outputs"] and "OTHER" not in r["outputs"], r["out"] + r["outputs"])

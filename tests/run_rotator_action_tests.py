@@ -132,6 +132,9 @@ def action_cases():
         check("token step emits nothing else from secrets_json", "leak-me" not in r["outputs"] + r["out"])
         r = run_body(body, {"SECRETS_JSON": json.dumps({"OTHER": "x"})})
         check("a missing cloudflare_api_token fails the step", r["rc"] != 0, r["out"])
+        r = run_body(body, {"SECRETS_JSON": json.dumps({"CLOUDFLARE_API_TOKEN": "cf-tok-UP", "OTHER": "leak-me"})})
+        check("F2: an UPPERCASE CLOUDFLARE_API_TOKEN key is found (secret names are case-insensitive)",
+              r["rc"] == 0 and "cf-tok-UP" in r["outputs"] and "leak-me" not in r["outputs"], r["out"] + r["outputs"])
 
     body = extract_action_step(ACTION, "Generate new signing secret")
     if body is not None:

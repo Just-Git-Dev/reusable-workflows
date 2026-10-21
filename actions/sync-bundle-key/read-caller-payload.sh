@@ -7,7 +7,7 @@
 # Env (never interpolated): SECRETS_JSON.
 set -eo pipefail
 
-PAYLOAD=$(printf '%s' "$SECRETS_JSON" | jq -r '.payload_json // empty')
+PAYLOAD=$(printf '%s' "$SECRETS_JSON" | jq -r 'to_entries | map(select(.key | ascii_downcase == "payload_json")) | .[0].value // empty')
 [ -n "$PAYLOAD" ] || exit 0
 # The secret is already masked as a whole; its parsed values are derived data, so mask them too.
 while IFS= read -r v; do

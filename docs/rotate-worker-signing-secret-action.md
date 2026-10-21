@@ -90,6 +90,8 @@ meaning and default here, with these differences:
 - **`secrets_json` (required)** replaces the `cloudflare_api_token` secret: set it to
   `${{ toJSON(secrets) }}` in the job that declares `environment:`. The action reads only
   `cloudflare_api_token` out of it (and not at all on a dry run); nothing else leaves its step.
+  The caller must define exactly one secret named `cloudflare_api_token`; the name is matched
+  case-insensitively, so `CLOUDFLARE_API_TOKEN` works.
 - **`concurrency_declared`** is set by the wrapper only (see above).
 
 Outputs are the workflow's: `old_version`, `new_version`.

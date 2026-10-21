@@ -6,7 +6,7 @@
 # Env (never interpolated): SECRETS_JSON.
 set -eo pipefail
 
-TOKEN=$(printf '%s' "$SECRETS_JSON" | jq -r '.cloudflare_api_token // empty')
+TOKEN=$(printf '%s' "$SECRETS_JSON" | jq -r 'to_entries | map(select(.key | ascii_downcase == "cloudflare_api_token")) | .[0].value // empty')
 if [ -z "$TOKEN" ]; then
   echo "::error::secrets_json carries no cloudflare_api_token (the Worker slots cannot be set without it)."
   exit 1
