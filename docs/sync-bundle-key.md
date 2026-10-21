@@ -169,7 +169,8 @@ When the project runs [`repos-secrets`](repos-secrets.md) (F8), a service's blob
 and its IAM policy has one writer, F8. The service repo's caller authenticates as **that
 service's own deployer**: pass `service_account: <service>-deployer@<project>.iam.gserviceaccount.com`
 (the repo's WIF link comes from F5) and `bundle_secret: <service>-env`. F8 grants that deployer the
-secret-level roles the sync needs (read, add, disable, destroy and `describe`), so nothing in this
+secret-level roles the sync needs (permissions granted: read, add, disable, destroy and `describe`; the sync itself
+only reads, adds, disables and describes), so nothing in this
 workflow writes IAM and one repo owns each blob, which also removes the two-callers caveat above.
 Values still come only from the owning repo's workflow, never by hand.
 

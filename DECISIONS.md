@@ -2,8 +2,9 @@
 
 ## Index
 
-118 entries total — 108 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+119 entries total — 109 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [Doc fixes: app key names, rollback bundle_secret, sync never destroys](#2026-10-21--doc-fixes-app-key-names-rollback-bundle_secret-sync-never-destroys)
 - `2026-10-21` — [repos-* workflows: one App key, no second REPO_ADMIN key (owner)](#2026-10-21--repos--workflows-one-app-key-no-second-repo_admin-key-owner)
 - `2026-10-21` — [release.yml: tag push carries its own token after the credential-less checkout (v4.0.0 release failure RCA)](#2026-10-21--releaseyml-tag-push-carries-its-own-token-after-the-credential-less-checkout-v400-release-failure-rca)
 - `2026-10-21` — [v4 critic round 2: template pin, secretKeyRef pins, update :latest wiring, fail-closed baseline](#2026-10-21--v4-critic-round-2-template-pin-secretkeyref-pins-update-latest-wiring-fail-closed-baseline)
@@ -234,6 +235,13 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — Doc fixes: app key names, rollback bundle_secret, sync never destroys
+
+A consumer migration review found three doc/code contradictions; in each the code is the truth, so the docs were fixed (one workflow header comment, no logic):
+1. App id/key names: distribute-env-secrets and repos-environments docs (and the workflow's header comment) used vars.APP_ID / secrets.AUTOMATION_APP_KEY; the canonical convention is vars.RELEASE_APP_ID / secrets.RELEASE_APP_KEY.
+2. rollback-service: an empty bundle_secret with mode=to_revision is refused (exit 2, nothing changed), not skipped; the only skip is a target revision that mounts no version of the secret.
+3. repos-secrets / sync-bundle-key: the value sync only disables old versions; destruction belongs to cleanup-secret-versions (opt-in enable_destroy, quarantine-gated). The deployer roles merely include versions.destroy.
 
 ## 2026-10-21 — repos-* workflows: one App key, no second REPO_ADMIN key (owner)
 

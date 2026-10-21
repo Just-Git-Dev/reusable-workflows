@@ -117,7 +117,7 @@ jobs:
   environments:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v4.0.0
     with:
-      app_id: ${{ vars.APP_ID }}
+      app_id: ${{ vars.RELEASE_APP_ID }}
     secrets:
       app_key: ${{ secrets.RELEASE_APP_KEY }}
 ```
