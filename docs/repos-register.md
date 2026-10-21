@@ -596,6 +596,19 @@ narrowed tokens and the planner's allow-list, not which key is used.
 - In `<org>/project`: environment **`repo-admin`**, deployment branches **`main` only**, secret
   **`RELEASE_APP_KEY`** (a copy of the release key, as an environment secret). The App id is the
   existing repo variable **`RELEASE_APP_ID`**.
+- **Why `repo-admin` is separate from `release` when both hold the same key.** On the GitHub side
+  they are equivalent: the same key mints the same tokens. The split is load-bearing on the GCP side.
+  The project's GCP `repo-admin` service account (create service accounts, set IAM on them, on Cloud
+  Run services, registries and `<d>-env` secrets) admits only the WIF subject
+  `repo:<org>/project:environment:repo-admin`. So release jobs can never obtain it, whatever they
+  run. Merging the two environments would hand that identity to the whole release flow.
+- **Bootstrapping `repo-admin` (once per project repo, before the first run).** F9 cannot create the
+  environment its own job runs in, and a job that names a missing environment creates it with no
+  branch rule. So the project creates it first, by API, in the same shape as `release`:
+  `gh api -X PUT repos/<org>/project/environments/repo-admin -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'`,
+  then `gh api -X POST repos/<org>/project/environments/repo-admin/deployment-branch-policies -f name=main -f type=branch`,
+  then reads both back (exactly one policy, `main`). The org owner then adds the environment secret
+  `RELEASE_APP_KEY` by hand.
 - The reusable job declares `environment: ${{ inputs.environment }}` (default `repo-admin`), the
   same shape `release-drafts.yml` uses for its key, and F2-F4 and F9 enforce fail before minting a token unless
   the environment is `repo-admin` and `github.ref` is `refs/heads/main`.
