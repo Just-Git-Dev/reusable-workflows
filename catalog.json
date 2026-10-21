@@ -286,6 +286,12 @@
           "required": true,
           "type": "string"
         },
+        "retarget_from": {
+          "default": "",
+          "description": "mode: dns-only. The service the hostname is mapped to NOW. When set, a hostname mapped to exactly this service is moved onto `service` (pre-flight, delete, create, cert wait, probe). Empty (the default) refuses a hostname mapped to another service, as ever. Requires smoke_path (smoke_status empty means 200). A cert timeout or failed probe FAILS the run; there is no auto-rollback, the summary prints the map-back command.",
+          "required": false,
+          "type": "string"
+        },
         "service": {
           "default": "",
           "description": "Cloud Run service name. Required for dns-only (it is what the domain mapping points at) and for a proxied run that derives cloud_run_url.",
@@ -1544,6 +1550,12 @@
           "required": false,
           "type": "string"
         },
+        "image": {
+          "default": "",
+          "description": "Deploy a PREBUILT image instead of building one: skips docker configure, buildx and build & push, keeps the full deploy path. Digest reference only (`<region>-docker.pkg.dev/<project>/<repo>/<name>@sha256:<64 hex>`); a tag is refused because a tag can move between a gate's test and this deploy. Empty (default) builds and pushes as before. Refused with build_only; also_tag_latest, docker_target and build_args are ignored.",
+          "required": false,
+          "type": "string"
+        },
         "image_name": {
           "default": null,
           "description": "Image name within the GAR repo (may differ from the service name).",
@@ -1631,7 +1643,7 @@
       },
       "name": "Build and deploy to Cloud Run (reusable)",
       "outputs": {
-        "image": "Fully-qualified image reference that was built.",
+        "image": "Fully-qualified image reference that was built (the input digest reference when image is set).",
         "service_url": "Cloud Run service URL after the deploy."
       },
       "path": ".github/workflows/deploy-cloud-run.yml",
