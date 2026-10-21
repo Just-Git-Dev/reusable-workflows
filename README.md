@@ -271,14 +271,14 @@ the same make targets, so the two cannot drift (`tests/run_ci_make_tests.py` fai
 - `make ci` before pushing (the hook runs it for you). It stops at the first failing check, names
   the target, and prints how many checks ran (26 of 26 today).
 - What it runs: `tools` (local shellcheck and actionlint must equal CI's pinned versions, else it
-  prints the install hint), `actionlint`, `canary`, `shellcheck`, `venv` (`.venv` built from
+  prints the install hint), `actionlint`, `canary`, `shellcheck`, `preflight` (vendored workflow-preflight), `zizmor` (workflow security audit, policy `zizmor.yml`), `venv` (`.venv` built from
   `requirements-ci.txt`, the same file CI installs), the catalog, docs, version-sweep, v1-alias and
   doc-example checks, the fixture and step-body test suites, `tools-promtool` (promtool must be the
   pinned 3.13.1, the alertgen oracle), `alertgen`, `pinned` and the gate's own tests.
 - The hook checks the commit being pushed, not just the tree: it refuses a dirty tree, or a pushed
   ref whose sha is not `HEAD` (an annotated tag is peeled to its commit first), and says what to
   do. It scrubs git's env before running checks. No environment variable can replace its gate.
-- Needs on the laptop: shellcheck 0.11.0 and actionlint 1.7.12 on `PATH`, and `python3.12` or
+- Needs on the laptop: shellcheck 0.11.0, actionlint 1.7.12 and zizmor 1.31.1 on `PATH`, and `python3.12` or
   `python3.13`. promtool is exact-pinned too (3.13.1): if `PATH` has another version,
   `make tools-promtool` fetches the pinned release for your OS/arch into the gitignored `.tools/bin`,
   verifies its sha256, and puts it first on `PATH`. The `v1` tag must be present locally

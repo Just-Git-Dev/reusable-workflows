@@ -1,0 +1,52 @@
+{
+  "tools": {
+    "actionlint": "1.7.12",
+    "shellcheck": "0.11.0"
+  },
+  "local_gate": "make ci",
+  "adopted": "2026-10-21",
+  "jobs": {
+    "ci.yml:lint": {
+      "local": "make actionlint"
+    },
+    "ci.yml:catalog": {
+      "local": "make catalog"
+    },
+    "ci.yml:docs-coverage": {
+      "local": "make docs-coverage"
+    },
+    "ci.yml:version-sweep": {
+      "local": "make version-sweep"
+    },
+    "ci.yml:v1-alias-frozen": {
+      "local": "make v1-frozen"
+    },
+    "ci.yml:doc-examples": {
+      "local": "make doc-examples"
+    },
+    "ci.yml:plan-fixtures": {
+      "local": "make plan-fixtures"
+    },
+    "ci.yml:secret-plan-fixtures": {
+      "local": "make secret-plan-fixtures"
+    },
+    "ci.yml:repos-plan-fixtures": {
+      "local": "make repos-plan-fixtures"
+    },
+    "ci.yml:concurrency-groups": {
+      "local": "make concurrency-groups"
+    },
+    "ci.yml:step-bodies": {
+      "local": "make step-bodies"
+    },
+    "ci.yml:alertgen": {
+      "local": "make alertgen"
+    },
+    "ci.yml:pinned-actions": {
+      "local": "make pinned"
+    },
+    "ci.yml:ci-gate": {
+      "local": "make ci-gate-tests"
+    }
+  }
+}

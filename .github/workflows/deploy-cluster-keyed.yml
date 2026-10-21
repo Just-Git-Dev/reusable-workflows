@@ -271,6 +271,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Registry login BEFORE build/push so the push is authenticated. Cluster
       # auth happens AFTER the push, so registry and cluster credentials — which

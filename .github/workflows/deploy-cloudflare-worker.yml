@@ -221,6 +221,7 @@ jobs:
           # which a shallow clone does not contain. Unconditional because making the fetch
           # depth depend on watch_paths would make the skip silently wrong when it is set.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Decide whether the worker changed
         id: changed

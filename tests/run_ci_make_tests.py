@@ -90,7 +90,8 @@ def test_pinned_tool_versions_match_the_makefile():
         raw = fh.read()
     for var, pat in (("SHELLCHECK_VERSION", r"SC_VERSION:\s*v{v}\b"),
                      ("ACTIONLINT_VERSION", r"AL_VERSION:\s*{v}\b"),
-                     ("PROMTOOL_VERSION", r"PROM_VERSION:\s*{v}\b")):
+                     ("PROMTOOL_VERSION", r"PROM_VERSION:\s*{v}\b"),
+                     ("ZIZMOR_VERSION", r"ZZ_VERSION:\s*{v}\b")):
         v = make_var(text, var)
         assert re.search(pat.format(v=re.escape(v)), raw), \
             f"ci.yml pin differs from Makefile {var}={v}"

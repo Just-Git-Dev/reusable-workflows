@@ -201,6 +201,7 @@ jobs:
         with:
           # Empty ⇒ checkout's default (the triggering ref); set to re-deploy a tag.
           ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       # Fail fast rather than deploy a build that silently never used the cache the
       # caller asked for: with no separate install_command, build_command still runs

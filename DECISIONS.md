@@ -2,8 +2,9 @@
 
 ## Index
 
-110 entries total — 100 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+111 entries total — 101 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [workflow-preflight + zizmor added to the gate](#2026-10-21--workflow-preflight--zizmor-added-to-the-gate)
 - `2026-10-20` — [F8 repos-secrets: one writer per <service>-env secret policy (ruling 24)](#2026-10-20--f8-repos-secrets-one-writer-per-service-env-secret-policy-ruling-24)
 - `2026-10-20` — [cleanup-secret-versions: pass etag verbatim (quotes kept) and fail when no mutation succeeded](#2026-10-20--cleanup-secret-versions-pass-etag-verbatim-quotes-kept-and-fail-when-no-mutation-succeeded)
 - `2026-10-20` — [sync-bundle-key: value-safety guards and an opt-in strict_values mode](#2026-10-20--sync-bundle-key-value-safety-guards-and-an-opt-in-strict_values-mode)
@@ -226,6 +227,39 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — workflow-preflight + zizmor added to the gate
+
+Added two gates to `make ci` and the ci.yml `lint` job: the fleet's vendored workflow-preflight
+(`scripts/workflow_preflight.py`, config `.workflow-preflight.json`; runs lint, parity, calls and
+`refs --static`) and zizmor 1.31.1 (policy `zizmor.yml`, default persona, offline, over
+`.github/workflows` and `actions/`).
+
+Why: the owner approved wave W3 and zizmor on 2026-10-21 after the prior-art survey. Preflight
+catches CI-vs-laptop tool and job drift (all 14 ci.yml jobs are mapped to the make target the
+laptop runs); zizmor audits workflows that mint cloud credentials and dump databases for injection,
+excess permissions and credential persistence, which actionlint does not cover. zizmor is pinned
+and checksummed like actionlint; `make zizmor` checks the installed version itself (not in
+`make tools`) because only the lint job installs it.
+
+Fixed on the way: `persist-credentials: false` on 31 checkouts (zizmor's own autofix, additive
+only, no existing line changed). The two README-badge checkouts in ci-go.yml and ci-node.yml
+that `git push` keep the token and say so with an explicit `persist-credentials: true`. No
+`inputs:`/`secrets:`/`outputs:` contract changed.
+
+Not fixed, ignored per rule AND per file with a reason in `zizmor.yml` (72 findings; this is
+the follow-up list, not an endorsement):
+- template-injection (57, 11 files): `${{ inputs.* }}` spliced into `run:` bodies. Values come
+  from the calling repo's own workflow, not an external actor; moving ~45 sites into `env:` in
+  deploy bodies the step tests only partly cover is its own change.
+- github-app (4): repos-create/settings/variables mint App tokens with no `permission-*` inputs;
+  narrowing needs the exact permission set per App from the owner.
+- unpinned-images (6): service-container images are caller inputs.
+- unsound-ternary (2): job display names. github-env (1): release-flow puts its own directory on
+  PATH. cache-poisoning (2): the Pages deploy publishes the caller's own build.
+
+zizmor cannot express "exact vX.Y.Z" for calls into this org's reusable workflows, so zizmor.yml
+allows any ref pin there and preflight `lint`/`calls` enforces the exact-tag-or-SHA rule.
 
 ## 2026-10-20 — F8 repos-secrets: one writer per <service>-env secret policy (ruling 24)
 

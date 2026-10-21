@@ -37,6 +37,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Lint rules change only with a commit: actionlint and shellcheck are pinned here (and in
       # the Makefile, which `make tools` checks locally; a test asserts the two agree). The
@@ -70,6 +72,22 @@ jobs:
           tar -xzf "$RUNNER_TEMP/al.tar.gz" -C "$RUNNER_TEMP/actionlint-${AL_VERSION}" actionlint
           echo "$RUNNER_TEMP/actionlint-${AL_VERSION}" >> "$GITHUB_PATH"
 
+      # Pinned and checksummed like the two above. zizmor audits the workflows for security
+      # problems (template injection, excessive permissions, unpinned actions, credential
+      # persistence); the policy is zizmor.yml, the run is `make zizmor`.
+      - name: install pinned zizmor
+        shell: bash
+        env:
+          ZZ_VERSION: 1.31.1
+          ZZ_SHA256: d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/zz.tar.gz" \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZZ_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZZ_SHA256}  $RUNNER_TEMP/zz.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/zizmor-${ZZ_VERSION}"
+          tar -xzf "$RUNNER_TEMP/zz.tar.gz" -C "$RUNNER_TEMP/zizmor-${ZZ_VERSION}" zizmor
+          echo "$RUNNER_TEMP/zizmor-${ZZ_VERSION}" >> "$GITHUB_PATH"
+
       - name: Pinned linter versions match the gate
         run: make tools
 
@@ -88,12 +106,23 @@ jobs:
       - name: shellcheck composite action scripts
         run: make shellcheck
 
+      # workflow-preflight (vendored scripts/workflow_preflight.py): pinned lint, SHA pins,
+      # CI-vs-laptop job parity, reusable-call contracts, static secret/var refs. Its parity
+      # check reads this file, so a CI job with no local equivalent fails here.
+      - name: workflow-preflight
+        run: make preflight
+
+      - name: zizmor
+        run: make zizmor
+
   catalog:
     name: catalog.json is current
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The venv is built from requirements-ci.txt, the same file `make ci` uses locally.
       - name: Python venv from requirements-ci.txt
@@ -111,6 +140,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # `catalog.json is current` regenerates FROM the workflow files, so a new
       # workflow appears there and looks fine while never reaching the README or
@@ -132,6 +163,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Two failure modes, one script. On a PR this only asserts the tree agrees with
       # ITSELF, so an unrelated PR is never failed by a release happening. On a tag push
@@ -156,6 +189,7 @@ jobs:
           # Default checkout is a single shallow commit and fetches no tags
           # at all — this job needs `v1` itself resolvable to a commit.
           fetch-depth: 0
+          persist-credentials: false
 
       # `v1` is a FROZEN legacy alias, on purpose (README.md#versioning,
       # DECISIONS-ARCHIVE.md) — re-pointing it onto a newer release was
@@ -175,6 +209,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: install pinned shellcheck  # same pin as the lint job
         shell: bash
@@ -215,6 +251,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # actionlint's shellcheck does not descend into `<<'PY'` heredocs, so the
       # delete-plan algorithm is otherwise entirely unlinted and untested — while
@@ -230,6 +268,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Same seam as the GAR fixtures above, guarding a strictly worse failure:
       # a destroyed secret version has no undelete and no rebuild. Every fixture
@@ -245,6 +285,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The repos-register planners (F1-F8) are pure; this proves the decision logic and the
       # never-do list with no GitHub or cloud (docs/repos-register.md section 7).
@@ -257,6 +299,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # A concurrency group is a string: three writers of the same app-secrets
       # blob are serialised only if their group expressions are byte-identical.
@@ -271,6 +315,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # shellcheck lints these bodies but never runs them — which is how the
       # deploy-cloud-run Summary bug shipped (TODO.md). This extracts a step's
@@ -312,6 +358,8 @@ jobs:
       PROM_SHA256: 962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf73421b9721f0d103
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: install pinned promtool (checksum-verified)
         shell: bash
@@ -342,6 +390,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Matches `uses: owner/repo@ref` where ref is not a 40-char hex SHA (local `./...` refs are
       # excluded). actions/ holds composite actions, whose steps run in the CALLER's job with the
@@ -355,6 +405,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # `make ci` must run exactly the checks above, and the pre-push hook must gate the commit
       # being pushed (see README "Local gate").

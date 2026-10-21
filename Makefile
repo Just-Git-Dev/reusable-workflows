@@ -6,6 +6,7 @@ SHELL := bash
 
 SHELLCHECK_VERSION := 0.11.0
 ACTIONLINT_VERSION := 1.7.12
+ZIZMOR_VERSION := 1.31.1
 PROMTOOL_VERSION := 3.13.1
 # From the v3.13.1 release's sha256sums.txt; linux-amd64 must equal PROM_SHA256 in ci.yml.
 PROMTOOL_SHA256_darwin-arm64 := 28d1f1224b2a22f84c801487fad4b3bd58f94a8cb58cf9340557e787030c9703
@@ -15,7 +16,7 @@ PROMTOOL_SHA256_linux-amd64 := 962b812371aff838d152b6ff2d56fdb7a6396f5542f48ebf7
 export PATH := $(CURDIR)/.tools/bin:$(PATH)
 
 # Order = CI's order. Add a check by adding a target and listing it here AND in ci.yml.
-CHECKS := tools actionlint canary shellcheck \
+CHECKS := tools actionlint canary shellcheck preflight zizmor \
   venv catalog docs-coverage doc-anchors version-sweep stamp-tests v1-frozen v1-selftest \
   doc-examples plan-fixtures secret-plan-fixtures repos-plan-fixtures concurrency-groups \
   step-bodies release-gate refresh-api-spec release-flow compile-actions \
@@ -200,3 +201,24 @@ pinned: venv
 ci-gate-tests: venv
 	$(PY) tests/run_ci_make_tests.py
 	$(PY) tests/run_pre_push_hook_tests.py
+
+# Vendored workflow-preflight (scripts/workflow_preflight.py, config .workflow-preflight.json):
+# pinned lint + canary + SHA pins, CI-vs-laptop job parity, reusable-workflow call contracts, and
+# the static half of the secret/variable reference check. No network except the one git ls-remote
+# that verifies a pinned reusable-workflow tag (lint prints a WARNING, never silence, if offline).
+preflight: tools
+	python3 scripts/workflow_preflight.py lint
+	python3 scripts/workflow_preflight.py parity
+	python3 scripts/workflow_preflight.py calls
+	python3 scripts/workflow_preflight.py refs --static
+
+# zizmor security audit of the workflows and composite actions, default persona, policy in
+# zizmor.yml. --offline: the online audits need a token, and a PR from a fork must not be handed
+# one. Only the lint job installs zizmor, so its version check lives here, not in `tools`.
+# Asserts files exist so "no findings" cannot mean "looked at nothing".
+zizmor:
+	@got=$$(zizmor --version 2>/dev/null | awk '{print $$2}'); \
+	[ "$$got" = "$(ZIZMOR_VERSION)" ] || { echo "zizmor: '$$got' != pinned $(ZIZMOR_VERSION); install: brew install zizmor (or the v$(ZIZMOR_VERSION) release from github.com/zizmorcore/zizmor)"; exit 1; }
+	@n=$$(ls .github/workflows/*.yml | wc -l | tr -d ' '); [ "$$n" -gt 0 ] || { echo "zizmor: no workflows found"; exit 1; }
+	zizmor --offline --no-progress --config zizmor.yml .github/workflows actions
+	@echo "zizmor: audited $$(ls .github/workflows/*.yml | wc -l | tr -d ' ') workflow files plus actions/"
