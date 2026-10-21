@@ -93,6 +93,7 @@ a pure planner. Contract: [repos-register](docs/repos-register.md).
 | [`repos-wif-link.yml`](docs/repos-wif-link.md) | F5: link each repo's deployer SA to the WIF pool, scoped to one repo and environment. Report or enforce |
 | [`repos-service-accounts.yml`](docs/repos-service-accounts.md) | F6: create the registered service accounts that are missing. Never deletes one, never creates a key. Report or enforce |
 | [`repos-deploy-scope.yml`](docs/repos-deploy-scope.md) | F7: each repo may deploy only its own service (resource-level IAM). Report or enforce |
+| [`repos-secrets.yml`](docs/repos-secrets.md) | F8: one `<service>-env` secret per service, its whole IAM policy written here only (runtime reads, own deployer syncs). Report or enforce, prune opt-in |
 
 ### Backups, alerts & housekeeping
 

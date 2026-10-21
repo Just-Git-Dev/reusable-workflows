@@ -2,6 +2,119 @@
 
 ## Index
 
+110 entries total — 100 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+
+- `2026-10-20` — [F8 repos-secrets: one writer per <service>-env secret policy (ruling 24)](#2026-10-20--f8-repos-secrets-one-writer-per-service-env-secret-policy-ruling-24)
+- `2026-10-20` — [cleanup-secret-versions: pass etag verbatim (quotes kept) and fail when no mutation succeeded](#2026-10-20--cleanup-secret-versions-pass-etag-verbatim-quotes-kept-and-fail-when-no-mutation-succeeded)
+- `2026-10-20` — [sync-bundle-key: value-safety guards and an opt-in strict_values mode](#2026-10-20--sync-bundle-key-value-safety-guards-and-an-opt-in-strict_values-mode)
+- `2026-10-20` — [Secret values come only from GitHub secrets; no hand writes to Secret Manager](#2026-10-20--secret-values-come-only-from-github-secrets-no-hand-writes-to-secret-manager)
+- `2026-10-20` — [Drop the deprecated protected_service_accounts input and flag (owner ruling)](#2026-10-20--drop-the-deprecated-protected_service_accounts-input-and-flag-owner-ruling)
+- `2026-10-20` — [Ruling 21 review fixes: F5/F6 uniqueness, F7 waits for act_as, F6 own deployers only](#2026-10-20--ruling-21-review-fixes-f5f6-uniqueness-f7-waits-for-act_as-f6-own-deployers-only)
+- `2026-10-20` — [One writer per service-account policy: suffix rule, derived runtime SA, F7 writes no SA policy (ruling 21)](#2026-10-20--one-writer-per-service-account-policy-suffix-rule-derived-runtime-sa-f7-writes-no-sa-policy-ruling-21)
+- `2026-10-20` — [Repos-as-code review fixes: protected SAs, repo-admin self-grant, GKE deferred, visibility never written](#2026-10-20--repos-as-code-review-fixes-protected-sas-repo-admin-self-grant-gke-deferred-visibility-never-written)
+- `2026-10-20` — [Repos as code: a per-project register and independent, report-first features](#2026-10-20--repos-as-code-a-per-project-register-and-independent-report-first-features)
+- `2026-10-19` — [Local gate is CI: one make target per check, a committed pre-push hook](#2026-10-19--local-gate-is-ci-one-make-target-per-check-a-committed-pre-push-hook)
+- `2026-10-19` — [R2 bucket workflows: shared ops bodies, immutable versions, forward-only latest](#2026-10-19--r2-bucket-workflows-shared-ops-bodies-immutable-versions-forward-only-latest)
+- `2026-10-19` — [CI pins actionlint and shellcheck](#2026-10-19--ci-pins-actionlint-and-shellcheck)
+- `2026-10-16` — [`v3.6.1` released (release-flow: untitled dispatch on a tag resolves to that tag)](#2026-10-16--v361-released-release-flow-untitled-dispatch-on-a-tag-resolves-to-that-tag)
+- `2026-10-16` — [release-flow: an untitled dispatch on a vX.Y.Z tag resolves to that tag](#2026-10-16--release-flow-an-untitled-dispatch-on-a-vxyz-tag-resolves-to-that-tag)
+- `2026-10-15` — [`v3.6.0` released (`cleanup-gar-images` opt-in `fail_on_inert`)](#2026-10-15--v360-released-cleanup-gar-images-opt-in-fail_on_inert)
+- `2026-10-15` — [`cleanup-gar-images`: opt-in `fail_on_inert` makes an inert sweep fail the run](#2026-10-15--cleanup-gar-images-opt-in-fail_on_inert-makes-an-inert-sweep-fail-the-run)
+- `2026-10-15` — [`v3.5.2` released (neutral service names, older `ops-subset` alias removed)](#2026-10-15--v352-released-neutral-service-names-older-ops-subset-alias-removed)
+- `2026-10-15` — [Public repo names no consumer service — neutral role names, older `ops-subset` alias removed](#2026-10-15--public-repo-names-no-consumer-service--neutral-role-names-older-ops-subset-alias-removed)
+- `2026-10-15` — [`v3.5.1` released (`release-flow` YAML 1.2 booleans)](#2026-10-15--v351-released-release-flow-yaml-12-booleans)
+- `2026-10-15` — [`release-flow`: YAML specs read with YAML 1.2 booleans — `off` is not `false`](#2026-10-15--release-flow-yaml-specs-read-with-yaml-12-booleans--off-is-not-false)
+- `2026-10-15` — [`v3.5.0` released (`release-flow` breaking-approved waiver)](#2026-10-15--v350-released-release-flow-breaking-approved-waiver)
+- `2026-10-15` — [Release flow: a `breaking-approved` label waives an exact list of breaking changes (supersedes the no-approval ruling)](#2026-10-15--release-flow-a-breaking-approved-label-waives-an-exact-list-of-breaking-changes-supersedes-the-no-approval-ruling)
+- `2026-10-15` — [Root release checks contracts between services only — no removal-approval list (2026-10-15)](#2026-10-15--root-release-checks-contracts-between-services-only--no-removal-approval-list-2026-10-15)
+- `2026-10-13` — [`release-flow`: the release-PR check example triggers on manifests only (`releases/*.yaml`)](#2026-10-13--release-flow-the-release-pr-check-example-triggers-on-manifests-only-releasesyaml)
+- `2026-10-13` — [`release-flow`: the App key is a declared secret passed BY NAME — `inherit` passes nothing across orgs](#2026-10-13--release-flow-the-app-key-is-a-declared-secret-passed-by-name--inherit-passes-nothing-across-orgs)
+- `2026-10-13` — [`release-flow`: `app-id` must resolve at the caller — an environment-only variable is empty](#2026-10-13--release-flow-app-id-must-resolve-at-the-caller--an-environment-only-variable-is-empty)
+- `2026-10-13` — [`v3.3.0` released (`release-flow`); the `checks` output schema was under-documented](#2026-10-13--v330-released-release-flow-the-checks-output-schema-was-under-documented)
+- `2026-10-13` — [`release-flow`: the proven multi-repo release flow, shared — CLI action, four workflows, publish in per-service slots](#2026-10-13--release-flow-the-proven-multi-repo-release-flow-shared--cli-action-four-workflows-publish-in-per-service-slots)
+- `2026-10-12` — [`refresh-api-spec` is a composite action: fetch, compare by meaning, one PR, merge only on the caller's checks](#2026-10-12--refresh-api-spec-is-a-composite-action-fetch-compare-by-meaning-one-pr-merge-only-on-the-callers-checks)
+- `2026-10-09` — [`promote-image` `skip_existing_tag`: a same-digest re-run skips the retag, another digest fails](#2026-10-09--promote-image-skip_existing_tag-a-same-digest-re-run-skips-the-retag-another-digest-fails)
+- `2026-10-08` — [`check-release-gate` is a composite action that only reads: newest GitHub Actions run, never waits](#2026-10-08--check-release-gate-is-a-composite-action-that-only-reads-newest-github-actions-run-never-waits)
+- `2026-10-07` — [`TESTING-STANDARD` follows the rewritten testing skill: injected stand-ins, root-only cross-repo, release log, no schedule by default](#2026-10-07--testing-standard-follows-the-rewritten-testing-skill-injected-stand-ins-root-only-cross-repo-release-log-no-schedule-by-default)
+- `2026-10-05` — [`mount_path` is required on the three bundle-remount workflows (next release is `v3.0.0`)](#2026-10-05--mount_path-is-required-on-the-three-bundle-remount-workflows-next-release-is-v300)
+- `2026-10-04` — [Public repo names no private consumer: pseudonyms and placeholders, history left alone](#2026-10-04--public-repo-names-no-private-consumer-pseudonyms-and-placeholders-history-left-alone)
+- `2026-09-23` — [`v2.10.0` is a minor: one new workflow, additive inputs on two](#2026-09-23--v2100-is-a-minor-one-new-workflow-additive-inputs-on-two)
+- `2026-09-23` — [`logs.crash_loop` keys on GoFr's `jsonPayload.level`, because GoFr never sets `severity`](#2026-09-23--logscrash_loop-keys-on-gofrs-jsonpayloadlevel-because-gofr-never-sets-severity)
+- `2026-09-23` — [`service-alerts`: alerts as data, rendered from a semantic spec, applied by the existing bodies](#2026-09-23--service-alerts-alerts-as-data-rendered-from-a-semantic-spec-applied-by-the-existing-bodies)
+- `2026-09-23` — [`v2.9.0` is a minor: one new workflow, and callers opt in with their own job](#2026-09-23--v290-is-a-minor-one-new-workflow-and-callers-opt-in-with-their-own-job)
+- `2026-09-18` — [`verify-metrics-arrival`: three outcomes, because a probe that cannot see must not read as happy](#2026-09-18--verify-metrics-arrival-three-outcomes-because-a-probe-that-cannot-see-must-not-read-as-happy)
+- `2026-09-15` — [RCA: a routine "revision in use" killed the whole revisions sweep, because `set -uo pipefail` does not clear `-e`](#2026-09-15--rca-a-routine-revision-in-use-killed-the-whole-revisions-sweep-because-set--uo-pipefail-does-not-clear--e)
+- `2026-09-15` — [`uses: ./actions/x` resolves against the CALLER's workspace, so the cleanup sweeps stay two workflows](#2026-09-15--uses-actionsx-resolves-against-the-callers-workspace-so-the-cleanup-sweeps-stay-two-workflows)
+- `2026-09-13` — [RCA: 17 `DECISIONS.md` index links pointed at nothing, because the anchor ate a space the em dash left behind](#2026-09-13--rca-17-decisionsmd-index-links-pointed-at-nothing-because-the-anchor-ate-a-space-the-em-dash-left-behind)
+- `2026-09-13` — [`TODO.md` gets a status index and an archive split; ten checkboxes were lying](#2026-09-13--todomd-gets-a-status-index-and-an-archive-split-ten-checkboxes-were-lying)
+- `2026-09-07` — [`v2.7.0` is a minor, not a patch: the gate can newly fail a caller that never changed](#2026-09-07--v270-is-a-minor-not-a-patch-the-gate-can-newly-fail-a-caller-that-never-changed)
+- `2026-09-07` — [`validate-alerts` enforces actionability: a page must carry triage, and clear](#2026-09-07--validate-alerts-enforces-actionability-a-page-must-carry-triage-and-clear)
+- `2026-09-07` — [RCA: `bootstrap-alerts` rejected the JSON policies its own linter had just accepted](#2026-09-07--rca-bootstrap-alerts-rejected-the-json-policies-its-own-linter-had-just-accepted)
+- `2026-09-06` — [RCA: `v2.6.1` shipped stamping `v2.6.0` — the release stamp is a step, not a property](#2026-09-06--rca-v261-shipped-stamping-v260--the-release-stamp-is-a-step-not-a-property)
+- `2026-09-06` — [GAR cleanup was red on deletions that had succeeded: `del_one` now trusts a readback](#2026-09-06--gar-cleanup-was-red-on-deletions-that-had-succeeded-del_one-now-trusts-a-readback)
+- `2026-09-05` — [The pin gate is verified by running it, not by grepping for it](#2026-09-05--the-pin-gate-is-verified-by-running-it-not-by-grepping-for-it)
+- `2026-09-05` — [The `testing` skill becomes source of truth; TESTING-STANDARD.md follows it](#2026-09-05--the-testing-skill-becomes-source-of-truth-testing-standardmd-follows-it)
+- `2026-09-01` — [RCA: testing the MQL layer found two bugs in it — a missing query list read as "zero, all fine", and a GNU-only word boundary](#2026-09-01--rca-testing-the-mql-layer-found-two-bugs-in-it--a-missing-query-list-read-as-zero-all-fine-and-a-gnu-only-word-boundary)
+- `2026-09-01` — [`validate-alerts` executed MQL only: PromQL passed a lint and was never run](#2026-09-01--validate-alerts-executed-mql-only-promql-passed-a-lint-and-was-never-run)
+- `2026-08-25` — [A testing standard ships as docs, before it ships as a reusable workflow](#2026-08-25--a-testing-standard-ships-as-docs-before-it-ships-as-a-reusable-workflow)
+- `2026-08-24` — [`cloud-run-update`: empty means "do not touch", and it never deploys an image](#2026-08-24--cloud-run-update-empty-means-do-not-touch-and-it-never-deploys-an-image)
+- `2026-08-24` — [`bootstrap-cf-dns`: the full-ruleset PUT was deleting another workflow's Origin Rules](#2026-08-24--bootstrap-cf-dns-the-full-ruleset-put-was-deleting-another-workflows-origin-rules)
+- `2026-08-24` — [`bootstrap-cf-service`: two routes to one hostname, and the origin host stops being hand-copied](#2026-08-24--bootstrap-cf-service-two-routes-to-one-hostname-and-the-origin-host-stops-being-hand-copied)
+- `2026-08-24` — [`deploy-cloudflare-worker`: wrangler owns the worker's config, this workflow owns everything around the deploy](#2026-08-24--deploy-cloudflare-worker-wrangler-owns-the-workers-config-this-workflow-owns-everything-around-the-deploy)
+- `2026-08-24` — [RCA: the sweep demanded a project-wide role to check a typo, and collapsed multi-secret lists](#2026-08-24--rca-the-sweep-demanded-a-project-wide-role-to-check-a-typo-and-collapsed-multi-secret-lists)
+- `2026-08-21` — [`setup-buildx-action` 4.3.0 merged without a release: a tag is a fleet event, a patch bump is not](#2026-08-21--setup-buildx-action-430-merged-without-a-release-a-tag-is-a-fleet-event-a-patch-bump-is-not)
+- `2026-08-21` — [v2.4.0: `buildcache` leaves the default keep-set — a moving tag the default policy forbids](#2026-08-21--v240-buildcache-leaves-the-default-keep-set--a-moving-tag-the-default-policy-forbids)
+- `2026-08-21` — [Three workflows shipped undocumented; a generator cannot catch absence from a hand-maintained list](#2026-08-21--three-workflows-shipped-undocumented-a-generator-cannot-catch-absence-from-a-hand-maintained-list)
+- `2026-08-20` — [Three writers of one secret blob held three different locks (bug fix)](#2026-08-20--three-writers-of-one-secret-blob-held-three-different-locks-bug-fix)
+- `2026-08-17` — [Delayed destruction (`version_destroy_ttl`) exists — it simplifies the sweeper but does not replace it](#2026-08-17--delayed-destruction-version_destroy_ttl-exists--it-simplifies-the-sweeper-but-does-not-replace-it)
+- `2026-08-17` — [`keep_enabled_count` on the writers: disable is inline, destroy stays in the sweeper](#2026-08-17--keep_enabled_count-on-the-writers-disable-is-inline-destroy-stays-in-the-sweeper)
+- `2026-08-16` — [`cleanup-secret-versions`: quarantine, not deletion — and the `:latest`-resolves-at-deploy premise was wrong](#2026-08-16--cleanup-secret-versions-quarantine-not-deletion--and-the-latest-resolves-at-deploy-premise-was-wrong)
+- `2026-08-13` — [`cleanup_latest_tag` (v2.2.0): a stranded `:latest` is cleaned by the sweep that strands it, as a convergence rule](#2026-08-13--cleanup_latest_tag-v220-a-stranded-latest-is-cleaned-by-the-sweep-that-strands-it-as-a-convergence-rule)
+- `2026-08-13` — [Fleet repinned to v2.1.2: drift is closed to zero on a behaviour-neutral tag, deliberately](#2026-08-13--fleet-repinned-to-v212-drift-is-closed-to-zero-on-a-behaviour-neutral-tag-deliberately)
+- `2026-08-13` — [`retire-gar-packages` handles immutability, and preserves it rather than deciding it](#2026-08-13--retire-gar-packages-handles-immutability-and-preserves-it-rather-than-deciding-it)
+- `2026-08-12` — [A locked repo the sweep cannot unlock degrades to untagged-only instead of failing](#2026-08-12--a-locked-repo-the-sweep-cannot-unlock-degrades-to-untagged-only-instead-of-failing)
+- `2026-08-12` — [`cleanup-gar-images` v2.1.0: the sweep now ENABLES immutable tags, it does not merely restore them](#2026-08-12--cleanup-gar-images-v210-the-sweep-now-enables-immutable-tags-it-does-not-merely-restore-them)
+- `2026-08-11` — [`cleanup-gar-images` plans are mostly impossible fleet-wide; one caller stalled completely (bug fix)](#2026-08-11--cleanup-gar-images-plans-are-mostly-impossible-fleet-wide-one-caller-stalled-completely-bug-fix)
+- `2026-08-11` — [`badge_insert`: default-on badges may still be given to a repo, but it is now a nameable choice](#2026-08-11--badge_insert-default-on-badges-may-still-be-given-to-a-repo-but-it-is-now-a-nameable-choice)
+- `2026-08-11` — [`cleanup-gar-images` v2.0.0: retention is release-relative, not age-based](#2026-08-11--cleanup-gar-images-v200-retention-is-release-relative-not-age-based)
+- `2026-08-11` — [Hard-error audit: a badge push failure could fail a caller's CI (bug fix)](#2026-08-11--hard-error-audit-a-badge-push-failure-could-fail-a-callers-ci-bug-fix)
+- `2026-08-11` — [The GAR 105-vs-103 delta is a wall-clock boundary crossing, not a logic change (root cause; corrects the earlier correction)](#2026-08-11--the-gar-105-vs-103-delta-is-a-wall-clock-boundary-crossing-not-a-logic-change-root-cause-corrects-the-earlier-correction)
+- `2026-08-11` — [Opt-in `node_modules` caching on `ci-node` and `deploy-cloudflare-pages`; Pages gains a separate `install_command`](#2026-08-11--opt-in-node_modules-caching-on-ci-node-and-deploy-cloudflare-pages-pages-gains-a-separate-install_command)
+- `2026-08-11` — [Release version sweep automated: doc pins + a `WORKFLOW_VERSION` stamp, enforced twice](#2026-08-11--release-version-sweep-automated-doc-pins--a-workflow_version-stamp-enforced-twice)
+- `2026-08-11` — [`deploy-cloudflare-pages` gains an opt-in, blocking post-deploy smoke check](#2026-08-11--deploy-cloudflare-pages-gains-an-opt-in-blocking-post-deploy-smoke-check)
+- `2026-08-11` — [`cleanup-gar-images` unlocks and relocks immutable tags, and fails closed on both ends](#2026-08-11--cleanup-gar-images-unlocks-and-relocks-immutable-tags-and-fails-closed-on-both-ends)
+- `2026-08-11` — [Onboarding retrospective: a generated contract file, an agent guide, and CI that keeps both honest](#2026-08-11--onboarding-retrospective-a-generated-contract-file-an-agent-guide-and-ci-that-keeps-both-honest)
+- `2026-08-11` — [the `cleanup-gar-images` "keep-only" invariant is not true (correction)](#2026-08-11--the-cleanup-gar-images-keep-only-invariant-is-not-true-correction)
+- `2026-08-11` — [Default-on badges must not fail CI for callers without a coverage report (bug fix)](#2026-08-11--default-on-badges-must-not-fail-ci-for-callers-without-a-coverage-report-bug-fix)
+- `2026-08-11` — [README badges on by default; the badge job stops dictating caller permissions](#2026-08-11--readme-badges-on-by-default-the-badge-job-stops-dictating-caller-permissions)
+- `2026-08-11` — [Private npm registry auth on `ci-node` + `deploy-cloudflare-pages`, delegated to `setup-node`](#2026-08-11--private-npm-registry-auth-on-ci-node--deploy-cloudflare-pages-delegated-to-setup-node)
+- `2026-07-28` — [`promote-image` races the build it promotes from: bounded `source_wait_seconds`, plus the first executable `run:`-body tests (bug fix)](#2026-07-28--promote-image-races-the-build-it-promotes-from-bounded-source_wait_seconds-plus-the-first-executable-run-body-tests-bug-fix)
+- `2026-07-28` — [`run-db-job` built; `docker_target` added; the runner-side prebuild hook deliberately left out](#2026-07-28--run-db-job-built-docker_target-added-the-runner-side-prebuild-hook-deliberately-left-out)
+- `2026-07-27` — [`deploy-cloud-run` Summary step fails a successful job when there is no service URL (bug fix)](#2026-07-27--deploy-cloud-run-summary-step-fails-a-successful-job-when-there-is-no-service-url-bug-fix)
+- `2026-07-27` — [Secret-distribution workflows refuse values too short to be a credential](#2026-07-27--secret-distribution-workflows-refuse-values-too-short-to-be-a-credential)
+- `2026-07-27` — [build-once/promote-to-prod: `build_only`, release-relative GAR retention, and the first tests in this repo](#2026-07-27--build-oncepromote-to-prod-build_only-release-relative-gar-retention-and-the-first-tests-in-this-repo)
+- `2026-07-27` — [`DECISIONS.md` restructured: index + age-based archive (no deletions)](#2026-07-27--decisionsmd-restructured-index--age-based-archive-no-deletions)
+- `2026-07-27` — [Fleet-wide caller repin to `v1.15.0`, driven by an annotation sweep](#2026-07-27--fleet-wide-caller-repin-to-v1150-driven-by-an-annotation-sweep)
+- `2026-07-27` — [`ci-go`/`ci-node`: opt-in README badges close the last test-and-lint parity gap](#2026-07-27--ci-goci-node-opt-in-readme-badges-close-the-last-test-and-lint-parity-gap)
+- `2026-07-24` — [actions-group major bumps (#18): Node-24 runner floor is the only breaking change](#2026-07-24--actions-group-major-bumps-18-node-24-runner-floor-is-the-only-breaking-change)
+- `2026-07-24` — [`retire-gar-packages` shellcheck SC2020 breaking CI on every PR (bug fix)](#2026-07-24--retire-gar-packages-shellcheck-sc2020-breaking-ci-on-every-pr-bug-fix)
+- `2026-07-15` — [`ci-go` secret renamed `github_token` → `go_private_token` (bug fix)](#2026-07-15--ci-go-secret-renamed-github_token--go_private_token-bug-fix)
+- `2026-07-15` — [forward-only extended to the stage build workflows (opt-in)](#2026-07-15--forward-only-extended-to-the-stage-build-workflows-opt-in)
+- `2026-07-15` — [forward-only guard on `promote-image` (phase 3; opt-in)](#2026-07-15--forward-only-guard-on-promote-image-phase-3-opt-in)
+- `2026-07-15` — [live-commit stamping across deploy/promote (phase 2 of the release-process plan)](#2026-07-15--live-commit-stamping-across-deploypromote-phase-2-of-the-release-process-plan)
+- `2026-07-15` — [`rollback-service` built; no pin (push-based, not GitOps); triggers stay caller-owned](#2026-07-15--rollback-service-built-no-pin-push-based-not-gitops-triggers-stay-caller-owned)
+- `2026-07-15` — [release-process model documented; transient rollback fenced out-of-band](#2026-07-15--release-process-model-documented-transient-rollback-fenced-out-of-band)
+- `2026-07-14` — [key-based auth for `promote-image` (quizzing-pro prod parity)](DECISIONS-ARCHIVE.md#2026-07-14--key-based-auth-for-promote-image-quizzing-pro-prod-parity)
+- `2026-07-14` — [quizzing-pro convergence: parity audit + `manage-config-secrets`](DECISIONS-ARCHIVE.md#2026-07-14--quizzing-pro-convergence-parity-audit--manage-config-secrets)
+- `2026-07-14` — [Deploy-reusable gaps surfaced by the consumer B/A caller migration (v1.5.0)](DECISIONS-ARCHIVE.md#2026-07-14--deploy-reusable-gaps-surfaced-by-the-consumer-ba-caller-migration-v150)
+- `2026-07-14` — [Capability parity with `zopsmart/workflows`, verified from live callers (v1.4.0)](DECISIONS-ARCHIVE.md#2026-07-14--capability-parity-with-zopsmartworkflows-verified-from-live-callers-v140)
+- `2026-07-14` — [Fleet-wide audit; reverse the "deploy/CI kept per-repo" call](DECISIONS-ARCHIVE.md#2026-07-14--fleet-wide-audit-reverse-the-deployci-kept-per-repo-call)
+- `2026-07-13` — [Add `rotate-signing-keypair` (v1.2.0, with `rotate-worker-signing-secret`)](DECISIONS-ARCHIVE.md#2026-07-13--add-rotate-signing-keypair-v120-with-rotate-worker-signing-secret)
+- `2026-07-13` — [Add `rotate-worker-signing-secret` (v1.2.0)](DECISIONS-ARCHIVE.md#2026-07-13--add-rotate-worker-signing-secret-v120)
+- `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
+- `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
+- `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
 109 entries total — 99 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
 - `2026-10-20` — [cleanup-secret-versions: pass etag verbatim (quotes kept) and fail when no mutation succeeded](#2026-10-20--cleanup-secret-versions-pass-etag-verbatim-quotes-kept-and-fail-when-no-mutation-succeeded)
@@ -113,6 +226,30 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-20 — F8 repos-secrets: one writer per <service>-env secret policy (ruling 24)
+
+Context: owner ruling 24 (2026-10-20): every service secret has exactly one writer, decided by its
+name, and the value is written only by the owning repo's workflow. Extends ruling 21 (one writer per
+service-account policy) from SA policies to secret policies.
+
+Decision: a new feature F8 `repos-secrets` (workflow + pure planner `scripts/repos_secrets_plan.py`).
+A Cloud Run register entry with `env_secret: true` owns the secret `<d>-env` (derived, never chosen).
+F8 creates it empty if missing, adopts it if present (versions never touched; F8 has no
+`versions.*`), and writes its WHOLE policy: `<d>-run` gets `secretAccessor`; `<d>-deployer` gets
+`secretAccessor` + `secretVersionManager` + `viewer`. Any other line is `drift`; it is removed only
+in `enforce` with `prune: true` (fleet no-prune-by-default). Missing deployer = error (run F6);
+missing `<d>-run` = `needs-jgd`.
+
+Why the predefined trio and not a custom no-destroy role: owner answers Q3/Q4 - the syncing identity
+MAY destroy versions (disabled versions are billed like enabled ones), and `sync-bundle-key` will
+destroy every disabled version except the newest. `secretVersionManager` covers add/disable/destroy,
+`secretAccessor` the read-modify-write read, `viewer` the `secrets.get` that `describe` needs.
+Why the project writes both lines (Q2): two writers on one policy is the shape ruling 21 rejected.
+`env_secret` is a boolean so a repo can never name another service's secret.
+
+Rejected: a custom `secretBundleSyncer` role; a second SA per service; a direct repo principalSet.
+`manage-config-secrets` docs now say it must not create `*-env` secrets (no code guard yet; TODO).
 
 ## 2026-10-20 — cleanup-secret-versions: pass etag verbatim (quotes kept) and fail when no mutation succeeded
 

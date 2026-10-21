@@ -92,6 +92,16 @@ which for a called workflow is the **caller's** repo. Two different caller repos
 writing the same bundle are not serialised by this; give one repo ownership of a
 bundle if that is a real risk.
 
+## Deployer auth — per-service secrets (repos-secrets)
+
+When the project runs [`repos-secrets`](repos-secrets.md) (F8), a service's blob is `<service>-env`
+and its IAM policy has one writer, F8. The service repo's caller authenticates as **that
+service's own deployer**: pass `service_account: <service>-deployer@<project>.iam.gserviceaccount.com`
+(the repo's WIF link comes from F5) and `bundle_secret: <service>-env`. F8 grants that deployer the
+secret-level roles the sync needs (read, add, disable, destroy and `describe`), so nothing in this
+workflow writes IAM and one repo owns each blob, which also removes the two-callers caveat above.
+Values still come only from the owning repo's workflow, never by hand.
+
 ## Inputs / secrets
 
 | Name | Kind | Default | Notes |

@@ -55,6 +55,12 @@ secrets:
 `gsm` uses automatic replication unless `gsm_locations` (comma-separated regions)
 is set.
 
+**Do not use `gsm` to create a `<service>-env` secret.** A secret named `<service>-env` for a
+Cloud Run service in the project's register is created, and its IAM policy written, only by
+[`repos-secrets`](repos-secrets.md) (F8): one writer per secret policy. Its values are written by
+[`sync-bundle-key`](sync-bundle-key.md) as the service's own deployer. The `gsm` create path remains
+for other names only. (The workflow does not yet refuse a `*-env` name itself; this page is the rule.)
+
 ## Inputs / secrets
 
 | Name | Kind | Default | Notes |

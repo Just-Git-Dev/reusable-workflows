@@ -69,7 +69,8 @@
             "cloud_run": {"$ref": "#/$defs/serviceName"},
             "region": {"$ref": "#/$defs/regionName"},
             "runtime_service_account": {"$ref": "#/$defs/saName"},
-            "image_repository": {"$ref": "#/$defs/slashPair"}
+            "image_repository": {"$ref": "#/$defs/slashPair"},
+            "env_secret": {"const": true}
           }
         },
         {

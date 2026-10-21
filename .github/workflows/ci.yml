@@ -246,7 +246,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The four repos-register planners (F1-F7) are pure; this proves the decision logic and the
+      # The repos-register planners (F1-F8) are pure; this proves the decision logic and the
       # never-do list with no GitHub or cloud (docs/repos-register.md section 7).
       - name: Run repos planner fixtures
         run: make repos-plan-fixtures

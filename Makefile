@@ -157,6 +157,7 @@ repos-plan-fixtures: venv
 	$(PY) tests/run_repos_wif_plan_tests.py
 	$(PY) tests/run_repos_sa_plan_tests.py
 	$(PY) tests/run_repos_deploy_plan_tests.py
+	$(PY) tests/run_repos_secrets_tests.py
 	$(PY) tests/run_repos_apply_step_tests.py
 
 # Bundle writers of the same blob serialise only if their concurrency-group strings are identical.

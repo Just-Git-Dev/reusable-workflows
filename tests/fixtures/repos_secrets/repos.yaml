@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "org": "Example-Org",
+  "defaults": {"mode": "enforce"},
+  "repos": [
+    {"name": "payments-api",
+     "deploys": [{"cloud_run": "payments-api", "region": "europe-west1", "env_secret": true}]},
+    {"name": "ledger-worker",
+     "deploys": [{"cloud_run": "ledger-worker", "region": "europe-west1", "env_secret": true}]},
+    {"name": "billing-web",
+     "deploys": [{"cloud_run": "billing-web", "region": "europe-west1"}]},
+    {"name": "batch-runner",
+     "deploys": [{"gke": {"cluster": "europe-west1/main", "namespace": "batch", "workload": "batch-runner"}}]}
+  ]
+}
