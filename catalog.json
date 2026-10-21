@@ -87,6 +87,119 @@
       "outputs": {},
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/release-flow"
+    },
+    "sync-bundle-key": {
+      "action": "actions/sync-bundle-key",
+      "inputs": {
+        "bundle_secret": {
+          "default": "app-secrets",
+          "description": "Secret Manager bundle secret name.",
+          "required": false
+        },
+        "confirm_removed": {
+          "default": "",
+          "description": "CSV of key names. A live run that would drop keys refuses unless this equals the dropped set.",
+          "required": false
+        },
+        "dry_run": {
+          "default": "false",
+          "description": "'true' = validate the payload and print the plan; write nothing, roll nothing.",
+          "required": false
+        },
+        "environment": {
+          "default": "",
+          "description": "Name of the environment the CALLER's job runs in, used only by the branch-policy guard (S0). The action cannot read its own job's environment; the caller repeats it here. Empty = none.",
+          "required": false
+        },
+        "gcp_project": {
+          "default": null,
+          "description": "GCP project id holding the bundle secret and the Cloud Run services.",
+          "required": true
+        },
+        "gcp_region": {
+          "default": "asia-southeast1",
+          "description": "Region of the Cloud Run services.",
+          "required": false
+        },
+        "keep_enabled_count": {
+          "default": "1",
+          "description": "A floor under the keep-set: at least this many of the most recent ENABLED versions stay enabled after the roll. Minimum 1.",
+          "required": false
+        },
+        "min_value_length": {
+          "default": "8",
+          "description": "Reject the run if any payload value is shorter than this many characters. 0 disables.",
+          "required": false
+        },
+        "mode": {
+          "default": "replace",
+          "description": "replace (default) = current bundle limited to the keys in secret_keys_file, overlaid with the payload. merge = current bundle overlaid with the payload, nothing dropped.",
+          "required": false
+        },
+        "mount_path": {
+          "default": null,
+          "description": "Container path the bundle is mounted at, e.g. /secrets/app.env. Must match where the service already mounts it: --update-secrets adds a mount and never removes one.",
+          "required": true
+        },
+        "payload_source": {
+          "default": "caller",
+          "description": "caller = the payload_json secret in secrets_json. environment = build the payload from the keys named in secret_keys_file, read from secrets_json.",
+          "required": false
+        },
+        "pin_versions": {
+          "default": "true",
+          "description": "'true' (default) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. 'false' = :latest.",
+          "required": false
+        },
+        "require_branch_policy": {
+          "default": "true",
+          "description": "'true' = S0 refuses an environment with no deployment branch policy. Only meaningful with environment.",
+          "required": false
+        },
+        "secret_keys_file": {
+          "default": "deploy/secret-keys.txt",
+          "description": "Committed list of bundle key NAMES, one per line (# comments allowed), read from the caller's checkout. Required when mode is replace or payload_source is environment.",
+          "required": false
+        },
+        "secrets_json": {
+          "default": null,
+          "description": "The caller's secrets as JSON (the toJSON of the secrets context), set in the job that declares `environment:`. The action reads `payload_json` (payload_source caller) or the keys named in secret_keys_file (payload_source environment) out of it; nothing else leaves its step.",
+          "required": true
+        },
+        "service_account": {
+          "default": null,
+          "description": "Service account email to impersonate via WIF.",
+          "required": true
+        },
+        "services_csv": {
+          "default": null,
+          "description": "Comma-separated Cloud Run service names to roll onto the new version.",
+          "required": true
+        },
+        "strict_values": {
+          "default": "true",
+          "description": "'true' (default) = also refuse non-env-var key names, empty or whitespace-only values and wholly-placeholder values. A newline, CR or NUL in a key or value is refused regardless.",
+          "required": false
+        },
+        "title": {
+          "default": "secrets",
+          "description": "Human label for the run summary.",
+          "required": false
+        },
+        "wif_provider": {
+          "default": null,
+          "description": "Workload Identity Federation provider resource name.",
+          "required": true
+        }
+      },
+      "name": "Sync keys into Secret Manager bundle",
+      "outputs": {
+        "new_version": "Bundle version created by this run (empty on a dry run).",
+        "old_version": "Bundle version that was enabled before this run (empty if none).",
+        "services_rolled": "Number of Cloud Run services rolled onto the new version."
+      },
+      "runs": "composite",
+      "uses": "Just-Git-Dev/reusable-workflows/actions/sync-bundle-key"
     }
   },
   "workflows": {
@@ -4546,7 +4659,7 @@
         },
         "payload_source": {
           "default": "caller",
-          "description": "caller = the payload_json secret. environment = build the payload from the keys named in secret_keys_file, read from the job's environment secrets. UNPROVEN: whether an environment secret reaches a cross-org callee is not yet demonstrated (docs/sync-bundle-key.md).",
+          "description": "caller = the payload_json secret. environment = build the payload from the keys named in secret_keys_file, read from the job's environment secrets. Does NOT work from another organisation through this workflow: use the composite action actions/sync-bundle-key (docs/sync-bundle-key-action.md).",
           "required": false,
           "type": "string"
         },

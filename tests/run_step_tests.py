@@ -29,6 +29,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from action_steps import job_steps  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 PROMOTE = ROOT / ".github" / "workflows" / "promote-image.yml"
 CI_NODE = ROOT / ".github" / "workflows" / "ci-node.yml"
@@ -57,9 +60,9 @@ FAILURES = []
 
 
 def extract_step(workflow: Path, job: str, step_name: str) -> str:
-    """Return the `run:` body of a named step, as shipped."""
-    doc = yaml.safe_load(workflow.read_text())
-    for step in doc["jobs"][job]["steps"]:
+    """Return the `run:` body of a named step, as shipped. A wrapper job (sync-bundle-key.yml)
+    resolves to its composite action's steps, and a script step to the script body."""
+    for step in job_steps(workflow, job):
         if step.get("name") == step_name:
             if "run" not in step:
                 raise SystemExit(f"step '{step_name}' has no run: body")
@@ -3233,7 +3236,7 @@ def main():
               r["disabled"] == [], r["calls"])
 
         # 9. Ordering: disable only after the services rolled onto the new version.
-        names = [s.get("name") for s in doc["jobs"][job]["steps"]]
+        names = [s.get("name") for s in job_steps(wf, job)]
         check(f"{wf.stem} · disables after the Cloud Run roll",
               names.index(DISABLE_STEP) > names.index("Force new Cloud Run revision(s)"),
               names)

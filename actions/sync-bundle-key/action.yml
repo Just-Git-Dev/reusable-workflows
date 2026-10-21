@@ -1,0 +1,273 @@
+name: Sync keys into Secret Manager bundle
+description: >-
+  Upsert one or more keys into a Secret Manager "bundle" secret (a dotenv blob of KEY=value
+  lines mounted into Cloud Run), add a new secret version, roll the named Cloud Run service(s)
+  onto it, then disable the superseded version(s). Runs inside the CALLER's own job, so that
+  job's `environment:` secrets reach it even across an org boundary. See
+  docs/sync-bundle-key-action.md (caller job template) and docs/sync-bundle-key.md (behaviour).
+
+# A composite action, not only a reusable workflow, on purpose: environment-level secrets cannot
+# cross an org boundary into a reusable workflow (proven in PR #151), but they do reach a step of
+# the job that declares the environment. The reusable workflow .github/workflows/sync-bundle-key.yml
+# is now a thin wrapper that calls this action; the logic lives once, in the scripts beside this file.
+#
+# The CALLER's job must declare (a composite action can declare none of these):
+#   permissions: { contents: read, id-token: write, actions: read }
+#     id-token: write  for the WIF login; actions: read for the branch-policy guard (S0).
+#   concurrency: { group: bundle-write-<gcp_project>-<bundle_secret>, cancel-in-progress: false }
+#     One lock across every bundle writer. The action cannot detect a missing group, so the first
+#     step always prints a ::warning:: naming the exact block.
+#   timeout-minutes: 10 is the wrapper's value; the action sets none.
+# Secrets arrive as the `secrets_json` input: `secrets_json: ${{ toJSON(secrets) }}`. Scripts get
+# every value through `env:`, never through ${{ }} in a run body.
+
+inputs:
+  secrets_json:
+    description: >-
+      The caller's secrets as JSON (the toJSON of the secrets context), set in the job that declares
+      `environment:`. The action reads `payload_json` (payload_source caller) or the keys named
+      in secret_keys_file (payload_source environment) out of it; nothing else leaves its step.
+    required: true
+  gcp_project:
+    description: GCP project id holding the bundle secret and the Cloud Run services.
+    required: true
+  gcp_region:
+    description: Region of the Cloud Run services.
+    required: false
+    default: asia-southeast1
+  wif_provider:
+    description: Workload Identity Federation provider resource name.
+    required: true
+  service_account:
+    description: Service account email to impersonate via WIF.
+    required: true
+  bundle_secret:
+    description: Secret Manager bundle secret name.
+    required: false
+    default: app-secrets
+  mount_path:
+    description: >-
+      Container path the bundle is mounted at, e.g. /secrets/app.env. Must match where the service
+      already mounts it: --update-secrets adds a mount and never removes one.
+    required: true
+  services_csv:
+    description: Comma-separated Cloud Run service names to roll onto the new version.
+    required: true
+  title:
+    description: Human label for the run summary.
+    required: false
+    default: secrets
+  dry_run:
+    description: "'true' = validate the payload and print the plan; write nothing, roll nothing."
+    required: false
+    default: 'false'
+  min_value_length:
+    description: >-
+      Reject the run if any payload value is shorter than this many characters. 0 disables.
+    required: false
+    default: '8'
+  strict_values:
+    description: >-
+      'true' (default) = also refuse non-env-var key names, empty or whitespace-only values and
+      wholly-placeholder values. A newline, CR or NUL in a key or value is refused regardless.
+    required: false
+    default: 'true'
+  environment:
+    description: >-
+      Name of the environment the CALLER's job runs in, used only by the branch-policy guard (S0).
+      The action cannot read its own job's environment; the caller repeats it here. Empty = none.
+    required: false
+    default: ''
+  require_branch_policy:
+    description: "'true' = S0 refuses an environment with no deployment branch policy. Only meaningful with environment."
+    required: false
+    default: 'true'
+  payload_source:
+    description: >-
+      caller = the payload_json secret in secrets_json. environment = build the payload from the
+      keys named in secret_keys_file, read from secrets_json.
+    required: false
+    default: caller
+  mode:
+    description: >-
+      replace (default) = current bundle limited to the keys in secret_keys_file, overlaid with the
+      payload. merge = current bundle overlaid with the payload, nothing dropped.
+    required: false
+    default: replace
+  secret_keys_file:
+    description: >-
+      Committed list of bundle key NAMES, one per line (# comments allowed), read from the caller's
+      checkout. Required when mode is replace or payload_source is environment.
+    required: false
+    default: deploy/secret-keys.txt
+  confirm_removed:
+    description: >-
+      CSV of key names. A live run that would drop keys refuses unless this equals the dropped set.
+    required: false
+    default: ''
+  pin_versions:
+    description: "'true' (default) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. 'false' = :latest."
+    required: false
+    default: 'true'
+  keep_enabled_count:
+    description: >-
+      A floor under the keep-set: at least this many of the most recent ENABLED versions stay
+      enabled after the roll. Minimum 1.
+    required: false
+    default: '1'
+
+outputs:
+  old_version:
+    description: Bundle version that was enabled before this run (empty if none).
+    value: ${{ steps.cur.outputs.current_version }}
+  new_version:
+    description: Bundle version created by this run (empty on a dry run).
+    value: ${{ steps.new_version.outputs.new_version }}
+  services_rolled:
+    description: Number of Cloud Run services rolled onto the new version.
+    value: ${{ steps.roll.outputs.rolled }}
+
+runs:
+  using: composite
+  steps:
+    - name: Warn about the caller's concurrency group
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+      run: '"$GITHUB_ACTION_PATH/warn-concurrency.sh"'
+
+    - name: Validate payload_source
+      shell: bash
+      env:
+        PAYLOAD_SOURCE: ${{ inputs.payload_source }}
+      run: '"$GITHUB_ACTION_PATH/validate-payload-source.sh"'
+
+    - name: Guard environment branch policy
+      if: inputs.environment != '' && inputs.require_branch_policy == 'true'
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        REQUIRE_BRANCH_POLICY: ${{ inputs.require_branch_policy }}
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+      run: '"$GITHUB_ACTION_PATH/guard-branch-policy.sh"'
+
+    - name: Check out the key list
+      # Only the one committed key-list path is fetched, from the caller's repo (the job's default).
+      if: inputs.mode == 'replace' || inputs.payload_source == 'environment'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+        sparse-checkout: ${{ inputs.secret_keys_file }}
+        sparse-checkout-cone-mode: false
+
+    - name: Authenticate to GCP via WIF
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.wif_provider }}
+        service_account: ${{ inputs.service_account }}
+
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+    - name: Read payload_json from secrets_json
+      id: callerpayload
+      if: inputs.payload_source == 'caller'
+      shell: bash
+      env:
+        SECRETS_JSON: ${{ inputs.secrets_json }}
+      run: '"$GITHUB_ACTION_PATH/read-caller-payload.sh"'
+
+    - name: Build payload from environment secrets
+      id: envpayload
+      if: inputs.payload_source == 'environment'
+      shell: bash
+      env:
+        # Reason: payload_source: environment picks the keys named in secret_keys_file out of the
+        # job's secrets, and a key name cannot be a static `secrets.NAME`. Only the listed keys
+        # leave the step (see the jq filter in build-env-payload.sh).
+        ALL_SECRETS_JSON: ${{ inputs.secrets_json }}
+        SECRET_KEYS_FILE: ${{ inputs.secret_keys_file }}
+      run: '"$GITHUB_ACTION_PATH/build-env-payload.sh"'
+
+    - name: Validate payload
+      shell: bash
+      env:
+        PAYLOAD_JSON: ${{ inputs.payload_source == 'environment' && steps.envpayload.outputs.payload_json || steps.callerpayload.outputs.payload_json }}
+        STRICT_VALUES: ${{ inputs.strict_values }}
+        MIN_VALUE_LEN: ${{ inputs.min_value_length }}
+      run: '"$GITHUB_ACTION_PATH/validate-payload.sh"'
+
+    - name: Read current bundle (or start empty)
+      id: cur
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+      run: '"$GITHUB_ACTION_PATH/read-current-bundle.sh"'
+
+    - name: Compute new bundle
+      shell: bash
+      env:
+        PAYLOAD_JSON: ${{ inputs.payload_source == 'environment' && steps.envpayload.outputs.payload_json || steps.callerpayload.outputs.payload_json }}
+        MODE: ${{ inputs.mode }}
+        SECRET_KEYS_FILE: ${{ inputs.secret_keys_file }}
+        CONFIRM_REMOVED: ${{ inputs.confirm_removed }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/compute-bundle.sh"'
+
+    - name: Add new bundle version
+      id: new_version
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+      run: '"$GITHUB_ACTION_PATH/add-bundle-version.sh"'
+
+    - name: Force new Cloud Run revision(s)
+      id: roll
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        GCP_REGION: ${{ inputs.gcp_region }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        MOUNT_PATH: ${{ inputs.mount_path }}
+        SERVICES_CSV: ${{ inputs.services_csv }}
+        NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+        PIN_VERSIONS: ${{ inputs.pin_versions }}
+      run: '"$GITHUB_ACTION_PATH/roll-services.sh"'
+
+    - name: Disable superseded bundle version(s)
+      if: inputs.dry_run != 'true' && steps.cur.outputs.current_version != ''
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        GCP_REGION: ${{ inputs.gcp_region }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        SERVICES_CSV: ${{ inputs.services_csv }}
+        KEEP_ENABLED_COUNT: ${{ inputs.keep_enabled_count }}
+        NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+      run: '"$GITHUB_ACTION_PATH/disable-superseded.sh"'
+
+    - name: Shred local bundle copy
+      if: always()
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/shred-bundle.sh"'
+
+    - name: Summary
+      if: always()
+      shell: bash
+      env:
+        TITLE: ${{ inputs.title }}
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        MOUNT_PATH: ${{ inputs.mount_path }}
+        SERVICES_CSV: ${{ inputs.services_csv }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        OLD_VERSION: ${{ steps.cur.outputs.current_version }}
+        NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+        ROLLED: ${{ steps.roll.outputs.rolled }}
+      run: '"$GITHUB_ACTION_PATH/summary.sh"'

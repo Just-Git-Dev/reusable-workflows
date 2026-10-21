@@ -55,7 +55,9 @@ def main():
         # corresponding .yml and never will.
         if doc.stem in {"PLATFORM", "convergence-audit", "release-process", "alertspec",
                         "TESTING-STANDARD", "repos-register", "runtime-config",
-                        "MIGRATION-v4"}:
+                        "MIGRATION-v4",
+                        # caller-job guides for an action whose workflow wrapper has the main page
+                        "sync-bundle-key-action"}:
             continue
         if not (WORKFLOWS / f"{doc.stem}.yml").is_file() \
                 and not (ACTIONS / doc.stem / "action.yml").is_file():
