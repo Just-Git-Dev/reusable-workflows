@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-46 open across 15 live sections. 8 closed items archived.
+48 open across 16 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
 - **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open, 5 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
 - **ACTIVE** — [Service env settings typed twice — local compose vs deploy workflow (opened 2026-10-04)](#service-env-settings-typed-twice--local-compose-vs-deploy-workflow-opened-2026-10-04) — 2 open, 1 closed
@@ -22,6 +23,17 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## zizmor findings ignored at adoption (opened 2026-10-21)
+
+zizmor v1.31.1 was added to the gate with per-rule, per-file ignores in `zizmor.yml` (reasons in
+DECISIONS.md). Each ignore is debt to pay down, not policy.
+
+- [ ] `.github/workflows/*.yml` — template-injection: 57 sites across 11 files; move each `${{ }}`
+      used inside `run:` into an `env:` entry and reference `"$VAR"`, exercising each deploy body
+      before dropping its ignore.
+- [ ] `zizmor.yml` — re-check the other ignores (github-app 4, unpinned-images 6, unsound-ternary 2,
+      github-env 1, cache-poisoning 2) and remove each one that a fix can retire.
 
 ## Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)
 
