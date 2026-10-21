@@ -78,8 +78,14 @@ the same refusal of secret-looking keys, and the file is passed to gcloud with
 `jgd_run`) and writes the same `config-manifest.json` artifact, so a config-only change is as
 traceable as a deploy.
 
-`env_file` and the older `env_vars` / `env_vars_mode` inputs describe the same variables. Use one
-per service; which wins when both are given is not part of this contract.
+`env_file` and the older `env_vars` / `env_vars_mode` inputs describe the same variables, so they
+are **mutually exclusive**: a run that gives both (a non-blank `env_vars` together with `env_file`)
+is refused up front, naming both inputs, before anything is applied. `generated_env`,
+`env_secret`, `env_mount_path`, `pin_env` and `manifest_retention_days` behave as in
+deploy-cloud-run. The revision labels and the pinned bundle mount are folded into the caller's own
+`labels` / `secrets` lists, so they are never lost to a second `--update-labels` /
+`--update-secrets` flag. A run with `env_file` checks out the caller's repository at the triggering
+ref to read the file.
 
 ## `extra_args`
 
