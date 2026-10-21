@@ -104,7 +104,11 @@ given key, so a JWKS builder can key on it.
 
 On `service_account`: `roles/secretmanager.secretVersionManager` and
 `roles/secretmanager.secretAccessor` on `bundle_secret`, plus
-`roles/run.developer` on the target services.
+`roles/run.developer` on the target services. The keep/undo scan lists across the whole project,
+so it also needs PROJECT-level `run.services.list`, `run.jobs.list`, `run.jobs.get`,
+`run.revisions.list` and `run.revisions.get` (for example project-level `roles/run.viewer` in
+addition to the service-level `roles/run.developer`). A caller bound only on its own services gets
+a 403 and the keep step fails, disabling nothing.
 
 ## Example caller
 

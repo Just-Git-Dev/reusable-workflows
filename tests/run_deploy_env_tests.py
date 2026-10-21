@@ -211,6 +211,11 @@ def guard_cases(body, run, check_fn, flag_envs, label):
         check_fn(f"{label}: {k} with a space-separated --update-secrets list is refused", r["rc"] != 0, r["out"])
         r = run(body, {**env, k: "--set-secrets=/x/app.env=other-env:7"}, gcloud=_desc(svc_json("7")))
         check_fn(f"{label}: {k} naming other-env:7 is not refused", r["rc"] == 0, r["out"])
+        if k != "SECRETS":
+            # Critic round 3 (V3/V5): the flag and its value on separate lines are one flag.
+            r = run(body, {**env, k: "--update-secrets\n/app/.env=svc-env:latest"}, gcloud=_desc(svc_json("7")))
+            check_fn(f"{label}: {k} with --update-secrets and its value on the next line is refused",
+                     r["rc"] != 0 and "latest" in r["out"], r["out"])
         if k == "SECRETS":
             continue          # the `secrets` list is mounts only; no other flag's value lives in it
         r = run(body, {**env, k: "--set-env-vars=NOTE=a-env:latest"}, gcloud=_desc(svc_json("7")))
@@ -241,6 +246,16 @@ def pin_cases():
     r = run_body(body, {**env, "PIN_ENV": "false"}, gcloud=gcloud("latest"))
     check("pin_env: false warns (Q8 open: nothing else asserted)",
           "::warning::" in r["out"], r["out"])
+    # Critic round 3 (V6): a CUR describe error that is not NOT_FOUND refuses (fail closed).
+    g403 = ('if [ "$3" = "services" ] && [ "$4" = "describe" ]; then echo "PERMISSION_DENIED 403" >&2; exit 1; fi\n'
+            'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then echo projects/1/secrets/svc-env/versions/9; exit 0; fi')
+    r = run_body(body, env, gcloud=g403)
+    check("V6: a CUR describe 403 with env_secret refuses (fail closed), no pin output",
+          r["rc"] != 0 and "env_version" not in r["outputs"], f"{r['out']} {r['outputs']}")
+    gnf = g403.replace("PERMISSION_DENIED 403", "NOT_FOUND: Cannot find service")
+    r = run_body(body, env, gcloud=gnf)
+    check("V6: a CUR describe NOT_FOUND (no service yet) pins the newest ENABLED version",
+          r["rc"] == 0 and r["outputs"].get("env_version") == "9", f"{r['out']} {r['outputs']}")
     # M5: a caller-supplied `<bundle>:latest` mount is refused (MIGRATION-v4 promise) ...
     for label, extra in (("deploy_flags", {"DEPLOY_FLAGS": "--set-secrets=/secrets/app.env=svc-env:latest"}),
                          ("extra_deploy_flags", {"EXTRA": "--update-secrets /x=other-env:latest"})):

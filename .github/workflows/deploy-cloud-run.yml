@@ -480,7 +480,9 @@ jobs:
           # nothing mounts a bundle at :latest): refuse, unless pin_env: false (above). Matched by
           # MOUNT: the secret ref (`name:version`, after the last '=') of a --set/--update/
           # --add-secrets flag, never a loose "-env:latest" in some other flag's value.
-          REFS="$({ printf '%s\n%s\n' "${DEPLOY_FLAGS:-}" "${EXTRA:-}" \
+          # Lines are joined first, so `--update-secrets` ending one line and its value starting the
+          # next still reads as one flag.
+          REFS="$({ printf '%s\n%s\n' "${DEPLOY_FLAGS:-}" "${EXTRA:-}" | tr '\n' ' ' \
                       | grep -oE -- '--(set|update|add)-secrets[= ]+[^ ]+' \
                       | sed -E 's/^--[a-z]+-secrets[= ]+//' \
                       | tr ',' '\n' | tr -d "'\"" | sed -n 's/^.*=//p'; } || true)"
@@ -519,12 +521,19 @@ jobs:
           fi
           # The version the live service mounts the bundle at (empty if no service yet): a volume
           # item OR an env var secretKeyRef, as rollback-service and cleanup-secret-versions read it.
-          CUR="$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" --format=json 2>/dev/null \
-                  | jq -r --arg s "$ENV_SECRET" \
+          # Only NOT_FOUND means "no current pin"; any other describe error refuses (fail closed),
+          # else a 403 would read as "not mounted yet" and move a live pin.
+          CUR=""
+          if gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" --format=json \
+               > "${RUNNER_TEMP}/cur.json" 2> "${RUNNER_TEMP}/cur.err"; then
+            CUR="$(jq -r --arg s "$ENV_SECRET" \
                     '[(.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]? | (.key // .version)),
                       (.spec.template.spec.containers[]?.env[]?.valueFrom.secretKeyRef? | select(.name == $s) | .key)]
-                     | map(select(. != null) | tostring) | .[0] // ""' \
-                  || echo '')"
+                     | map(select(. != null) | tostring) | .[0] // ""' "${RUNNER_TEMP}/cur.json")"
+          elif ! grep -qiE 'NOT_FOUND|cannot find|not found' "${RUNNER_TEMP}/cur.err"; then
+            echo "::error::could not read the live service to find its current bundle pin (refusing; fail closed): $(head -c 300 "${RUNNER_TEMP}/cur.err")" >&2
+            exit 1
+          fi
           if [[ "$CUR" =~ ^[0-9]+$ ]]; then
             N="$CUR"          # a numeric pin: a deploy never moves it
           else

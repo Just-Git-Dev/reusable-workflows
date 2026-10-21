@@ -36,8 +36,10 @@ OPTIONAL = {
 READ = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 
 
-def strip_literals(body: str) -> str:
-    """Drop comments, quoted heredoc bodies and single-quoted strings: `$x` there is not shell."""
+def strip_literals(body: str, keep_dq: bool = True) -> str:
+    """Drop comments, quoted heredoc bodies and single-quoted strings: `$x` there is not shell.
+    keep_dq=False also drops double-quoted text (but not $( ) code inside it): used to find
+    assignments, so `echo "EXTRA=$EXTRA"` does not read as assigning EXTRA."""
     body = re.sub(r"(?ms)<<-?\s*'(\w+)'.*?^\s*\1\s*$", "", body)
     # Quote-state scanner. stack top: None (code) | "'" | '"' | "(" ($( ) command substitution,
     # which is code again, so quotes inside it nest properly).
@@ -57,7 +59,7 @@ def strip_literals(body: str) -> str:
         elif mode == '"':
             if c == '"':
                 stack.pop(); out.append(" ")
-            else:
+            elif keep_dq:
                 out.append(c)
         elif c in "'\"":
             stack.append(c)
@@ -84,15 +86,28 @@ def assigned(body: str) -> set:
 
 def unwired(body: str, wired: set) -> list:
     clean = strip_literals(body)
-    ok = assigned(clean) | wired | SHELL_SPECIAL
+    ok = assigned(strip_literals(body, keep_dq=False)) | wired | SHELL_SPECIAL
     return sorted({v for v in READ.findall(clean)
                    if v not in ok and not v.startswith(GH_PREFIX)})
 
 
+def selfcheck():
+    """The reader must not be fooled by text that merely looks like an assignment (critic 3, V7)."""
+    cases = [('echo "EXTRA=$EXTRA" >> "$GITHUB_OUTPUT"\n', ["EXTRA"]),
+             ("echo 'X=1'; echo \"$X\"\n", ["X"]),
+             ('X=1\necho "$X"\n', []),
+             ('export Y="a"\necho "$Y"\n', []),
+             ('FOO=$(echo "A=b")\necho "$FOO $A"\n', ["A"])]
+    return [f"selfcheck {body!r}: got {unwired(body, set())}, want {want}"
+            for body, want in cases if unwired(body, set()) != want]
+
+
 def main():
     steps = reads = 0
-    bad = []
+    bad = selfcheck()
+    per = {}
     for name in V4:
+        per[name] = 0
         doc = yaml.safe_load((WF / name).read_text())
         top = set((doc.get("env") or {}))
         for jid, job in (doc.get("jobs") or {}).items():
@@ -102,6 +117,7 @@ def main():
                 if not body:
                     continue
                 steps += 1
+                per[name] += 1
                 wired = jenv | set((st.get("env") or {}))
                 reads += len(READ.findall(strip_literals(body)))
                 miss = [v for v in unwired(body, wired)
@@ -112,6 +128,9 @@ def main():
     if steps == 0:
         print("FAIL examined 0 steps")
         sys.exit(1)
+    for name, n in per.items():
+        if n == 0:
+            bad.append(f"{name}: examined 0 run steps (a vacuous pass)")
     for b in bad:
         print("  FAIL", b)
     if bad:

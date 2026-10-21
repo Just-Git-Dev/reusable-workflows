@@ -205,6 +205,14 @@ def main():
         r = D.run_body(pin, env, gcloud=gc)
         check("P1: a live pin held via env[].valueFrom.secretKeyRef (5) is kept, not moved to 9",
               r["rc"] == 0 and r["outputs"].get("env_version") == "5", f"{r['out']} {r['outputs']}")
+        g403 = ('if [ "$3" = "services" ] && [ "$4" = "describe" ]; then echo "PERMISSION_DENIED 403" >&2; exit 1; fi\n'
+                'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then echo projects/1/secrets/svc-env/versions/9; exit 0; fi')
+        r = D.run_body(pin, env, gcloud=g403)
+        check("V6: a CUR describe 403 with env_secret refuses (fail closed), no pin output",
+              r["rc"] != 0 and "env_version" not in r["outputs"], f"{r['out']} {r['outputs']}")
+        r = D.run_body(pin, env, gcloud=g403.replace("PERMISSION_DENIED 403", "NOT_FOUND: Cannot find service"))
+        check("V6: a CUR describe NOT_FOUND pins the newest ENABLED version",
+              r["rc"] == 0 and r["outputs"].get("env_version") == "9", f"{r['out']} {r['outputs']}")
         r = D.run_body(pin, {**env, "EXTRA": "--update-secrets=/a=svc-env:latest"}, gcloud=gc)
         check("extra_args (EXTRA) naming the bundle at :latest is refused", r["rc"] != 0, r["out"])
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")

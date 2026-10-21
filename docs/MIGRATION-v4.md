@@ -48,7 +48,13 @@ Do these in order, one service at a time. Every step is safe to re-run.
 8. **Deploy with `deploy-cloud-run@v4`**, passing `env_secret` and `env_mount_path` (and
    `env_file: deploy/env.<stage>.yaml`). It keeps the pin the sync set, stamps the four revision
    labels, and uploads `config-manifest.json`.
-9. **Move the other callers' pins** (`rotate-*`, `promote-image`, and the rest) to `v4.0.0`.
+9. **Grant project-level Cloud Run read access.** The keep/undo scan in `sync-bundle-key` and the
+   rotators lists across the project, so the caller's service account needs PROJECT-level
+   `run.services.list`, `run.jobs.list`, `run.jobs.get`, `run.revisions.list` and
+   `run.revisions.get` (for example project-level `roles/run.viewer` in addition to the
+   service-level `roles/run.developer`). A caller bound only on its own services gets a 403 and the
+   keep step fails (nothing is disabled).
+10. **Move the other callers' pins** (`rotate-*`, `promote-image`, and the rest) to `v4.0.0`.
 
 To keep the v3 behaviour of one input while you fix the rest, set it explicitly:
 `strict_values: false`, `mode: merge`, or `pin_versions: false`. These are escape hatches for the

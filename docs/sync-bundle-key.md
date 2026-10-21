@@ -221,8 +221,14 @@ On `service_account`: `roles/secretmanager.secretVersionManager` and
 the two roles above are not documented to carry it, so grant a role that does (for
 example `roles/secretmanager.viewer`; verify with `gcloud iam roles describe`).
 The v4 keep-set also lists the project's services and jobs, each service's traffic and its revisions
-(`gcloud run services list|describe`, `run revisions list`, `run jobs list|describe`), which
-`roles/run.developer` already covers. A listing failure stops the step before anything is disabled.
+(`gcloud run services list|describe`, `run revisions list`, `run jobs list|describe`).
+`roles/run.developer` on the services does not cover the project-wide listings: the service
+account also needs PROJECT-level `run.services.list`, `run.jobs.list`, `run.jobs.get`,
+`run.revisions.list` and `run.revisions.get` (for example project-level `roles/run.viewer` in
+addition to the service-level `roles/run.developer`). A caller bound only on its own services gets
+a 403 and the keep step fails, disabling nothing. A listing failure, or an all-region listing that
+reports a region "did not respond" (results "may be incomplete"), also stops the step before
+anything is disabled.
 The rotators' "roll back the new SM version on failure" step refuses to disable N+1 while any
 live revision still pins it (a partial roll): it leaves N+1 ENABLED and fails the job. "Live" here
 means a revision with traffic or a tag, the latest ready and latest created revisions, and the

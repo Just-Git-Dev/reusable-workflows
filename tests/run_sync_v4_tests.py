@@ -466,6 +466,26 @@ def round2_keep_cases():
               not re.search(r"(services|jobs) list .*--region", r["calls"]), r["calls"])
 
 
+def unresponsive_cases():
+    print("\nrotators + sync . critic round 3: an all-region list that skipped regions refuses")
+    svc = {"status": {"latestReadyRevisionName": "r3", "traffic": [{"revisionName": "r3", "percent": 100}]}}
+    newest = [revision("r3", "v", "8"), revision("r2", "v", "7"), revision("r1", "v", "6")]
+    warn = ('  echo "WARNING: The following regions did not respond: europe-west9. '
+            'List results may be incomplete." >&2\n')
+    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")):
+        body = extract_step(wf, job, KEEP_STEP)
+        if body is None:
+            check(f"{wf.name}: keep step exists", False)
+            continue
+        for kind in ("services", "jobs"):
+            g = (f'if [ "$3" = "{kind}" ] && [ "$4" = "list" ]; then\n' + warn + '  exit 0\nfi\n'
+                 + round2_stub(svc, {"svc": newest}, jobs=[("j1", "r", {})]))
+            r = run_body(body, {"NEW_VERSION": "8", "KEEP_ENABLED_COUNT": "1"}, gcloud=g)
+            check(f"{wf.name}: a {kind} list that skipped a region refuses and disables nothing",
+                  r["rc"] != 0 and "versions disable" not in r["calls"] and "::error::" in r["out"],
+                  f"rc={r['rc']} {r['out'][-300:]} {r['calls']}")
+
+
 def round2_undo_cases():
     print("\nrotators . critic round 2 M3 undo (template pin, secretKeyRef, named traffic revisions)")
     for wf in (KEYPAIR, WORKER):
@@ -551,7 +571,7 @@ def env_source_cases():
 
 def main():
     for fn in (input_cases, source_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases, rollback_cases,
-               round2_keep_cases, round2_undo_cases, identical_cases, env_source_cases):
+               round2_keep_cases, unresponsive_cases, round2_undo_cases, identical_cases, env_source_cases):
         fn()
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0
