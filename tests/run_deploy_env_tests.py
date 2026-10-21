@@ -417,7 +417,11 @@ def image_cases():
     for label, ref in (("tag ref", "r-docker.pkg.dev/p/repo/img:v1.2.3"),
                        ("short digest", "r-docker.pkg.dev/p/repo/img@sha256:abc"),
                        ("uppercase hex", "r-docker.pkg.dev/p/repo/img@sha256:" + "A" * 64),
-                       ("non-GAR host", "ghcr.io/x/img@sha256:" + "a" * 64)):
+                       ("non-GAR host", "ghcr.io/x/img@sha256:" + "a" * 64),
+                       ("F8 one path segment", "r-docker.pkg.dev/img@sha256:" + "a" * 64),
+                       ("F8 two path segments", "r-docker.pkg.dev/p/img@sha256:" + "a" * 64),
+                       ("F8 empty segment", "r-docker.pkg.dev/p//img@sha256:" + "a" * 64),
+                       ("F8 name:tag@sha256", "r-docker.pkg.dev/p/repo/img:v1@sha256:" + "a" * 64)):
         r = run_body(body, {**REF_ENV, "IMAGE": ref})
         check(f"{label} refused, error names image",
               r["rc"] != 0 and "::error::" in r["out"] and "image" in r["out"], r["out"])

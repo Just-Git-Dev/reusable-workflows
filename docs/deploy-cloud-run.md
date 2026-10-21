@@ -182,7 +182,9 @@ the image is tagged independently:
 something else already built and pushed (for example the one a caller's gate just tested), and keeps
 the **full** deploy path: checkout, env render, bundle pin, `jgd_commit` / env labels, the Deployment
 record, the config manifest and the summary all run as for a built image. Only the build is skipped.
-Default `''` is the build-and-push flow above, unchanged.
+Default `''` is the build-and-push flow above, unchanged. The reference needs all three path
+segments (`<project>/<repo>/<name>`, the name may contain more `/`); `name:tag@sha256:...` is
+refused, since only a bare digest is a reference that cannot move.
 
 **Digest only.** A tag reference (`…:v1.2.3`) is refused with an error naming `image`. A tag can be
 moved between the moment a gate tests an image and the moment this deploy runs; a digest cannot, so
