@@ -7,7 +7,7 @@ organisation than this repo: environment secrets cannot cross an org boundary in
 workflow (proven in PR #151), but they do reach a step of the job that declares the environment.
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.0.0
+- uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.1.0
 ```
 
 The action is the single source of truth. The reusable workflow is a thin wrapper that calls it
@@ -64,7 +64,7 @@ jobs:
       group: bundle-write-my-gcp-project-app-secrets   # bundle-write-<gcp_project>-<bundle_secret>
       cancel-in-progress: false
     steps:
-      - uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.0.0
+      - uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.1.0
         with:
           secrets_json: ${{ toJSON(secrets) }}
           gcp_project: my-gcp-project
