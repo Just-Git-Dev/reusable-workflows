@@ -48,10 +48,32 @@ on:
         description: 'Image name within the GAR repo (may contain slashes, e.g. staging/api).'
         type: string
         required: true
+      mode:
+        description: >-
+          `image` (default): roll onto an existing image by tag/digest; the new
+          revision keeps the CURRENT bundle pin. `to_revision` (cloud-run only):
+          shift traffic back to an existing revision (image + env + pinned bundle
+          together); refuses when that revision's pinned bundle version is not
+          ENABLED.
+        type: string
+        required: false
+        default: image
+      to_revision:
+        description: 'mode=to_revision: the Cloud Run revision name to shift traffic back to.'
+        type: string
+        required: false
+        default: ''
+      bundle_secret:
+        description: >-
+          mode=to_revision: the `<deployable>-env` secret whose pinned version
+          the pin check reads. Empty skips the check (a service with no bundle).
+        type: string
+        required: false
+        default: ''
       rollback_tag:
         description: >-
-          Existing tag to roll the service back TO (e.g. a prior vX.Y.Z). Provide
-          exactly one of rollback_tag / rollback_digest.
+          mode=image: existing tag to roll the service back TO (e.g. a prior
+          vX.Y.Z). Provide exactly one of rollback_tag / rollback_digest.
         type: string
         required: false
         default: ''
@@ -233,7 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
     outputs:
-      image: ${{ steps.ref.outputs.image }}
+      image: ${{ steps.guard.outputs.image || steps.ref.outputs.image }}
     defaults:
       run:
         shell: bash
@@ -249,10 +271,37 @@ jobs:
           ROLLBACK_TAG: ${{ inputs.rollback_tag }}
           ROLLBACK_DIGEST: ${{ inputs.rollback_digest }}
           DEPLOY_TARGET: ${{ inputs.deploy_target }}
+          MODE: ${{ inputs.mode }}
+          TO_REVISION: ${{ inputs.to_revision }}
         run: |
           case "$DEPLOY_TARGET" in
             gke|cloud-run) ;;
             *) echo "::error::deploy_target must be 'gke' or 'cloud-run' (got '$DEPLOY_TARGET')." >&2; exit 1 ;;
+          esac
+
+          case "$MODE" in
+            image)
+              if [ -n "$TO_REVISION" ]; then
+                echo "::error::to_revision is only valid with mode=to_revision." >&2
+                exit 1
+              fi ;;
+            to_revision)
+              if [ "$DEPLOY_TARGET" != "cloud-run" ]; then
+                echo "::error::mode=to_revision needs deploy_target=cloud-run (got '$DEPLOY_TARGET')." >&2
+                exit 1
+              fi
+              if [ -z "$TO_REVISION" ]; then
+                echo "::error::mode=to_revision needs to_revision (the revision name)." >&2
+                exit 1
+              fi
+              if [ -n "$ROLLBACK_TAG" ] || [ -n "$ROLLBACK_DIGEST" ]; then
+                echo "::error::mode=to_revision takes the revision's own image; do not set rollback_tag / rollback_digest." >&2
+                exit 1
+              fi
+              # The image comes from the revision; the guard step exports it.
+              echo "image=" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            *) echo "::error::mode must be 'image' or 'to_revision' (got '$MODE')." >&2; exit 1 ;;
           esac
 
           if [ -n "$ROLLBACK_TAG" ] && [ -n "$ROLLBACK_DIGEST" ]; then
@@ -284,8 +333,10 @@ jobs:
         env:
           REG_CREDS: ${{ secrets.registry_credentials }}
           CLUSTER_CREDS: ${{ secrets.cluster_credentials }}
+          MODE: ${{ inputs.mode }}
         run: |
-          if [ -z "$REG_CREDS" ]; then
+          # to_revision never reads the registry, so only image mode needs these creds.
+          if [ -z "$REG_CREDS" ] && [ "$MODE" = "image" ]; then
             echo "::error::wif_provider is empty (key-based auth) but registry_credentials is empty." >&2
             exit 1
           fi
@@ -304,7 +355,7 @@ jobs:
 
       # Key path: activate the registry SA so the describe below can read GAR.
       - name: Authenticate to GAR (key-based)
-        if: ${{ inputs.wif_provider == '' }}
+        if: ${{ inputs.wif_provider == '' && inputs.mode == 'image' }}
         env:
           REG_CREDS: ${{ secrets.registry_credentials }}
         run: |
@@ -315,6 +366,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: Verify rollback image exists
+        if: ${{ inputs.mode == 'image' }}
         env:
           IMAGE: ${{ steps.ref.outputs.image }}
         run: |
@@ -403,8 +455,77 @@ jobs:
           gcloud auth activate-service-account --key-file="$KEY"
           rm -f "$KEY"
 
+      # to_revision: read the target revision's pinned bundle version and refuse BEFORE any
+      # traffic or update call when it is not ENABLED (a revision that cannot read its secrets).
+      - name: Guard revision bundle pin
+        id: guard
+        if: ${{ inputs.deploy_target == 'cloud-run' && inputs.mode == 'to_revision' }}
+        env:
+          RUN_PROJECT: ${{ inputs.run_project != '' && inputs.run_project || inputs.gar_project }}
+          RUN_REGION: ${{ inputs.run_region != '' && inputs.run_region || inputs.gcp_region }}
+          RUN_SERVICE: ${{ inputs.run_service }}
+          REVISION: ${{ inputs.to_revision }}
+          BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        run: |
+          if [ -z "$RUN_SERVICE" ]; then
+            echo "::error::run_service is required when deploy_target=cloud-run" >&2
+            exit 1
+          fi
+          REV_JSON="$(gcloud run revisions describe "$REVISION" \
+            --project "$RUN_PROJECT" --region "$RUN_REGION" --format=json)" || {
+            echo "::error::revision '$REVISION' not found in ${RUN_PROJECT}/${RUN_REGION}; nothing was changed." >&2
+            exit 1
+          }
+          echo "image=$(printf '%s' "$REV_JSON" | jq -r '.spec.containers[0].image // empty')" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$BUNDLE_SECRET" ]; then
+            echo "::notice::bundle_secret is empty; the pinned-version check is skipped."
+            exit 0
+          fi
+          # A secret volume item (or env secretKeyRef) carries the mounted version.
+          PIN="$(printf '%s' "$REV_JSON" | jq -r --arg s "$BUNDLE_SECRET" '
+            [ (.spec.volumes[]?.secret | select(.secretName == $s) | .items[]? | (.key // .version)),
+              (.spec.containers[]?.env[]?.valueFrom.secretKeyRef | select(.name == $s) | .key)
+            ] | first // empty')"
+          if [ -z "$PIN" ]; then
+            echo "::notice::revision $REVISION mounts no version of $BUNDLE_SECRET; the pinned-version check is skipped."
+            exit 0
+          fi
+          NUM="$PIN"
+          if [ "$PIN" = "latest" ]; then
+            NUM="$(gcloud secrets versions describe latest --secret "$BUNDLE_SECRET" \
+              --project "$RUN_PROJECT" --format='value(name)')"
+            NUM="${NUM##*/}"
+          fi
+          STATE="$(gcloud secrets versions describe "$PIN" --secret "$BUNDLE_SECRET" \
+            --project "$RUN_PROJECT" --format='value(state)')"
+          if [ "$STATE" != "ENABLED" ]; then
+            echo "::error::rollback refused: revision ${REVISION} pins ${BUNDLE_SECRET}:${NUM}, which is ${STATE:-unreadable}; only the two newest revisions' pins stay enabled." >&2
+            echo "::error::re-enable it (gcloud secrets versions enable ${NUM} --secret ${BUNDLE_SECRET}) and re-run to roll that far back. Nothing was changed." >&2
+            exit 1
+          fi
+          echo "::notice::revision ${REVISION} pins ${BUNDLE_SECRET}:${NUM} (ENABLED)"
+
+      - name: Shift traffic to revision
+        if: ${{ inputs.deploy_target == 'cloud-run' && inputs.mode == 'to_revision' }}
+        env:
+          RUN_PROJECT: ${{ inputs.run_project != '' && inputs.run_project || inputs.gar_project }}
+          RUN_REGION: ${{ inputs.run_region != '' && inputs.run_region || inputs.gcp_region }}
+          RUN_SERVICE: ${{ inputs.run_service }}
+          REVISION: ${{ inputs.to_revision }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -- gcloud run services update-traffic "$RUN_SERVICE" \
+            --project "$RUN_PROJECT" --region "$RUN_REGION" \
+            --to-revisions "${REVISION}=100" --quiet
+          if [ "$DRY_RUN" = "true" ]; then
+            printf 'DRY RUN — would run:'; printf ' %q' "$@"; printf '\n'
+            exit 0
+          fi
+          "$@"
+
       - name: Roll Cloud Run
-        if: ${{ inputs.deploy_target == 'cloud-run' }}
+        if: ${{ inputs.deploy_target == 'cloud-run' && inputs.mode == 'image' }}
         env:
           IMAGE: ${{ steps.ref.outputs.image }}
           RUN_PROJECT: ${{ inputs.run_project != '' && inputs.run_project || inputs.gar_project }}
@@ -437,7 +558,7 @@ jobs:
           REPO: ${{ github.repository }}
           COMMIT: ${{ inputs.commit_sha }}
           ENVIRONMENT: ${{ inputs.environment }}
-          IMAGE: ${{ steps.ref.outputs.image }}
+          IMAGE: ${{ steps.guard.outputs.image || steps.ref.outputs.image }}
           REASON: ${{ inputs.reason }}
         run: |
           # Best-effort audit record: the roll already happened, so a Deployments
@@ -461,12 +582,13 @@ jobs:
       - name: Summary
         if: ${{ always() }}
         env:
-          IMAGE: ${{ steps.ref.outputs.image }}
+          IMAGE: ${{ steps.guard.outputs.image || steps.ref.outputs.image }}
           TARGET_DESC: ${{ inputs.deploy_target }}
           ENVIRONMENT: ${{ inputs.environment }}
           COMMIT: ${{ inputs.commit_sha }}
           REASON: ${{ inputs.reason }}
           DRY_RUN: ${{ inputs.dry_run }}
+          MODE: ${{ inputs.mode }}
         run: |
           {
             echo "## Rollback"
@@ -477,6 +599,12 @@ jobs:
             echo "- Live commit: \`${COMMIT:-unknown (not stamped)}\`"
             echo "- Reason:      ${REASON:-—}"
             echo ""
+            if [ "$MODE" = "image" ]; then
+              echo "> **Warning:** image mode runs the old image against the **current** bundle"
+              echo "> pin (the newest secrets). To bring a revision's own secrets back, use"
+              echo "> \`mode: to_revision\`."
+              echo ""
+            fi
             echo "> Transient bridge. Follow up with \`git revert\` + a new linear tag"
             echo "> through \`promote-image\` for the permanent, forward-only fix."
           } >> "$GITHUB_STEP_SUMMARY"
