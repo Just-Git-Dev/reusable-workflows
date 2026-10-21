@@ -88,6 +88,118 @@
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/release-flow"
     },
+    "rotate-worker-signing-secret": {
+      "action": "actions/rotate-worker-signing-secret",
+      "inputs": {
+        "bootstrap": {
+          "default": "false",
+          "description": "'true' = tolerate a missing bundle secret / missing services (first-run setup); no grace, no disable.",
+          "required": false
+        },
+        "bundle_key": {
+          "default": null,
+          "description": "Key inside the bundle to rotate (e.g. FILES_SIGNING_SECRET).",
+          "required": true
+        },
+        "bundle_secret": {
+          "default": "app-secrets",
+          "description": "Secret Manager bundle secret name (dotenv blob mounted into Cloud Run).",
+          "required": false
+        },
+        "cf_account_id": {
+          "default": null,
+          "description": "Cloudflare account id owning the Worker script.",
+          "required": true
+        },
+        "cf_previous_secret_name": {
+          "default": "",
+          "description": "Worker secret binding for the previous secret during grace. Blank = \"<primary>_PREVIOUS\".",
+          "required": false
+        },
+        "cf_primary_secret_name": {
+          "default": null,
+          "description": "Worker secret binding for the current (primary) signing secret.",
+          "required": true
+        },
+        "cf_worker_script": {
+          "default": null,
+          "description": "Cloudflare Worker script name that verifies the signature.",
+          "required": true
+        },
+        "concurrency_declared": {
+          "default": "false",
+          "description": "Set by the wrapper workflow, which declares the concurrency group itself; direct callers leave it unset.",
+          "required": false
+        },
+        "dry_run": {
+          "default": "false",
+          "description": "'true' = print the plan; generate nothing, write nothing, roll nothing.",
+          "required": false
+        },
+        "gcp_project": {
+          "default": null,
+          "description": "GCP project id holding the bundle secret and the Cloud Run services.",
+          "required": true
+        },
+        "gcp_region": {
+          "default": "asia-southeast1",
+          "description": "Region of the Cloud Run services.",
+          "required": false
+        },
+        "grace_seconds": {
+          "default": "900",
+          "description": "Seconds to keep the PREVIOUS slot live. MUST be greater than your longest signed-URL TTL.",
+          "required": false
+        },
+        "keep_enabled_count": {
+          "default": "1",
+          "description": "After a successful roll, keep this many of the most recent ENABLED versions of the bundle secret and DISABLE the rest. Minimum 1.",
+          "required": false
+        },
+        "mount_path": {
+          "default": null,
+          "description": "Container path the bundle is mounted at, e.g. /secrets/app.env. Must match where the service already mounts it: --update-secrets adds a mount and never removes one.",
+          "required": true
+        },
+        "pin_versions": {
+          "default": "true",
+          "description": "'true' (default) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. 'false' = :latest.",
+          "required": false
+        },
+        "secret_bytes": {
+          "default": "32",
+          "description": "Byte length of the generated secret (hex-encoded, so the string is 2x this).",
+          "required": false
+        },
+        "secrets_json": {
+          "default": null,
+          "description": "The caller's secrets as JSON (the toJSON of the secrets context), set in the job that declares `environment:`. The action reads only `cloudflare_api_token` out of it; nothing else leaves its step.",
+          "required": true
+        },
+        "service_account": {
+          "default": null,
+          "description": "Service account email to impersonate via WIF.",
+          "required": true
+        },
+        "services_csv": {
+          "default": null,
+          "description": "Comma-separated Cloud Run service names to roll onto the new version.",
+          "required": true
+        },
+        "wif_provider": {
+          "default": null,
+          "description": "Workload Identity Federation provider resource name.",
+          "required": true
+        }
+      },
+      "name": "Rotate a Cloudflare Worker signing secret",
+      "outputs": {
+        "new_version": "Bundle version created by this run (empty on a dry run).",
+        "old_version": "Bundle version enabled before this run (empty if none / bootstrap)."
+      },
+      "runs": "composite",
+      "uses": "Just-Git-Dev/reusable-workflows/actions/rotate-worker-signing-secret"
+    },
     "sync-bundle-key": {
       "action": "actions/sync-bundle-key",
       "inputs": {

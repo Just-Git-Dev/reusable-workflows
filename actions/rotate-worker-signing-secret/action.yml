@@ -1,0 +1,291 @@
+name: Rotate a Cloudflare Worker signing secret
+description: >-
+  Rotate an HMAC signing secret shared between a Cloudflare Worker (which verifies signed URLs)
+  and a backend that signs them from a Secret Manager bundle mounted into Cloud Run, with a
+  zero-downtime two-slot grace window. Runs inside the CALLER's own job, so that job's
+  `environment:` secrets reach it even across an org boundary. See
+  docs/rotate-worker-signing-secret-action.md (caller job template) and
+  docs/rotate-worker-signing-secret.md (behaviour).
+
+# A composite action, not only a reusable workflow, on purpose: environment-level secrets cannot
+# cross an org boundary into a reusable workflow, but they do reach a step of the job that declares
+# the environment. The reusable workflow .github/workflows/rotate-worker-signing-secret.yml is a
+# thin wrapper that calls this action; the logic lives once, in the scripts beside this file.
+#
+# The CALLER's job must declare (a composite action can declare none of these):
+#   permissions: { contents: read, id-token: write }   id-token: write for the WIF login.
+#   concurrency: { group: bundle-write-<gcp_project>-<bundle_secret>, cancel-in-progress: false }
+#     One lock across every bundle writer. The action cannot detect a missing group, so the first
+#     step prints a ::warning:: naming the exact block (a ::notice:: from the wrapper workflow).
+#   timeout-minutes: 30 is the wrapper's value; the action sets none. It must exceed grace_seconds.
+# Secrets arrive as the `secrets_json` input: `secrets_json: ${{ toJSON(secrets) }}`. Scripts get
+# every value, secrets included, through `env:`, never through ${{ }} in a run body.
+
+inputs:
+  secrets_json:
+    description: >-
+      The caller's secrets as JSON (the toJSON of the secrets context), set in the job that declares
+      `environment:`. The action reads only `cloudflare_api_token` out of it; nothing else leaves
+      its step.
+    required: true
+  gcp_project:
+    description: GCP project id holding the bundle secret and the Cloud Run services.
+    required: true
+  gcp_region:
+    description: Region of the Cloud Run services.
+    required: false
+    default: asia-southeast1
+  wif_provider:
+    description: Workload Identity Federation provider resource name.
+    required: true
+  service_account:
+    description: Service account email to impersonate via WIF.
+    required: true
+  bundle_secret:
+    description: Secret Manager bundle secret name (dotenv blob mounted into Cloud Run).
+    required: false
+    default: app-secrets
+  bundle_key:
+    description: Key inside the bundle to rotate (e.g. FILES_SIGNING_SECRET).
+    required: true
+  mount_path:
+    description: >-
+      Container path the bundle is mounted at, e.g. /secrets/app.env. Must match where the service
+      already mounts it: --update-secrets adds a mount and never removes one.
+    required: true
+  services_csv:
+    description: Comma-separated Cloud Run service names to roll onto the new version.
+    required: true
+  cf_account_id:
+    description: Cloudflare account id owning the Worker script.
+    required: true
+  cf_worker_script:
+    description: Cloudflare Worker script name that verifies the signature.
+    required: true
+  cf_primary_secret_name:
+    description: Worker secret binding for the current (primary) signing secret.
+    required: true
+  cf_previous_secret_name:
+    description: Worker secret binding for the previous secret during grace. Blank = "<primary>_PREVIOUS".
+    required: false
+    default: ''
+  grace_seconds:
+    description: Seconds to keep the PREVIOUS slot live. MUST be greater than your longest signed-URL TTL.
+    required: false
+    default: '900'
+  secret_bytes:
+    description: Byte length of the generated secret (hex-encoded, so the string is 2x this).
+    required: false
+    default: '32'
+  bootstrap:
+    description: "'true' = tolerate a missing bundle secret / missing services (first-run setup); no grace, no disable."
+    required: false
+    default: 'false'
+  dry_run:
+    description: "'true' = print the plan; generate nothing, write nothing, roll nothing."
+    required: false
+    default: 'false'
+  pin_versions:
+    description: "'true' (default) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. 'false' = :latest."
+    required: false
+    default: 'true'
+  keep_enabled_count:
+    description: >-
+      After a successful roll, keep this many of the most recent ENABLED versions of the bundle
+      secret and DISABLE the rest. Minimum 1.
+    required: false
+    default: '1'
+  concurrency_declared:
+    description: >-
+      Set by the wrapper workflow, which declares the concurrency group itself; direct callers
+      leave it unset.
+    required: false
+    default: 'false'
+
+outputs:
+  old_version:
+    description: Bundle version enabled before this run (empty if none / bootstrap).
+    value: ${{ steps.cur.outputs.current_version }}
+  new_version:
+    description: Bundle version created by this run (empty on a dry run).
+    value: ${{ steps.new_version.outputs.new_version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Warn about the caller's concurrency group
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
+      run: '"$GITHUB_ACTION_PATH/warn-concurrency.sh"'
+
+    - name: Authenticate to GCP via WIF
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.wif_provider }}
+        service_account: ${{ inputs.service_account }}
+
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+    - name: Read the Cloudflare token
+      id: cftoken
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        # Reason: the token is one named key of the caller's secrets, so the action picks it out of
+        # the JSON; a composite action has no `secrets` context of its own.
+        SECRETS_JSON: ${{ inputs.secrets_json }}
+      run: '"$GITHUB_ACTION_PATH/read-cloudflare-token.sh"'
+
+    - name: Resolve PREVIOUS slot name
+      id: prev
+      shell: bash
+      env:
+        CF_PRIMARY: ${{ inputs.cf_primary_secret_name }}
+        CF_PREVIOUS: ${{ inputs.cf_previous_secret_name }}
+      run: '"$GITHUB_ACTION_PATH/resolve-previous-slot.sh"'
+
+    - name: Generate new signing secret
+      id: gen
+      shell: bash
+      env:
+        SECRET_BYTES: ${{ inputs.secret_bytes }}
+      run: '"$GITHUB_ACTION_PATH/generate-secret.sh"'
+
+    - name: Read current bundle (or start empty)
+      id: cur
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        BUNDLE_KEY: ${{ inputs.bundle_key }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
+      run: '"$GITHUB_ACTION_PATH/read-current-bundle.sh"'
+
+    - name: Replace the key in the bundle
+      shell: bash
+      env:
+        BUNDLE_KEY: ${{ inputs.bundle_key }}
+        NEW_SECRET: ${{ steps.gen.outputs.new_secret }}
+      run: '"$GITHUB_ACTION_PATH/replace-key.sh"'
+
+    - name: Add new bundle version
+      id: new_version
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+      run: '"$GITHUB_ACTION_PATH/add-bundle-version.sh"'
+
+    - name: Force new Cloud Run revision(s)
+      id: roll
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        GCP_REGION: ${{ inputs.gcp_region }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        MOUNT_PATH: ${{ inputs.mount_path }}
+        SERVICES_CSV: ${{ inputs.services_csv }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
+        NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+        PIN_VERSIONS: ${{ inputs.pin_versions }}
+      run: '"$GITHUB_ACTION_PATH/roll-services.sh"'
+
+    - name: Set Worker PREVIOUS slot = old secret
+      if: inputs.dry_run != 'true' && steps.cur.outputs.empty == 'false' && steps.cur.outputs.old_secret != ''
+      shell: bash
+      env:
+        CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+        CF_WORKER_SCRIPT: ${{ inputs.cf_worker_script }}
+        CF_PREVIOUS: ${{ steps.prev.outputs.cf_previous }}
+        CF_API_TOKEN: ${{ steps.cftoken.outputs.cf_api_token }}
+        OLD_SECRET: ${{ steps.cur.outputs.old_secret }}
+      run: '"$GITHUB_ACTION_PATH/set-worker-previous.sh"'
+
+    - name: Set Worker PRIMARY slot = new secret
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+        CF_WORKER_SCRIPT: ${{ inputs.cf_worker_script }}
+        CF_PRIMARY: ${{ inputs.cf_primary_secret_name }}
+        CF_API_TOKEN: ${{ steps.cftoken.outputs.cf_api_token }}
+        NEW_SECRET: ${{ steps.gen.outputs.new_secret }}
+      run: '"$GITHUB_ACTION_PATH/set-worker-primary.sh"'
+
+    - name: Roll back the new SM version on failure
+      # Fires ONLY when an earlier step failed AND the Cloud Run roll did NOT succeed; see
+      # roll-back.sh. Deliberately NOT failure()-blanket.
+      if: >-
+        failure()
+        && inputs.dry_run != 'true'
+        && steps.new_version.outputs.new_version != ''
+        && steps.cur.outputs.current_version != ''
+        && steps.roll.outcome != 'success'
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        GCP_REGION: ${{ inputs.gcp_region }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        SERVICES_CSV: ${{ inputs.services_csv }}
+        NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+        CUR_VERSION: ${{ steps.cur.outputs.current_version }}
+      run: '"$GITHUB_ACTION_PATH/roll-back.sh"'
+
+    - name: Grace period for outstanding URLs to expire
+      if: inputs.dry_run != 'true' && steps.cur.outputs.empty == 'false'
+      shell: bash
+      env:
+        GRACE_SECONDS: ${{ inputs.grace_seconds }}
+      run: '"$GITHUB_ACTION_PATH/grace.sh"'
+
+    - name: Remove Worker PREVIOUS slot
+      if: inputs.dry_run != 'true' && steps.cur.outputs.empty == 'false' && steps.cur.outputs.old_secret != ''
+      shell: bash
+      env:
+        CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+        CF_WORKER_SCRIPT: ${{ inputs.cf_worker_script }}
+        CF_PREVIOUS: ${{ steps.prev.outputs.cf_previous }}
+        CF_API_TOKEN: ${{ steps.cftoken.outputs.cf_api_token }}
+      run: '"$GITHUB_ACTION_PATH/remove-worker-previous.sh"'
+
+    - name: Disable superseded bundle version(s)
+      # Reached only when every service rolled; the keep-set is explained in disable-superseded.sh.
+      if: inputs.dry_run != 'true' && steps.cur.outputs.empty == 'false' && steps.cur.outputs.current_version != ''
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        GCP_REGION: ${{ inputs.gcp_region }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        SERVICES_CSV: ${{ inputs.services_csv }}
+        KEEP_ENABLED_COUNT: ${{ inputs.keep_enabled_count }}
+        NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+      run: '"$GITHUB_ACTION_PATH/disable-superseded.sh"'
+
+    - name: Shred local bundle copies
+      if: always()
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/shred.sh"'
+
+    - name: Summary
+      if: always()
+      shell: bash
+      env:
+        GCP_PROJECT: ${{ inputs.gcp_project }}
+        BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        BUNDLE_KEY: ${{ inputs.bundle_key }}
+        SERVICES_CSV: ${{ inputs.services_csv }}
+        CF_WORKER_SCRIPT: ${{ inputs.cf_worker_script }}
+        CF_PRIMARY: ${{ inputs.cf_primary_secret_name }}
+        CF_PREVIOUS: ${{ steps.prev.outputs.cf_previous }}
+        GRACE_SECONDS: ${{ inputs.grace_seconds }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        CUR_VERSION: ${{ steps.cur.outputs.current_version }}
+        CUR_EMPTY: ${{ steps.cur.outputs.empty }}
+        NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+      run: '"$GITHUB_ACTION_PATH/summary.sh"'

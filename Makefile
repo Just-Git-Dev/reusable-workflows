@@ -170,6 +170,7 @@ concurrency-groups: venv
 step-bodies: venv
 	$(PY) tests/run_step_tests.py
 	$(PY) tests/run_sync_v4_tests.py
+	$(PY) tests/run_rotator_action_tests.py
 	$(PY) tests/run_deploy_env_tests.py
 	$(PY) tests/run_distribute_env_tests.py
 	$(PY) tests/run_deploy_env_lint_tests.py

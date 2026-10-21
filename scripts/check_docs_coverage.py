@@ -57,7 +57,7 @@ def main():
                         "TESTING-STANDARD", "repos-register", "runtime-config",
                         "MIGRATION-v4",
                         # caller-job guides for an action whose workflow wrapper has the main page
-                        "sync-bundle-key-action"}:
+                        "sync-bundle-key-action", "rotate-worker-signing-secret-action"}:
             continue
         if not (WORKFLOWS / f"{doc.stem}.yml").is_file() \
                 and not (ACTIONS / doc.stem / "action.yml").is_file():
