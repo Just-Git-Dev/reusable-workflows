@@ -7,7 +7,7 @@ cloud and needs no credential, and refuses the mistakes that otherwise surface a
 the first deploy of a stage.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-env-lint.yml@v3.10.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-env-lint.yml@v4.0.0
 ```
 
 It is a standalone reusable workflow, not a step inside the deploy workflows, so a repo can run
@@ -68,5 +68,5 @@ permissions:
 
 jobs:
   lint:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-env-lint.yml@v3.10.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-env-lint.yml@v4.0.0
 ```

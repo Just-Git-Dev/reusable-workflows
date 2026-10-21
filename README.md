@@ -34,8 +34,8 @@ lands everywhere.
 > pinning on, `mode: replace`, `strict_values: true`) and adds env-file deploys, revision labels
 > and a loud rollback refusal. Read [runtime-config](docs/runtime-config.md) for the model and
 > [MIGRATION-v4](docs/MIGRATION-v4.md) for the per-caller checklist. The additive new workflows
-> (`repos-environments`, `distribute-env-secrets`, `deploy-env-lint`) are planned to ship first as
-> v3.10.0 (owner decision pending); until a release is cut, pin the current latest tag.
+> (`repos-environments`, `distribute-env-secrets`, `deploy-env-lint`) ship in the same v4.0.0
+> release (owner ruling 2026-10-21; there is no v3.10.0); until it is cut, pin the current latest tag.
 
 ## Workflows
 
@@ -101,9 +101,9 @@ a pure planner. Contract: [repos-register](docs/repos-register.md).
 | [`repos-service-accounts.yml`](docs/repos-service-accounts.md) | F6: create the registered service accounts that are missing. Never deletes one, never creates a key. Report or enforce |
 | [`repos-deploy-scope.yml`](docs/repos-deploy-scope.md) | F7: each repo may deploy only its own service (resource-level IAM). Report or enforce |
 | [`repos-secrets.yml`](docs/repos-secrets.md) | F8: one `<service>-env` secret per service, its whole IAM policy written here only (runtime reads, own deployer syncs). Report or enforce, prune opt-in |
-| [`repos-environments`](docs/repos-environments.md) | F9 (pending v3.10.0): GitHub environments per repo declared in `repos.yaml` (branch rules, never deletes) |
-| [`distribute-env-secrets`](docs/distribute-env-secrets.md) | Pending v3.10.0: copy a project-repo secret into the environment of service repos |
-| [`deploy-env-lint`](docs/deploy-env-lint.md) | Pending v3.10.0: lint `deploy/env.<stage>.yaml` and `deploy/secret-keys.txt` before deploy |
+| [`repos-environments`](docs/repos-environments.md) | F9 (v4.0.0): GitHub environments per repo declared in `repos.yaml` (branch rules, never deletes) |
+| [`distribute-env-secrets`](docs/distribute-env-secrets.md) | v4.0.0: copy a project-repo secret into the environment of service repos |
+| [`deploy-env-lint`](docs/deploy-env-lint.md) | v4.0.0: lint `deploy/env.<stage>.yaml` and `deploy/secret-keys.txt` before deploy |
 
 ### Backups, alerts & housekeeping
 

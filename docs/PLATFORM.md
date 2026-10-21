@@ -9,8 +9,8 @@ they connect end-to-end. Start here, then follow the links into each workflow's 
 
 > **v4 notice (pending release).** v4.0.0 flips the pinning, `mode: replace` and `strict_values`
 > defaults and adds env-file deploys; see [runtime-config](runtime-config.md) and
-> [MIGRATION-v4](MIGRATION-v4.md). The new workflows in the catalog ship first as v3.10.0 (owner
-> decision pending); pin the current latest tag until a release is cut.
+> [MIGRATION-v4](MIGRATION-v4.md). The new workflows in the catalog ship in the same v4.0.0 release
+> (owner ruling 2026-10-21; no v3.10.0); pin the current latest tag until it is cut.
 
 ---
 
@@ -158,9 +158,9 @@ full input/secret contract. Grant `id-token: write` for any WIF workflow. Cross-
 
 ### Repos as code
 - **[`repos-register`](repos-register.md)** — the `repos.yaml` register in your root repo (every repo you own, its settings, variables, GCP links and deploy scope) and seven independent features over it: check, create, settings, variables, WIF link, service accounts, deploy scope. *Auth: GitHub-side features use your release App's second key in a `main`-only `repo-admin` environment; GCP-side features use your project's `repo-admin` SA via WIF.* **Design of record — the workflows are not released yet.** Every repo starts `mode: report`; never deletes, archives, makes public, or renames without `rename_from`.
-- **[`repos-environments`](repos-environments.md)** — *pending v3.10.0.* F9: declare GitHub environments (and branch rules) per repo in `repos.yaml`; never deletes one.
-- **[`distribute-env-secrets`](distribute-env-secrets.md)** — *pending v3.10.0.* Copy a project-repo secret into the environment of service repos; runs in the project repo only.
-- **[`deploy-env-lint`](deploy-env-lint.md)** — *pending v3.10.0.* Lint `deploy/env.<stage>.yaml` and `deploy/secret-keys.txt`; no cloud, no credential.
+- **[`repos-environments`](repos-environments.md)** — *v4.0.0.* F9: declare GitHub environments (and branch rules) per repo in `repos.yaml`; never deletes one.
+- **[`distribute-env-secrets`](distribute-env-secrets.md)** — *v4.0.0.* Copy a project-repo secret into the environment of service repos; runs in the project repo only.
+- **[`deploy-env-lint`](deploy-env-lint.md)** — *v4.0.0.* Lint `deploy/env.<stage>.yaml` and `deploy/secret-keys.txt`; no cloud, no credential.
 
 ---
 

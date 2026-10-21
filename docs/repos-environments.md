@@ -8,7 +8,7 @@ register, the live-state JSON and the action list are defined in
 [repos-register.md](repos-register.md) (sections 2, 3, 7 and 8).
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v3.10.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v4.0.0
 ```
 
 ## Why it exists
@@ -90,16 +90,11 @@ empty. The job fails before minting a token unless it runs in the configured env
 
 The App id and key are inputs, so the workflow does not assume which App is used.
 
-> **Pending owner decision Q1 — which GitHub App holds `Administration: write` for enforce.**
-> Options: (a) a new per-org App (`<org>-repo-admin`: Administration RW, Environments RW, Actions
-> R; installed on the service repos only; key in the project repo's `repo-admin` environment),
-> with its own key and audit trail, revocable alone; (b) the owner creates each environment and its
-> branch rule by hand in the GitHub UI once, and F9 runs in `report` mode only, flagging drift;
-> (c) the release App is extended with `Administration` as the register's design of record says
-> ([§9](repos-register.md#9-the-repo-admin-environment)). A project may already have refused (c).
-> This page does not pick one. Until it is decided, only `report` runs are documented as
-> adoptable.
-
+**Ruling Q1 (owner, 2026-10-21):** the credential is the org's automation App (`<org>-automation`, formerly the release App). It holds
+`Administration: write` for `enforce` (and `Actions: read` for `report`), alongside the
+permissions it already holds. No separate repo-admin App exists. The App is installed on the
+service repos, and `enforce` mints `administration: write` narrowed to the repos the plan writes
+to. The rename and the permission grant are owner-side GitHub settings changes.
 ## Copy-paste
 
 ```yaml
@@ -112,7 +107,7 @@ permissions:
 
 jobs:
   environments:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v3.10.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v4.0.0
     with:
       app_id: ${{ vars.APP_ID }}
     secrets:

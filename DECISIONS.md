@@ -2,8 +2,9 @@
 
 ## Index
 
-114 entries total — 104 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+115 entries total — 105 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [v4 owner rulings Q1-Q9 applied to docs](#2026-10-21--v4-owner-rulings-q1-q9-applied-to-docs)
 - `2026-10-21` — [v3.8.1 live proof carried over: a consumer's run destroyed 2 versions with a quoted etag](#2026-10-21--v381-live-proof-carried-over-a-consumers-run-destroyed-2-versions-with-a-quoted-etag)
 - `2026-10-21` — [F9 repos-environments: environments as code; credential is a PENDING owner decision (Q1)](#2026-10-21--f9-repos-environments-environments-as-code-credential-is-a-pending-owner-decision-q1)
 - `2026-10-21` — [RW v4: pinning, replace mode, strict values, env files; rotators also pin; S0 and forward-only fallback](#2026-10-21--rw-v4-pinning-replace-mode-strict-values-env-files-rotators-also-pin-s0-and-forward-only-fallback)
@@ -230,6 +231,10 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — v4 owner rulings Q1-Q9 applied to docs
+
+Owner rulings Q1-Q9 (2026-10-21) replace every pending-decision block in the v4 docs. Q1/Q2: one credential, the org automation App (<org>-automation, formerly the release App), holding Administration: write and Environments: write. Q4: rollback-service to_revision (doc owned elsewhere). Q5: delete old production environments after a per-environment provenance check. Q6: committed deploy/target.<stage>.yaml. Q7: stage = main + v* tags, stage-bootstrap = main only. Q8: pin_env: false ships, warned. Q9: all in v4.0.0, no v3.10.0, so docs pin @v4.0.0 and callers create environments before their first v4 sync.
 
 ## 2026-10-21 — v3.8.1 live proof carried over: a consumer's run destroyed 2 versions with a quoted etag
 

@@ -237,11 +237,9 @@ secret version it was deployed with. The pin step reads the service's currently 
 - a number: **keep it**. A deploy never moves the pin; only the bundle writers
   ([sync-bundle-key](sync-bundle-key.md) and the two rotators) do.
 
-> **Pending owner decision Q8 — ship `pin_env: false`?** As written above `pin_env` defaults to
-> `true`. Whether the input exists at all is undecided. Options: (a) ship it as an opt-out,
-> warned in every run summary, so a caller can adopt v4 service by service; (b) ship no escape:
-> the deploy refuses until the caller has migrated. This page documents the pinning behaviour
-> only.
+**Ruling (owner, 2026-10-21): `pin_env: false` ships.** `pin_env` defaults to `true`; setting it
+to `false` is an opt-out for a service with no `*-env` bundle yet, and every run that uses it
+prints a warning in its summary. It exists so a caller can adopt v4 service by service.
 
 ### Labels
 

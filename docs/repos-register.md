@@ -231,7 +231,7 @@ No feature requires another. Each row lists what you must have to adopt that fea
 | F6 | `repos-service-accounts.yml` | top-level `service_accounts` | GCP: `repo-admin` via WIF | service accounts |
 | F7 | `repos-deploy-scope.yml` | `deploys` | GCP: `repo-admin` via WIF | Cloud Run service (create once) + resource-level IAM |
 | F8 | `repos-secrets.yml` | `deploys[].env_secret` | GCP: `repo-admin` via WIF | Secret Manager secret `<d>-env` (create once, never its versions) + that secret's IAM policy |
-| F9 | `repos-environments.yml` | `environments` | report: `actions:read`; enforce: `administration:write` on the repos it writes to. Which App holds it: pending owner decision Q1 ([§9](#9-the-repo-admin-environment)) | GitHub environments + their deployment branch/tag policies (never deletes one) |
+| F9 | `repos-environments.yml` | `environments` | report: `actions:read`; enforce: `administration:write` on the repos it writes to. The org's automation App (`<org>-automation`) holds it, per the Q1 ruling ([§9](#9-the-repo-admin-environment)) | GitHub environments + their deployment branch/tag policies (never deletes one) |
 
 GitHub-side features (F2-F4, F9) mint a GitHub App installation token narrowed with `permission-*`
 inputs to exactly the row above, and run only in the `repo-admin` environment
@@ -615,15 +615,10 @@ section's shape: the job runs in the `repo-admin` environment on `main` only; `r
 read token (`actions: read`, `metadata: read`); `enforce` mints `administration: write` narrowed
 to exactly the repos the plan has write actions for, and mints nothing when that list is empty.
 
-> **Pending owner decision Q1 — which GitHub App holds `Administration: write` for F9.**
-> The bullets above describe the register's design of record: the release App, extended. A
-> project may refuse that permission on its release App. Options: (a) a new per-org App
-> (`<org>-repo-admin`: Administration RW, Environments RW, Actions R; installed on the service
-> repos only; key in the project repo's `repo-admin` environment), with its own key and audit
-> trail, revocable alone; (b) the owner creates each environment and its branch rule by hand in
-> the GitHub UI once, and F9 runs in `report` mode only and flags drift; (c) the release App
-> keeps the extension above. This page does not pick one. Until it is decided, F9 enforce runs
-> are not documented as adoptable; `report` runs need only the read token.
+**Ruling Q1 (owner, 2026-10-21):** F9's credential is the org's automation App (`<org>-automation`, formerly the release App), extended with
+`Administration: write` (the design of record above), plus `Environments: write` for
+`distribute-env-secrets`. No separate repo-admin App is created. The rename and the grant are
+owner-side GitHub settings changes.
 
 ## 10. Minimal caller
 

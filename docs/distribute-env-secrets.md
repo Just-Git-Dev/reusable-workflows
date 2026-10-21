@@ -5,7 +5,7 @@ Runs in the project repo (`<org>/project`) only. It never creates a repo or an e
 prints a value, and fails loudly on an empty source or a missing target.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v3.10.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v4.0.0
 ```
 
 ## When to use it, and when not
@@ -75,14 +75,11 @@ to write.
 
 The token needs `Environments: write` on the target repos, not `Administration`.
 
-> **Pending owner decision Q2 — which GitHub App writes the environment secrets.** Options:
-> (a) the same new per-org App chosen for [repos-environments](repos-environments.md) (Q1 option
-> (a)); (b) the existing per-org release App, extended with `Environments: write`; (c) the
-> separate access-provisioning distributor App, which runs from a different repo and is not
-> available to a project-repo job. Whether the existing Apps already hold any Secrets or
-> Environments write permission is unverified. This page does not pick one. Until it is decided,
-> dry runs need no write permission; live runs are not documented as adoptable.
-
+**Ruling Q2 (owner, 2026-10-21):** the token comes from the org's automation App (`<org>-automation`, formerly the release App), which gains
+`Environments: write` for this workflow (the same App also holds `Administration: write` for
+[repos-environments](repos-environments.md)). The access-provisioning distributor App is not
+used: it runs from a different repo and is not available to a project-repo job. Dry runs need no
+write permission.
 ## Copy-paste
 
 ```yaml
@@ -97,7 +94,7 @@ permissions:
 
 jobs:
   distribute:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v3.10.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v4.0.0
     with:
       app_id: ${{ vars.APP_ID }}
       dry_run: ${{ inputs.dry_run }}

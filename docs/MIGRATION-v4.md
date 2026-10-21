@@ -67,11 +67,10 @@ whose pinned bundle version has been disabled must fail before changing anything
 A manual traffic shift in the Cloud Console cannot be guarded by any workflow; the refusal only
 covers rollbacks run through `rollback-service`.
 
-**Pending owner decision Q4 (which rollback the refusal guards):** (a) add a `to_revision` mode that
-shifts traffic to the old revision, taking its image, env and pinned bundle together, and refuses
-when its pin is disabled, keeping the image mode with a summary warning; (b) make the image mode
-re-pin to the old revision's version and refuse when it is disabled; (c) both. The exact inputs
-for `rollback-service` wait on this.
+**Ruling Q4 (owner, 2026-10-21):** `rollback-service` gains a `to_revision` mode that shifts
+traffic back to the old revision, taking its image, env and pinned bundle together, and refuses
+loudly when that revision's pinned bundle version is disabled. The image mode stays, with a
+warning in the run summary. Inputs: see [rollback-service](rollback-service.md).
 
 ## Retiring the `production` environment name
 
@@ -83,24 +82,24 @@ allows the deploy only when neither exists (a first deploy ever), with a notice.
 
 Whether the `production` environment object is then deleted is a separate, destructive decision.
 
-**Pending owner decision Q5 (what happens to the old `production` environment objects):** (a)
-leave them, marked retired (`repos-environments` reports them as unmanaged); (b) delete after a
-provenance check of the secrets and the deployment history they hold. Nothing in the workflows
-depends on the answer, and `repos-environments` never deletes an environment.
+**Ruling Q5 (owner, 2026-10-21):** the old `production` environment objects are deleted, but only
+after a per-environment provenance check (does it hold secrets or variables, is its deployment
+history needed) that is put to the owner before any delete. Until then `repos-environments`
+reports them as unmanaged. `repos-environments` itself never deletes an environment.
 
 ## The `pin_env: false` escape in `deploy-cloud-run`
 
-**Pending owner decision Q8 (whether to ship `pin_env: false`):** (a) ship it as an opt-out for a
-service with no `*-env` bundle yet, logged as a warning in every run summary, so adoption can go
-service by service; (b) ship no escape, so the deploy refuses until the caller migrates. Until
-decided, do not rely on `pin_env`.
+**Ruling Q8 (owner, 2026-10-21):** v4 ships `pin_env: false` as an opt-out for a service with no
+`*-env` bundle yet. Every run that uses it prints a warning in its summary, so adoption can go
+service by service.
 
 ## Release order
 
-**Pending owner decision Q9 (release sequencing):** (a) release v3.10.0 first with the additive
-workflows (`repos-environments`, `distribute-env-secrets`, `deploy-env-lint`), then v4.0.0 with
-the three default flips; or (b) everything in v4.0.0. Under (a) environments can be created before
-v4 lands, which step 1 above needs, and the environment guard refuses otherwise.
+**Ruling Q9 (owner, 2026-10-21): everything ships together in v4.0.0; there is no v3.10.0.** The
+additive workflows (`repos-environments`, `distribute-env-secrets`, `deploy-env-lint`) and the
+three default flips are one release. Consequence: a caller creates its environments with v4.0.0's
+`repos-environments` **before** its first v4 sync or deploy, because the environment guard
+refuses otherwise.
 
 ## Related
 

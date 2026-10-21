@@ -138,11 +138,16 @@ Run as `--env-vars-file`, which **replaces** the service's environment variables
 file's contents, so a variable removed from the file is removed from the service on the next
 deploy.
 
-## Pending owner decisions affecting this page
+## Credentials
 
-**Pending owner decision Q1/Q2 (credentials):** which GitHub App credential creates environments
-(`repos-environments`) and writes environment secrets (`distribute-env-secrets`). Options: (a) a
-new per-organisation repo-admin App; (b) hand-created environments with `repos-environments` in
-report mode only, and the existing release App extended with Environments: write for secrets; (c)
-extend the existing release App with Administration. This page describes behaviour only; the
-credential paragraph lives in those two workflows' docs.
+Per the owner's ruling (2026-10-21), one credential does both jobs: the org's automation App (`<org>-automation`, formerly the release App).
+It holds `Administration: write` (for `repos-environments` enforce) and `Environments: write` (for
+`distribute-env-secrets`), plus what it already holds. See those two workflows' docs.
+
+## Deploy targets and branch rules
+
+Per the owner's rulings (2026-10-21): the per-stage deploy targets (GCP project id, WIF provider,
+deployer service account) live in a committed `deploy/target.<stage>.yaml` in the service repo,
+read by the caller; they are not GitHub environment variables and not inline literals. The `stage`
+environment is deployable from `main` and from `v*` tags; `stage-bootstrap` (the seed-only
+database credential) and `prod` are `main` only.
