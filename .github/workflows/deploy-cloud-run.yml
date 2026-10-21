@@ -202,6 +202,17 @@ on:
         type: boolean
         required: false
         default: true
+      image:
+        description: >-
+          Deploy a PREBUILT image instead of building one: skips docker configure,
+          buildx and build & push, keeps the full deploy path. Digest reference
+          only (`<region>-docker.pkg.dev/<project>/<repo>/<name>@sha256:<64 hex>`);
+          a tag is refused because a tag can move between a gate's test and this
+          deploy. Empty (default) builds and pushes as before. Refused with
+          build_only; also_tag_latest, docker_target and build_args are ignored.
+        type: string
+        required: false
+        default: ''
       manifest_retention_days:
         description: 'Retention, in days, of the config-manifest.json artifact (capped by the repository maximum).'
         type: number
@@ -209,7 +220,7 @@ on:
         default: 400
     outputs:
       image:
-        description: 'Fully-qualified image reference that was built.'
+        description: 'Fully-qualified image reference that was built (the input digest reference when image is set).'
         value: ${{ jobs.deploy.outputs.image }}
       service_url:
         description: 'Cloud Run service URL after the deploy.'
@@ -257,7 +268,28 @@ jobs:
           ALSO_LATEST: ${{ inputs.also_tag_latest }}
           BUILD_ONLY: ${{ inputs.build_only }}
           SERVICE: ${{ inputs.service }}
+          IMAGE: ${{ inputs.image }}
+          DOCKER_TARGET: ${{ inputs.docker_target }}
+          BUILD_ARGS: ${{ inputs.build_args }}
         run: |
+          if [ -n "$IMAGE" ]; then
+            if [ "$BUILD_ONLY" = "true" ]; then
+              echo "::error::'image' (deploy a prebuilt image) cannot be combined with build_only: true" >&2
+              exit 1
+            fi
+            # Digest only: a tag can move between the gate's test and this deploy.
+            if [[ ! "$IMAGE" =~ ^[a-z0-9.-]+-docker\.pkg\.dev/[^@:[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::'image' must be an Artifact Registry digest reference <region>-docker.pkg.dev/<project>/<repo>/<name>@sha256:<64 hex>; a tag reference is refused" >&2
+              exit 1
+            fi
+            IGNORED=""
+            [ "$ALSO_LATEST" = "true" ] && IGNORED="$IGNORED also_tag_latest"
+            [ -n "$DOCKER_TARGET" ] && IGNORED="$IGNORED docker_target"
+            [ -n "$BUILD_ARGS" ] && IGNORED="$IGNORED build_args"
+            if [ -n "$IGNORED" ]; then
+              echo "::notice::image is set, so these build-only inputs are ignored:$IGNORED"
+            fi
+          fi
           if [ "$BUILD_ONLY" != "true" ] && [ -z "$SERVICE" ]; then
             echo "::error::'service' is required unless build_only is true" >&2
             exit 1
@@ -272,10 +304,11 @@ jobs:
             exit 1
           fi
           BASE="${REGION}-docker.pkg.dev/${PROJECT}/${GAR_REPO}/${IMAGE_NAME}"
+          REF="${IMAGE:-${BASE}:${TAG}}"
           # tags is a newline-separated list for docker/build-push-action.
           {
             echo "tag=$TAG"
-            echo "image=${BASE}:${TAG}"
+            echo "image=${REF}"
             echo "tags<<__TAGS__"
             echo "${BASE}:${TAG}"
             [ "$ALSO_LATEST" = "true" ] && echo "${BASE}:latest"
@@ -383,13 +416,30 @@ jobs:
               exit 1 ;;
           esac
 
+      - name: Verify prebuilt image
+        id: verify
+        if: ${{ inputs.image != '' }}
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          # Fails the run when the digest is absent from Artifact Registry.
+          DIGEST="$(gcloud artifacts docker images describe "$IMAGE" --format='value(image_summary.digest)')"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::could not read the digest of image '$IMAGE' from Artifact Registry" >&2
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
       - name: Configure docker for Artifact Registry
+        if: ${{ inputs.image == '' }}
         run: gcloud auth configure-docker "${{ inputs.gcp_region }}-docker.pkg.dev" --quiet
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: ${{ inputs.image == '' }}
 
       - name: Build & push image
         id: build
+        if: ${{ inputs.image == '' }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ inputs.context }}
@@ -655,7 +705,7 @@ jobs:
         if: ${{ !inputs.build_only && !inputs.dry_run && (inputs.env_file != '' || inputs.generated_env != '' || inputs.env_secret != '') }}
         env:
           COMMIT: ${{ steps.commit.outputs.sha }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.verify.outputs.digest }}
           ENV_VERSION: ${{ steps.pin.outputs.env_version }}
           GENERATED_ENV: ${{ inputs.generated_env }}
           BUNDLE_KEYS: ${{ steps.bundle.outputs.keys }}

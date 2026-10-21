@@ -93,6 +93,7 @@ Two things this depends on, both worth confirming per repo before converting:
 | `deploy_mode` | input | `update-image` | see table above |
 | `deploy_flags` | input | `''` | flags for `deploy_mode=deploy`, **one per line** — spaces within a line are preserved (safe for values containing spaces or commas). Prefer this |
 | `extra_deploy_flags` | input | `''` | legacy: flags as one space-separated string — word-split, so a space inside any value breaks argv. Prefer `deploy_flags` |
+| `image` | input | `''` | deploy a **prebuilt** image instead of building: digest reference only (`…@sha256:<64 hex>`), a tag is refused. See [Deploy a prebuilt image](#deploy-a-prebuilt-image-image-v410) |
 | `build_only` | input | `false` | build **and push**, then stop — no Cloud Run mutation, no Deployment record. See below |
 | `dry_run` | input | `false` | build only — **no push**, no Cloud Run mutation |
 | `env_file`, `generated_env`, `env_secret`, `env_mount_path`, `pin_env`, `manifest_retention_days` | input | see [Runtime config (v4)](#runtime-config-v4) | env file, bundle pin, labels and manifest |
@@ -101,7 +102,7 @@ No secrets: WIF is keyless. `id-token: write` is set by the reusable.
 
 ## Outputs
 
-`image` — the fully-qualified image reference built. Set for `build_only` runs too — it is the whole point of them.
+`image` — the fully-qualified image reference built (the input digest reference when the `image` input is set). Set for `build_only` runs too — it is the whole point of them.
 `service_url` — the Cloud Run URL after the deploy. Empty for `build_only` / `dry_run`.
 
 ## Example — strict image flip (config owned by a provision workflow)
@@ -174,6 +175,48 @@ the image is tagged independently:
       checkout_ref: ${{ github.ref_name }}  # but build this git ref (e.g. v0.1.8)
       require_semver: false                 # 0.1.8 is not vX.Y.Z
 ```
+
+## Deploy a prebuilt image (`image`, v4.1.0)
+
+`image: <region>-docker.pkg.dev/<project>/<repo>/<name>@sha256:<64 hex>` deploys an image that
+something else already built and pushed (for example the one a caller's gate just tested), and keeps
+the **full** deploy path: checkout, env render, bundle pin, `jgd_commit` / env labels, the Deployment
+record, the config manifest and the summary all run as for a built image. Only the build is skipped.
+Default `''` is the build-and-push flow above, unchanged.
+
+**Digest only.** A tag reference (`…:v1.2.3`) is refused with an error naming `image`. A tag can be
+moved between the moment a gate tests an image and the moment this deploy runs; a digest cannot, so
+the bytes deployed are provably the bytes tested.
+
+What the run does when `image` is set:
+
+- `Resolve tag + image ref` validates the digest shape, then outputs `image` = the input. The tag
+  (`image_tag` or the triggering ref) is still resolved: it drives the checkout, the Deployment
+  record and `require_semver`.
+- `Configure docker`, `setup-buildx` and `Build & push image` are skipped.
+- `Verify prebuilt image` runs `gcloud artifacts docker images describe` on the reference and fails
+  the run if that digest is not in Artifact Registry (the releaser SA already reads GAR). The digest
+  it reports goes into the config manifest's `image_digest`.
+- `image` + `build_only: true` is refused (nothing to build, nothing to stop after).
+- Build-only inputs are ignored (nothing is built or pushed). A `::notice::` lists which of
+  `also_tag_latest`, `docker_target` and `build_args` were set; `context`, `dockerfile` and
+  `platforms` have defaults, so they are ignored silently.
+
+**The checkout is not compared with the image.** The workflow does not check that the image's OCI
+revision label equals the checked-out commit (images from other build systems may carry no label).
+The caller passes the same tag as `image_tag` and as the one the image was built from, so the commit
+stamped on the service is the commit the image came from.
+
+### `deploy-cloud-run` vs `promote-image` — which to use
+
+| | `deploy-cloud-run` with `image` | `promote-image` |
+|---|---|---|
+| Deploys a digest | yes (digest only) | yes |
+| Env file render, bundle pin | yes | no |
+| `jgd_commit` / env labels, forward-only guard | yes | no |
+| Config manifest artifact | yes | no |
+| Retags the image | no | yes (server-side) |
+| Pick it when | the service has runtime config (v4) or you need the manifest / live-commit marker | you only need to retag and flip the image |
 
 ## Live-commit stamping
 
