@@ -1014,7 +1014,7 @@ def _run_body(body, env_extra, *, stubs=None):
 
 
 def run_cf_retarget_step(body, *, current="", svc_json=None, ready_at=1, curl_run="200",
-                         curl_host="200", create_fails=False, **env_kw):
+                         curl_host="200", create_fails=False, delete_fails=False, **env_kw):
     """Run a bootstrap-cf-service retarget-aware step with stubbed gcloud/curl and a fake clock.
 
     current:    live mapping's routeName ('' = no mapping; describe fails).
@@ -1052,6 +1052,7 @@ def run_cf_retarget_step(body, *, current="", svc_json=None, ready_at=1, curl_ru
             f'else cat "{tmp}/notready.json"; fi ;;\n'
             f'  *"run services describe"*) cat "{tmp}/svc.json" ;;\n'
             + ('  *"domain-mappings create"*) exit 1 ;;\n' if create_fails else '')
+            + ('  *"domain-mappings delete"*) exit 1 ;;\n' if delete_fails else '')
             + 'esac\nexit 0\n')
         curl = ("#!/usr/bin/env bash\n"
                 'for a in "$@"; do u="$a"; done\n'
@@ -3641,6 +3642,28 @@ def main():
           len(writes) == 2 and "delete" in writes[0] and "create" in writes[1]
           and "--service=svc-new" in writes[1], r["calls"])
     check("retarget records T_DELETE", r["env"].get("T_DELETE", "").isdigit(), r["env"])
+    # F3: a failed delete leaves the old mapping serving: no T_DELETE, so no map-back advice.
+    r = run_cf_retarget_step(body, current="svc-old", retarget_from="svc-old", delete_fails=True)
+    check("F3: a failed delete fails the step and records no T_DELETE",
+          r["rc"] != 0 and "T_DELETE" not in r["env"] and not has_call(r, "domain-mappings create"),
+          r["env"])
+    sbody = extract_step(CFSERVICE, "bootstrap", "Summary")
+    s = run_cf_retarget_step(sbody, retarget_from="svc-old", job_status="failure",
+                             t_delete=r["env"].get("T_DELETE", ""))
+    check("F3: a failed delete prints no map-back command",
+          "domain-mappings" not in s["summary"] and "map back" not in s["summary"], s["summary"])
+    # F4: after a failed CREATE no mapping exists, so the map-back must not depend on delete.
+    r = run_cf_retarget_step(body, current="svc-old", retarget_from="svc-old", create_fails=True)
+    check("F4: a failed create after a successful delete records T_DELETE",
+          r["rc"] != 0 and r["env"].get("T_DELETE", "").isdigit(), r["env"])
+    s = run_cf_retarget_step(sbody, retarget_from="svc-old", job_status="failure",
+                             t_delete=r["env"].get("T_DELETE", ""))
+    lines = s["summary"].splitlines()
+    di = [i for i, l in enumerate(lines) if "domain-mappings delete" in l]
+    check("F4: map-back delete line tolerates NOT_FOUND (|| true) and create is its own line",
+          len(di) == 1 and "|| true" in lines[di[0]] and "&&" not in " ".join(lines)
+          and any("domain-mappings create --service=svc-old" in l for l in lines[di[0] + 1:]),
+          s["summary"])
     r = run_cf_retarget_step(body, current="svc-third", retarget_from="svc-old")
     check("a third service still refuses",
           r["rc"] == 1 and not has_call(r, "domain-mappings delete"), r["out"])
@@ -3733,6 +3756,11 @@ def main():
     check("CAA allowing pki.goog is quiet", "::warning::" not in r["out"] and r["rc"] == 0, r["out"])
     r = caa([])
     check("no CAA records is quiet", "::warning::" not in r["out"] and r["rc"] == 0, r["out"])
+    # F5: the warning is only useful before Converge deletes the old mapping.
+    names = [s.get("name") for s in job_steps(CFSERVICE, "bootstrap")]
+    check("F5: CAA check precedes Converge (and so does the zone lookup it needs)",
+          names.index("Resolve the Cloudflare zone id") < names.index("Check CAA records")
+          < names.index("Converge the Cloud Run domain mapping"), names)
 
     # ── bootstrap-cf-dns ────────────────────────────────────────────────────
     print("\nbootstrap-cf-dns · Validate the inputs")

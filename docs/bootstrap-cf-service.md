@@ -130,19 +130,22 @@ nothing, because the managed cert is re-issued. The step summary records the win
 time to probe time). Plan for roughly the cert issuance time.
 
 **No auto-rollback.** Re-mapping the old service is a second cert issue, so the workflow does
-not attempt it. On any failure after the delete the summary prints the exact map-back command:
+not attempt it. On any failure after the delete SUCCEEDED the summary prints the exact map-back
+command (a failed delete leaves the old mapping serving, so no command is printed). The delete
+line ends in `|| true` because, when the create is what failed, no mapping exists to delete:
 
 ```bash
-gcloud beta run domain-mappings delete --domain=<host> --region=<region> --project=<project> --quiet \
-  && gcloud beta run domain-mappings create --service=<retarget_from> --domain=<host> \
-     --region=<region> --project=<project>
+gcloud beta run domain-mappings delete --domain=<host> --region=<region> --project=<project> --quiet || true
+gcloud beta run domain-mappings create --service=<retarget_from> --domain=<host> \
+  --region=<region> --project=<project>
 ```
 
 **Dry run** prints the plan (the current `routeName`, the target's readiness, the delete and
 create that would happen) and writes nothing. The pre-flight is read-only, so it still runs.
 
 **CAA.** The zone's (and hostname's) CAA records are read; if any exist and none allows
-`pki.goog`, a warning is emitted, since Google could not then issue the new cert.
+`pki.goog`, a warning is emitted, since Google could not then issue the new cert. This check
+runs BEFORE the old mapping is deleted, so the warning arrives while nothing is down yet.
 
 ## Copy-paste
 

@@ -298,47 +298,6 @@ jobs:
           [ "$code" = "$want" ] || fail "$probe returned HTTP $code, want $want."
           echo "Pre-flight ok: $SERVICE is Ready on $latest, 100% traffic, $probe -> HTTP $code"
 
-      - name: Converge the Cloud Run domain mapping
-        if: inputs.mode == 'dns-only'
-        env:
-          HOST:    ${{ inputs.hostname }}
-          SERVICE: ${{ inputs.service }}
-          REGION:  ${{ inputs.gcp_region }}
-          PROJECT: ${{ inputs.gcp_project }}
-          DRY:     ${{ inputs.dry_run }}
-          RETARGET_FROM: ${{ inputs.retarget_from }}
-        run: |
-          if current=$(gcloud beta run domain-mappings describe --domain="$HOST" --region="$REGION" \
-                        --project="$PROJECT" --format='value(spec.routeName)' 2>/dev/null) \
-             && [ -n "$current" ]; then
-            if [ "$current" = "$SERVICE" ]; then
-              echo "Domain mapping already correct: $HOST -> $SERVICE"
-            elif [ -n "$RETARGET_FROM" ] && [ "$current" = "$RETARGET_FROM" ]; then
-              if [ "$DRY" = "true" ]; then
-                echo "would re-target $HOST: routeName is '$current'; would delete the mapping, then create $HOST -> $SERVICE ($REGION)"
-              else
-                # Recorded BEFORE the delete: from here the hostname serves nothing until the
-                # new cert is issued, and the summary needs the start of that window.
-                echo "T_DELETE=$(date +%s)" >> "$GITHUB_ENV"
-                gcloud beta run domain-mappings delete --domain="$HOST" --region="$REGION" \
-                  --project="$PROJECT" --quiet >/dev/null
-                gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
-                  --region="$REGION" --project="$PROJECT" --quiet >/dev/null
-                echo "Re-targeted domain mapping: $HOST $current -> $SERVICE"
-              fi
-            else
-              # Re-targeting silently would move a live hostname to a different service.
-              echo "::error::$HOST is already mapped to '$current', not '$SERVICE'. Refusing to re-target; set retarget_from: $current to move it deliberately, or delete the mapping." >&2
-              exit 1
-            fi
-          elif [ "$DRY" = "true" ]; then
-            echo "would create domain mapping: $HOST -> $SERVICE ($REGION)"
-          else
-            gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
-              --region="$REGION" --project="$PROJECT" --quiet >/dev/null
-            echo "Created domain mapping: $HOST -> $SERVICE"
-          fi
-
       - name: Resolve the Cloudflare zone id
         id: zone
         env:
@@ -381,6 +340,50 @@ jobs:
               echo "::warning::$name has CAA records that do not allow pki.goog (Google's CA); the new managed cert may not issue. Add: 0 issue \"pki.goog\""
             fi
           done
+
+      - name: Converge the Cloud Run domain mapping
+        if: inputs.mode == 'dns-only'
+        env:
+          HOST:    ${{ inputs.hostname }}
+          SERVICE: ${{ inputs.service }}
+          REGION:  ${{ inputs.gcp_region }}
+          PROJECT: ${{ inputs.gcp_project }}
+          DRY:     ${{ inputs.dry_run }}
+          RETARGET_FROM: ${{ inputs.retarget_from }}
+        run: |
+          if current=$(gcloud beta run domain-mappings describe --domain="$HOST" --region="$REGION" \
+                        --project="$PROJECT" --format='value(spec.routeName)' 2>/dev/null) \
+             && [ -n "$current" ]; then
+            if [ "$current" = "$SERVICE" ]; then
+              echo "Domain mapping already correct: $HOST -> $SERVICE"
+            elif [ -n "$RETARGET_FROM" ] && [ "$current" = "$RETARGET_FROM" ]; then
+              if [ "$DRY" = "true" ]; then
+                echo "would re-target $HOST: routeName is '$current'; would delete the mapping, then create $HOST -> $SERVICE ($REGION)"
+              else
+                # The clock is read just BEFORE the delete but only recorded once it succeeded:
+                # a failed delete leaves the old mapping serving, and a T_DELETE would make the
+                # summary print a map-back command that deletes it. From a successful delete the
+                # hostname serves nothing until the new cert is issued.
+                t_delete=$(date +%s)
+                gcloud beta run domain-mappings delete --domain="$HOST" --region="$REGION" \
+                  --project="$PROJECT" --quiet >/dev/null
+                echo "T_DELETE=$t_delete" >> "$GITHUB_ENV"
+                gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
+                  --region="$REGION" --project="$PROJECT" --quiet >/dev/null
+                echo "Re-targeted domain mapping: $HOST $current -> $SERVICE"
+              fi
+            else
+              # Re-targeting silently would move a live hostname to a different service.
+              echo "::error::$HOST is already mapped to '$current', not '$SERVICE'. Refusing to re-target; set retarget_from: $current to move it deliberately, or delete the mapping." >&2
+              exit 1
+            fi
+          elif [ "$DRY" = "true" ]; then
+            echo "would create domain mapping: $HOST -> $SERVICE ($REGION)"
+          else
+            gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
+              --region="$REGION" --project="$PROJECT" --quiet >/dev/null
+            echo "Created domain mapping: $HOST -> $SERVICE"
+          fi
 
       - name: Upsert the DNS record
         env:
@@ -594,8 +597,9 @@ jobs:
                 echo "**The run failed after the old mapping was deleted. There is no auto-rollback.** To map back to \`${RETARGET_FROM}\` (a second cert issue):"
                 echo ""
                 echo '```bash'
-                echo "gcloud beta run domain-mappings delete --domain=${HOST} --region=${REGION} --project=${PROJECT} --quiet \\"
-                echo "  && gcloud beta run domain-mappings create --service=${RETARGET_FROM} --domain=${HOST} --region=${REGION} --project=${PROJECT}"
+                echo "# the delete finds nothing when the create is what failed; that is fine"
+                echo "gcloud beta run domain-mappings delete --domain=${HOST} --region=${REGION} --project=${PROJECT} --quiet || true"
+                echo "gcloud beta run domain-mappings create --service=${RETARGET_FROM} --domain=${HOST} --region=${REGION} --project=${PROJECT}"
                 echo '```'
               fi
               echo ""
