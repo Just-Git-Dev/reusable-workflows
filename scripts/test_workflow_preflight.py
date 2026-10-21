@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# VENDORED from claude-config skills/workflow-preflight @ 3bd9034d0d5d — edit canonical, not this copy
+# VENDORED from claude-config skills/workflow-preflight @ ee0c8a770669 — edit canonical, not this copy
 """Tests for workflow_preflight.py (W1: lint + parity) — stdlib + PyYAML, no runner to install.
 
 Fixtures are synthetic repos built in temp dirs (no checked-in tree, so the vendored copy of
@@ -1208,10 +1208,15 @@ class RefsTests(RefsBase):
         self.assertEqual(rc, 0, out)
         self.assertIn("WARN UNPROVEN", out)
         self.assertNotIn("MISSING", out)
-        self.cfg()  # no `adopted`: the 14-day grace does not apply, same rule as PIN_DRIFT
+        # owner ruling 2026-10-21: UNPROVEN warns until proven and never escalates on a deadline
+        self.cfg()  # no `adopted`
         rc, out = self.refs(n)
-        self.assertEqual(rc, 1, out)
-        self.assertIn("UNPROVEN", out)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WARN UNPROVEN", out)
+        self.cfg(adopted="2020-01-01")  # long past the 14-day window
+        rc, out = self.refs(n)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WARN UNPROVEN", out)
 
     def test_T3d_cross_org_inherit(self):
         wf = ("on: workflow_dispatch\njobs:\n  call:\n    uses: %s/rw/.github/workflows/rf.yml@v1.0.0\n"
