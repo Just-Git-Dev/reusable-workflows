@@ -382,6 +382,136 @@ def rollback_cases():
               r["rc"] == 0 and "versions disable 8" in r["calls"], r["calls"] + r["out"])
 
 
+# --- critic round 2: template pin, secretKeyRef pins, named traffic revisions, all regions ---------
+
+def env_revision(name, version, secret="app-secrets"):
+    """A revision whose only pin is an env-var secretKeyRef (key == the version)."""
+    return {"metadata": {"name": name}, "spec": {"containers": [{"env": [{"name": "ENVF",
+            "valueFrom": {"secretKeyRef": {"name": secret, "key": version}}}]}]}}
+
+
+def round2_stub(svc, revs=None, named=None, others=None, jobs=None, versions=("8", "7", "6", "5", "4")):
+    """gcloud stub. `svc` = service describe JSON for every service; `revs` = {service: revision
+    list}; `named` = {revision name: describe JSON}; `others` = [(service, region)] the list prints
+    tab-separated beyond services_csv; `jobs` = [(job, region, describe JSON)]."""
+    revs, named, others = revs or {}, named or {}, others or []
+    g = ('if [ "$1" = "secrets" ] && [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
+         + "".join(f"  echo projects/1/secrets/app-secrets/versions/{v}\n" for v in versions)
+         + '  exit 0\nfi\n'
+         'if [ "$2" = "versions" ] && [ "$3" = "access" ]; then echo content; exit 0; fi\n'
+         'if [ "$3" = "services" ] && [ "$4" = "list" ]; then\n'
+         + "".join(f'  printf "%s\\t%s\\n" {n} {rg}\n' for n, rg in others) + '  exit 0\nfi\n'
+         'if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+         f"  cat <<'J'\n{json.dumps(svc)}\nJ\n  exit 0\nfi\n")
+    for rn, doc in named.items():
+        g += (f'if [ "$3" = "revisions" ] && [ "$4" = "describe" ] && [ "$5" = "{rn}" ]; then '
+              f"cat <<'J'\n{json.dumps(doc)}\nJ\n exit 0; fi\n")
+    for s, rv in revs.items():
+        g += (f'if [ "$3" = "revisions" ] && [ "$4" = "list" ] && [ "$5" = "--service={s}" ]; then '
+              f"cat <<'J'\n{json.dumps(rv)}\nJ\n exit 0; fi\n")
+    if revs:
+        first = next(iter(revs.values()))
+        g += (f'if [ "$3" = "revisions" ] && [ "$4" = "list" ]; then cat <<\'J\'\n'
+              f'{json.dumps(first)}\nJ\n exit 0; fi\n')
+    if jobs:
+        g += 'if [ "$3" = "jobs" ] && [ "$4" = "list" ]; then\n' + "".join(
+            f'  printf "%s\\t%s\\n" {n} {rg}\n' for n, rg, _ in jobs) + '  exit 0\nfi\n'
+        for n, rg, doc in jobs:
+            g += (f'if [ "$3" = "jobs" ] && [ "$4" = "describe" ] && [ "$5" = "{n}" ]; then '
+                  f"cat <<'J'\n{json.dumps(doc)}\nJ\n exit 0; fi\n")
+    return g
+
+
+def round2_keep_cases():
+    print("\nrotators + sync . critic round 2 keep-set (secretKeyRef pins, named traffic, regions)")
+    svc = {"status": {"latestReadyRevisionName": "r3", "traffic": [{"revisionName": "r3", "percent": 100}]}}
+    newest = [revision("r3", "v", "8"), revision("r2", "v", "7"), revision("r1", "v", "6")]
+    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")):
+        body = extract_step(wf, job, KEEP_STEP)
+        if body is None:
+            check(f"{wf.name}: keep step exists", False)
+            continue
+        tag = wf.name
+
+        def go(g, keep="1"):
+            r = run_body(body, {"NEW_VERSION": "8", "KEEP_ENABLED_COUNT": keep}, gcloud=g)
+            return r, sorted(re.findall(r"versions disable (\S+)", r["calls"]))
+
+        r, d = go(round2_stub(svc, {"svc": newest, "other": [env_revision("o1", "5")]}, others=[("other", "r")]))
+        check(f"{tag}: a pin held only via env[].valueFrom.secretKeyRef is kept (5 stays, only 4 disabled)",
+              r["rc"] == 0 and d == ["4"], f"disabled={d} {r['out']}")
+        # A traffic-holding revision beyond the newest-50 list is read BY NAME.
+        old = {"status": {"latestReadyRevisionName": "r3", "traffic": [{"revisionName": "ancient", "percent": 100}]}}
+        r, d = go(round2_stub(old, {"svc": newest}, named={"ancient": revision("ancient", "v", "5")}))
+        check(f"{tag}: a traffic-holding revision missing from the newest-50 list is described by name (5 kept)",
+              r["rc"] == 0 and d == ["4"] and "revisions describe ancient" in r["calls"], f"disabled={d} {r['calls']}")
+        # A 0% entry with a tag is served at its tag URL: live.
+        tagged = {"status": {"latestReadyRevisionName": "r3", "traffic": [
+            {"revisionName": "r3", "percent": 100}, {"revisionName": "canary", "percent": 0, "tag": "canary"}]}}
+        r, d = go(round2_stub(tagged, {"svc": newest}, named={"canary": revision("canary", "v", "4")}))
+        check(f"{tag}: a 0% traffic entry with a tag keeps its pin (4 kept, only 5 disabled)",
+              r["rc"] == 0 and d == ["5"], f"disabled={d} {r['out']}")
+        # Consumers in every region the project uses, described in THEIR region.
+        job_doc = {"spec": {"template": {"spec": {"template": {"spec": {
+            "volumes": [{"name": "v", "secret": {"secretName": "app-secrets",
+                                                 "items": [{"key": "4", "path": "x"}]}}],
+            "containers": [{"volumeMounts": [{"name": "v"}]}]}}}}}}
+        r, d = go(round2_stub(svc, {"svc": newest, "eu-svc": [revision("e1", "v", "5")]},
+                              others=[("eu-svc", "europe-west1")], jobs=[("eu-job", "europe-west1", job_doc)]))
+        check(f"{tag}: a service and a job in another region keep their pins (5 and 4 stay)",
+              r["rc"] == 0 and d == [], f"disabled={d} {r['out']}")
+        check(f"{tag}: the other-region service is described with --region=europe-west1",
+              re.search(r"services describe eu-svc .*--region=europe-west1", r["calls"]) is not None, r["calls"])
+        check(f"{tag}: services/jobs are listed across all regions (no --region on the list call)",
+              not re.search(r"(services|jobs) list .*--region", r["calls"]), r["calls"])
+
+
+def round2_undo_cases():
+    print("\nrotators . critic round 2 M3 undo (template pin, secretKeyRef, named traffic revisions)")
+    for wf in (KEYPAIR, WORKER):
+        body = extract_step(wf, "rotate", ROLLBACK_STEP)
+        if body is None:
+            check(f"{wf.name}: rollback step exists", False)
+            continue
+        tag = wf.name
+
+        def go(svc, revs, named=None):
+            return run_body(body, {"NEW_VERSION": "8", "CUR_VERSION": "7"},
+                            gcloud=round2_stub(svc, {"svc": revs}, named=named))
+
+        def refused(r):
+            return "versions disable" not in r["calls"] and r["rc"] != 0
+
+        # probe P2: traffic on r1 (pins 7), but the latest ready revision r2 (0% traffic) pins 8.
+        s2 = {"status": {"latestReadyRevisionName": "r2", "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s2, [revision("r2", "v", "8"), revision("r1", "v", "7")])
+        check(f"{tag}: the latest ready revision at 0% traffic still counts as live (8 not disabled)",
+              refused(r), r["calls"] + r["out"])
+        s3 = {"status": {"latestReadyRevisionName": "r1", "latestCreatedRevisionName": "r2",
+                         "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s3, [revision("r2", "v", "8"), revision("r1", "v", "7")])
+        check(f"{tag}: the latest CREATED revision counts as live (8 not disabled)", refused(r),
+              r["calls"] + r["out"])
+        s4 = {"spec": {"template": revision("tpl", "v", "8")},
+              "status": {"latestReadyRevisionName": "r1", "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s4, [revision("r1", "v", "7")])
+        check(f"{tag}: the service TEMPLATE pin counts as live (8 not disabled)", refused(r),
+              r["calls"] + r["out"])
+        s5 = {"status": {"latestReadyRevisionName": "r1", "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s5, [env_revision("r1", "8")])
+        check(f"{tag}: a live pin via env[].valueFrom.secretKeyRef is refused too", refused(r),
+              r["calls"] + r["out"])
+        s6 = {"status": {"latestReadyRevisionName": "r2", "traffic": [{"revisionName": "ancient", "percent": 100}]}}
+        r = go(s6, [revision("r2", "v", "7")], named={"ancient": revision("ancient", "v", "8")})
+        check(f"{tag}: a traffic-holding revision outside the newest-50 list is described by name",
+              refused(r) and "revisions describe ancient" in r["calls"], r["calls"] + r["out"])
+        r = go(s5, [revision("r1", "v", "7")])
+        check(f"{tag}: nothing live pins 8 -> still disabled", r["rc"] == 0 and "versions disable 8" in r["calls"],
+              r["calls"] + r["out"])
+        check(f"{tag}: the retained revision list is sorted newest-first",
+              "--sort-by" in r["calls"], r["calls"])
+
+
 # --- three writers identical --------------------------------------------------------------------
 
 def identical_cases():
@@ -421,7 +551,7 @@ def env_source_cases():
 
 def main():
     for fn in (input_cases, source_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases, rollback_cases,
-               identical_cases, env_source_cases):
+               round2_keep_cases, round2_undo_cases, identical_cases, env_source_cases):
         fn()
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0

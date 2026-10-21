@@ -237,6 +237,13 @@ secret version it was deployed with. The pin step reads the service's currently 
 - a number: **keep it**. A deploy never moves the pin; only the bundle writers
   ([sync-bundle-key](sync-bundle-key.md) and the two rotators) do.
 
+The same pin step runs when `env_secret` is empty and then only refuses: the deploy fails when the
+live template mounts a `*-env` secret at `:latest` (as a volume item or an env `secretKeyRef`), or
+when `deploy_flags` / `extra_deploy_flags` mount one at `:latest` in a `--set/--update/--add-secrets`
+list, unless `pin_env: false`. Only the secret ref of a secrets flag counts; `-env:latest` inside
+some other flag's value does not. A service that does not exist yet passes; any other `describe`
+error refuses.
+
 **Ruling (owner, 2026-10-21): `pin_env: false` ships.** `pin_env` defaults to `true`; setting it
 to `false` is an opt-out for a service with no `*-env` bundle yet, and every run that uses it
 prints a warning in its summary. It exists so a caller can adopt v4 service by service.
@@ -262,7 +269,9 @@ The [forward-only](#live-commit-stamping) guard reads "what is live" from the en
 successful GitHub Deployment. When the environment has **no** successful Deployment (for example
 after renaming `production` to `prod`, a new environment name), v3 allowed any deploy. v4 instead
 reads the service's `jgd_commit` label as the baseline and compares against it. If neither exists
-(the first deploy ever) the deploy is allowed, with a notice.
+(the first deploy ever) the deploy is allowed, with a notice. A failed `describe` of the service
+(403, a transient error) is not "no label": the guard fails closed and refuses; only a successful
+describe with no label, or a service that does not exist yet, means "no baseline".
 
 ### Why the deploy job has no `environment:`
 

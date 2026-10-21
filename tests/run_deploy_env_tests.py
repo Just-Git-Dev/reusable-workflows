@@ -169,6 +169,55 @@ def svc_json(version):
         "secretName": "svc-env", "items": [{"key": version, "path": "app.env"}]}}]}}}})
 
 
+def svc_env_json(version):
+    """Live template whose bundle pin is an env-var secretKeyRef (key == version), no volume."""
+    return json.dumps({"spec": {"template": {"spec": {"containers": [{"env": [{"name": "E",
+            "valueFrom": {"secretKeyRef": {"name": "svc-env", "key": version}}}]}]}}}})
+
+
+def _desc(js, rc=0, err=""):
+    return ('if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+            + (f"  echo '{err}' >&2\n  exit {rc}\n" if rc else f"  cat <<'J'\n{js}\nJ\n  exit 0\n") + 'fi')
+
+
+def guard_cases(body, run, check_fn, flag_envs, label):
+    """Critic round 2 (4): with `env_secret` EMPTY the step still refuses a `*-env` bundle at
+    :latest -- mounted by the live template or named by the caller's flags/secrets -- unless
+    pin_env: false. Matches a MOUNT (the secret ref of a secrets flag), not a loose substring."""
+    print(f"\n{label} . refuse a *-env bundle at :latest even without env_secret")
+    env = {"ENV_SECRET": "", "ENV_MOUNT_PATH": "", "PIN_ENV": "true"}
+    r = run(body, env, gcloud=_desc(svc_json("latest")))
+    check_fn(f"{label}: live template mounts svc-env at :latest, env_secret empty -> refused",
+             r["rc"] != 0 and "latest" in r["out"] and "::error::" in r["out"], r["out"])
+    r = run(body, env, gcloud=_desc(svc_env_json("latest")))
+    check_fn(f"{label}: the live :latest mount via an env secretKeyRef is refused too",
+             r["rc"] != 0 and "::error::" in r["out"], r["out"])
+    r = run(body, {**env, "PIN_ENV": "false"}, gcloud=_desc(svc_json("latest")))
+    check_fn(f"{label}: pin_env: false lets the live :latest mount through, with a warning",
+             r["rc"] == 0 and "::warning::" in r["out"], r["out"])
+    r = run(body, env, gcloud=_desc(svc_json("7")))
+    check_fn(f"{label}: a numeric live pin is not refused", r["rc"] == 0, r["out"])
+    r = run(body, env, gcloud=_desc(svc_json("latest").replace("svc-env", "db-pass")))
+    check_fn(f"{label}: a non-*-env secret at :latest is not this guard's business", r["rc"] == 0, r["out"])
+    r = run(body, env, gcloud=_desc("", 1, "ERROR: (gcloud.run.services.describe) NOT_FOUND: Cannot find service [svc]"))
+    check_fn(f"{label}: no service yet (NOT_FOUND) is not a refusal", r["rc"] == 0, r["out"])
+    r = run(body, env, gcloud=_desc("", 1, "ERROR: (gcloud.run.services.describe) PERMISSION_DENIED 403"))
+    check_fn(f"{label}: a describe error that is not NOT_FOUND refuses (fail closed)",
+             r["rc"] != 0 and "::error::" in r["out"], r["out"])
+    for k in flag_envs:
+        r = run(body, {**env, k: "--set-secrets=/x/app.env=other-env:latest"}, gcloud=_desc(svc_json("7")))
+        check_fn(f"{label}: {k} naming other-env:latest is refused", r["rc"] != 0 and "latest" in r["out"], r["out"])
+        r = run(body, {**env, k: "--update-secrets /x/app.env=other-env:latest,/y=db:3"}, gcloud=_desc(svc_json("7")))
+        check_fn(f"{label}: {k} with a space-separated --update-secrets list is refused", r["rc"] != 0, r["out"])
+        r = run(body, {**env, k: "--set-secrets=/x/app.env=other-env:7"}, gcloud=_desc(svc_json("7")))
+        check_fn(f"{label}: {k} naming other-env:7 is not refused", r["rc"] == 0, r["out"])
+        if k == "SECRETS":
+            continue          # the `secrets` list is mounts only; no other flag's value lives in it
+        r = run(body, {**env, k: "--set-env-vars=NOTE=a-env:latest"}, gcloud=_desc(svc_json("7")))
+        check_fn(f"{label}: {k} with an env-var VALUE ending -env:latest is not a mount (not refused)",
+                 r["rc"] == 0, r["out"])
+
+
 def pin_cases():
     print("\ndeploy-cloud-run v4 · pin step")
     body = step_or_red("pin", PIN)
@@ -205,6 +254,13 @@ def pin_cases():
           r["rc"] == 0 and "::warning::" in r["out"], r["out"])
     r = run_body(body, {**env, "DEPLOY_FLAGS": "--set-secrets=/secrets/app.env=svc-env:7"}, gcloud=gcloud("5"))
     check("M5: a numeric mount in deploy_flags is not refused", r["rc"] == 0, r["out"])
+    # P1: the live pin may be an env-var secretKeyRef instead of a volume item.
+    r = run_body(body, env, gcloud=gcloud("latest").replace(svc_json("latest"), svc_env_json("5")))
+    check("P1: a live numeric pin held via env[].valueFrom.secretKeyRef (5) is kept, not moved to 9",
+          r["rc"] == 0 and r["outputs"].get("env_version") == "5", f"{r['out']} {r['outputs']}")
+    # 7c: only a bundle MOUNT is refused, not any '-env:latest' text.
+    r = run_body(body, {**env, "DEPLOY_FLAGS": "--set-env-vars=NOTE=a-env:latest"}, gcloud=gcloud("5"))
+    check("7c: an env-var value ending -env:latest is not a mount (not refused)", r["rc"] == 0, r["out"])
 
 
 def label_cases():
@@ -289,11 +345,27 @@ def forward_cases():
     r = run_body(body, env, gh=gh, gcloud=gcloud(""))
     check("no Deployment and no label (first deploy ever): allowed with a notice",
           r["rc"] == 0 and "::notice::" in r["out"], r["out"])
+    # Critic round 2 (5): the describe fallback fails CLOSED. Only a definite "no label" (a
+    # successful describe, or the service not existing yet) is "no baseline".
+    for why, err in (("403", "ERROR: (gcloud.run.services.describe) PERMISSION_DENIED: 403"),
+                     ("transient", "ERROR: (gcloud.run.services.describe) UNAVAILABLE: try again")):
+        g = f'if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n  echo \'{err}\' >&2\n  exit 1\nfi'
+        r = run_body(body, env, gh=gh, gcloud=g)
+        check(f"a describe error ({why}) in the label fallback refuses (fail closed), never 'no baseline'",
+              r["rc"] != 0 and "::error::" in r["out"], r["out"])
+    g = ('if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+         "  echo 'ERROR: (gcloud.run.services.describe) NOT_FOUND: Cannot find service [svc]' >&2\n  exit 1\nfi")
+    r = run_body(body, env, gh=gh, gcloud=g)
+    check("a service that does not exist yet (NOT_FOUND) is a definite 'no baseline': allowed",
+          r["rc"] == 0 and "::notice::" in r["out"], r["out"])
 
 
 def main():
     for fn in (input_cases, render_cases, pin_cases, label_cases, manifest_cases, forward_cases):
         fn()
+    pin = extract_step(PIN)
+    if pin is not None:
+        guard_cases(pin, run_body, check, ("DEPLOY_FLAGS", "EXTRA"), "deploy-cloud-run")
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0
 

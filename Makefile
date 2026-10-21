@@ -175,6 +175,7 @@ step-bodies: venv
 	$(PY) tests/run_deploy_env_lint_tests.py
 	$(PY) tests/run_rollback_pin_tests.py
 	$(PY) tests/run_cloud_run_update_env_tests.py
+	$(PY) tests/run_step_env_wiring_tests.py
 
 release-gate: venv
 	$(PY) tests/run_check_release_gate_tests.py

@@ -67,12 +67,16 @@ that. In v4 the versions kept ENABLED are the union of:
 - the version pinned by each of the **two newest revisions before the one just rolled**, per
   service (read only from volumes that a `volumeMount` actually uses; an orphan declared volume is
   ignored);
-- the version pinned by **every revision that still takes traffic** (`status.traffic` percent > 0),
-  however old: after `rollback-service` `to_revision`, traffic stays pinned to the old revision
+- the version pinned by **every revision that still takes traffic** (`status.traffic` percent > 0,
+  or a 0% entry that carries a `tag`, which is served at its tag URL), however old, read **by
+  name** (not out of a newest-50 revision list): after `rollback-service` `to_revision`, traffic stays pinned to the old revision
   until `gcloud run services update-traffic <svc> --to-latest`, so that revision's pin is live;
 - the pin of every **Cloud Run Job** that mounts the bundle;
-- all of the above are scanned across **every Service and Job in the project and region** that
-  mounts the bundle secret, not only the ones in `services_csv` (which is scanned as well);
+- all of the above are scanned across **every Service and Job in the project, in every region**
+  that mounts the bundle secret, not only the ones in `services_csv` (which is scanned as well, in
+  `gcp_region`). A pin is a secret volume item a `volumeMount` uses **or** an env var
+  `valueFrom.secretKeyRef{name,key}`, the same two places `rollback-service` and
+  `cleanup-secret-versions` read;
 - the `keep_enabled_count` newest ENABLED versions, which is now a **floor**.
 
 Everything else is disabled. Two revisions are kept so the previous revision stays a valid
@@ -220,7 +224,9 @@ The v4 keep-set also lists the project's services and jobs, each service's traff
 (`gcloud run services list|describe`, `run revisions list`, `run jobs list|describe`), which
 `roles/run.developer` already covers. A listing failure stops the step before anything is disabled.
 The rotators' "roll back the new SM version on failure" step refuses to disable N+1 while any
-revision with traffic still pins it (a partial roll): it leaves N+1 ENABLED and fails the job.
+live revision still pins it (a partial roll): it leaves N+1 ENABLED and fails the job. "Live" here
+means a revision with traffic or a tag, the latest ready and latest created revisions, and the
+service template itself, so a new revision that is ready but not yet taking traffic counts.
 
 ## Example caller
 

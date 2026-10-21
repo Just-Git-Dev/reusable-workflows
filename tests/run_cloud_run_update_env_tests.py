@@ -195,6 +195,18 @@ def manifest_cases():
 def main():
     for fn in (input_cases, validate_cases, render_cases, pin_cases, apply_cases, manifest_cases):
         fn()
+    pin = step_body("Pin env bundle")
+    if pin is not None:
+        D.guard_cases(pin, D.run_body, check, ("EXTRA", "SECRETS"), "cloud-run-update")
+        env = {"ENV_SECRET": "svc-env", "ENV_MOUNT_PATH": "/secrets/app.env", "PIN_ENV": "true"}
+        gc = ('if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+              f"  cat <<'J'\n{D.svc_env_json('5')}\nJ\n  exit 0\nfi\n"
+              'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n  echo projects/1/secrets/svc-env/versions/9; exit 0\nfi')
+        r = D.run_body(pin, env, gcloud=gc)
+        check("P1: a live pin held via env[].valueFrom.secretKeyRef (5) is kept, not moved to 9",
+              r["rc"] == 0 and r["outputs"].get("env_version") == "5", f"{r['out']} {r['outputs']}")
+        r = D.run_body(pin, {**env, "EXTRA": "--update-secrets=/a=svc-env:latest"}, gcloud=gc)
+        check("extra_args (EXTRA) naming the bundle at :latest is refused", r["rc"] != 0, r["out"])
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0
 

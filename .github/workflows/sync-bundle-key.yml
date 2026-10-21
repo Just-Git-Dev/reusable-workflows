@@ -615,53 +615,79 @@ jobs:
           [ -z "$NEW_VERSION" ] || echo "$NEW_VERSION" >> /tmp/keep.txt
           head -n "$KEEP_ENABLED_COUNT" /tmp/enabled.txt >> /tmp/keep.txt
           # Keep-set = every pin a LIVE or recent revision holds, across EVERY consumer of the
-          # bundle secret in the project (not only services_csv):
-          #   (a) each revision with traffic > 0 on a Service (after a `rollback to_revision`
-          #       traffic stays pinned to an old revision until `--to-latest`),
+          # bundle secret in the project, in EVERY region (not only services_csv / GCP_REGION):
+          #   (a) each revision with traffic > 0, or a tag (served at its tag URL), on a Service
+          #       (after a `rollback to_revision` traffic stays pinned to an old revision until
+          #       `--to-latest`). Read BY NAME as well as out of the newest-50 list: a pin can
+          #       sit on a revision older than the 50 newest for as long as traffic is held there,
           #   (b) the two newest revisions before the one just rolled, per Service,
           #   (c) every Cloud Run Job's pin (a Job has no traffic; its pin is live).
+          # A pin is a secret volume item (`volumes[].secret.items[].key`) a volumeMount uses OR an
+          # env var `valueFrom.secretKeyRef{name,key}`.
           # A listing/describe failure fails the step BEFORE anything is disabled.
           # shellcheck disable=SC2016
           # (jq program: the $vars are jq's, not the shell's)
           PINS_JQ='def pins($s): . as $r
                     | [$r.spec.containers[]?.volumeMounts[]?.name] as $mounted
-                    | [$r.spec.volumes[]?
-                       | select(.secret.secretName == $s and (.name as $v | $mounted | index($v) != null))
-                       | .secret.items[]? | (.key // .version) | tostring | sub("^.*/"; "")];'
-          gcloud --project="$GCP_PROJECT" run services list --region="$GCP_REGION" \
-            --format='value(metadata.name)' </dev/null > /tmp/consumers.raw
+                    | ( [$r.spec.volumes[]?
+                         | select(.secret.secretName == $s and (.name as $v | $mounted | index($v) != null))
+                         | .secret.items[]? | (.key // .version) | tostring | sub("^.*/"; "")]
+                      + [$r.spec.containers[]?.env[]?.valueFrom.secretKeyRef?
+                         | select(.name == $s) | .key | tostring | sub("^.*/"; "")] );'
+          # No --region: list every region the project uses; the label carries each one's region.
+          LOC='metadata.labels."cloud.googleapis.com/location"'
+          gcloud --project="$GCP_PROJECT" run services list \
+            --format="value(metadata.name,${LOC})" </dev/null > /tmp/consumers.raw
           IFS=',' read -ra LISTED <<< "$SERVICES_CSV"
           for svc in "${LISTED[@]}"; do
             svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
             svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
-            [ -z "$svc" ] || echo "$svc" >> /tmp/consumers.raw
+            [ -z "$svc" ] || printf '%s\t%s\n' "$svc" "$GCP_REGION" >> /tmp/consumers.raw
           done
-          sort -u /tmp/consumers.raw | grep -v '^$' > /tmp/consumers.txt || true
-          while read -r svc; do
+          # name<TAB>region, an empty region meaning GCP_REGION.
+          awk -F'\t' -v r="$GCP_REGION" 'NF && $1 != "" { print $1 "\t" ($2 == "" ? r : $2) }' \
+            /tmp/consumers.raw | sort -u > /tmp/consumers.txt
+          while IFS=$'\t' read -r svc reg; do
             [ -n "$svc" ] || continue
             gcloud --project="$GCP_PROJECT" run services describe "$svc" \
-              --region="$GCP_REGION" --format=json </dev/null > /tmp/service.json
+              --region="$reg" --format=json </dev/null > /tmp/service.json
             [ -s /tmp/service.json ] || echo '{}' > /tmp/service.json
             gcloud --project="$GCP_PROJECT" run revisions list --service="$svc" \
-              --region="$GCP_REGION" \
+              --region="$reg" \
               --sort-by=~metadata.creationTimestamp --limit=50 --format=json \
               </dev/null > /tmp/revisions.json
             [ -s /tmp/revisions.json ] || echo '[]' > /tmp/revisions.json
             jq -r --arg s "$BUNDLE_SECRET" --arg n "$NEW_VERSION" --slurpfile svc /tmp/service.json "
               $PINS_JQ
               (\$svc[0].status.latestReadyRevisionName // \"\") as \$latest
-              | ([\$svc[0].status.traffic[]? | select((.percent // 0) > 0) | (.revisionName // \$latest)]) as \$live
+              | ([\$svc[0].status.traffic[]? | select((.percent // 0) > 0 or ((.tag // \"\") != \"\"))
+                  | (.revisionName // \$latest)]) as \$live
               | ( [.[] | select(.metadata.name as \$nm | \$live | index(\$nm)) | pins(\$s)[]]
                 + [.[0:3] | map({pins: pins(\$s)}) | map(select((.pins | index(\$n)) == null))
                    | .[0:2][].pins[]] )
               | .[] | select(test(\"^[0-9]+\$\"))" /tmp/revisions.json >> /tmp/keep.txt
+            # (a) by name: every traffic-holding (or tagged) revision, listed or not.
+            jq -r '(.status.latestReadyRevisionName // "") as $latest | .status.traffic[]?
+                   | select((.percent // 0) > 0 or ((.tag // "") != "")) | (.revisionName // $latest)
+                   | select(. != "")' /tmp/service.json | sort -u > /tmp/live.txt
+            while read -r rev; do
+              [ -n "$rev" ] || continue
+              gcloud --project="$GCP_PROJECT" run revisions describe "$rev" \
+                --region="$reg" --format=json </dev/null > /tmp/rev.json
+              [ -s /tmp/rev.json ] || echo '{}' > /tmp/rev.json
+              jq -r --arg s "$BUNDLE_SECRET" "
+                $PINS_JQ
+                pins(\$s)[] | select(test(\"^[0-9]+\$\"))" /tmp/rev.json >> /tmp/keep.txt
+            done < /tmp/live.txt
           done < /tmp/consumers.txt
-          gcloud --project="$GCP_PROJECT" run jobs list --region="$GCP_REGION" \
-            --format='value(metadata.name)' </dev/null > /tmp/jobs.txt
-          while read -r job; do
+          gcloud --project="$GCP_PROJECT" run jobs list \
+            --format="value(metadata.name,${LOC})" </dev/null > /tmp/jobs.raw
+          awk -F'\t' -v r="$GCP_REGION" 'NF && $1 != "" { print $1 "\t" ($2 == "" ? r : $2) }' \
+            /tmp/jobs.raw | sort -u > /tmp/jobs.txt
+          while IFS=$'\t' read -r job reg; do
             [ -n "$job" ] || continue
             gcloud --project="$GCP_PROJECT" run jobs describe "$job" \
-              --region="$GCP_REGION" --format=json </dev/null > /tmp/job.json
+              --region="$reg" --format=json </dev/null > /tmp/job.json
             [ -s /tmp/job.json ] || echo '{}' > /tmp/job.json
             jq -r --arg s "$BUNDLE_SECRET" "
               $PINS_JQ
@@ -684,7 +710,7 @@ jobs:
 
       - name: Shred local bundle copy
         if: always()
-        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/enabled.raw /tmp/enabled.txt /tmp/keep.txt /tmp/to-disable.txt /tmp/revisions.json /tmp/service.json /tmp/job.json /tmp/consumers.raw /tmp/consumers.txt /tmp/jobs.txt /tmp/keys.*
+        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/enabled.raw /tmp/enabled.txt /tmp/keep.txt /tmp/to-disable.txt /tmp/revisions.json /tmp/service.json /tmp/job.json /tmp/consumers.raw /tmp/consumers.txt /tmp/jobs.txt /tmp/jobs.raw /tmp/rev.json /tmp/live.txt /tmp/keys.*
 
       - name: Summary
         if: always()

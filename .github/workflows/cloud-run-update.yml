@@ -341,36 +341,71 @@ jobs:
 
       - name: Pin env bundle
         id: pin
-        if: ${{ inputs.env_secret != '' }}
+        # Runs without env_secret too: the :latest refusal below must hold for a v3 service.
         env:
           ENV_SECRET: ${{ inputs.env_secret }}
           ENV_MOUNT_PATH: ${{ inputs.env_mount_path }}
           PIN_ENV: ${{ inputs.pin_env }}
           SECRETS: ${{ inputs.secrets }}
+          EXTRA: ${{ inputs.extra_args }}
           SERVICE: ${{ inputs.service }}
           PROJECT: ${{ inputs.gcp_project }}
           REGION: ${{ inputs.gcp_region }}
         run: |
           if [ "$PIN_ENV" != "true" ]; then
-            echo "::warning::pin_env is false: the bundle ${ENV_SECRET} is NOT pinned to a version by this update." >&2
+            echo "::warning::pin_env is false: a *-env bundle (${ENV_SECRET:-none given}) is NOT pinned to a version by this update." >&2
+            exit 0
+          fi
+          # A caller-supplied `<bundle>:latest` mount would undo the pin (and the v4 promise that
+          # nothing mounts a bundle at :latest): refuse, unless pin_env: false (above). Matched by
+          # MOUNT: the secret ref (`name:version`, after the last '=') of the `secrets` list
+          # (PATH=name:version entries) or of a --set/--update/--add-secrets flag in extra_args,
+          # never a loose "-env:latest" in some other value.
+          REFS="$({ { printf '%s\n' "${EXTRA:-}" \
+                        | grep -oE -- '--(set|update|add)-secrets[= ]+[^ ]+' \
+                        | sed -E 's/^--[a-z]+-secrets[= ]+//' || true
+                      printf '%s\n' "${SECRETS:-}"; } \
+                    | tr ',' '\n' | tr -d "'\"" | sed -n 's/^.*=//p'; } || true)"
+          while read -r ref; do
+            case "$ref" in
+              *-env:latest|"${ENV_SECRET:-@}:latest")
+                echo "::error::a caller-supplied mount '${ref}' is refused: bundles are pinned to a version number. Pass env_secret/env_mount_path (they mount it pinned) or set pin_env: false." >&2
+                exit 1 ;;
+            esac
+          done <<< "$REFS"
+          if [ -z "$ENV_SECRET" ]; then
+            # No env_secret: nothing will pin, so the LIVE template must not mount a *-env bundle
+            # at :latest either. Only "the service does not exist yet" may pass; any other
+            # describe error refuses (fail closed).
+            if LIVE="$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" --format=json 2>"${RUNNER_TEMP}/describe.err")"; then
+              BAD="$(printf '%s' "$LIVE" | jq -r '
+                [ (.spec.template.spec.volumes[]? | select((.secret.secretName // "") | endswith("-env"))
+                   | .secret.secretName as $n | .secret.items[]?
+                   | select(((.key // .version) | tostring) == "latest") | $n),
+                  (.spec.template.spec.containers[]?.env[]?.valueFrom.secretKeyRef?
+                   | select((.name // "") | endswith("-env")) | select((.key | tostring) == "latest") | .name)
+                ] | unique | join(", ")')"
+              if [ -n "$BAD" ]; then
+                echo "::error::the live service mounts ${BAD} at :latest and no env_secret was given to pin it. Pass env_secret and env_mount_path (the update then pins the newest ENABLED version) or set pin_env: false." >&2
+                exit 1
+              fi
+            elif ! grep -qiE 'NOT_FOUND|cannot find|not found' "${RUNNER_TEMP}/describe.err"; then
+              echo "::error::could not read the live service to check its bundle mount (refusing; fail closed): $(head -c 300 "${RUNNER_TEMP}/describe.err")" >&2
+              exit 1
+            fi
             exit 0
           fi
           if [ -z "$ENV_MOUNT_PATH" ]; then
             echo "::error::env_mount_path is required with env_secret" >&2
             exit 1
           fi
-          # A caller-supplied `<bundle>:latest` mount would undo the pin (and the v4 promise
-          # that nothing mounts a bundle at :latest): refuse, unless pin_env: false (above).
-          for m in "${ENV_SECRET}:latest" "-env:latest"; do
-            if printf '%s\n%s\n%s\n' "${DEPLOY_FLAGS:-}" "${EXTRA:-}" "${SECRETS:-}" | grep -qF -- "$m"; then
-              echo "::error::a caller-supplied mount '${m}' is refused: bundles are pinned to a version number. Remove it (env_secret/env_mount_path mount it pinned) or set pin_env: false." >&2
-              exit 1
-            fi
-          done
-          # The version the live service mounts the bundle at (empty if no service yet).
+          # The version the live service mounts the bundle at (empty if no service yet): a volume
+          # item OR an env var secretKeyRef, as rollback-service and cleanup-secret-versions read it.
           CUR="$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" --format=json 2>/dev/null \
                   | jq -r --arg s "$ENV_SECRET" \
-                    '[.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]? | (.key // .version)][0] // ""' \
+                    '[(.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]? | (.key // .version)),
+                      (.spec.template.spec.containers[]?.env[]?.valueFrom.secretKeyRef? | select(.name == $s) | .key)]
+                     | map(select(. != null) | tostring) | .[0] // ""' \
                   || echo '')"
           if [[ "$CUR" =~ ^[0-9]+$ ]]; then
             N="$CUR"          # a numeric pin: an update never moves it
