@@ -27,7 +27,11 @@ section opens or closes. Closed sections live in
 
 ## Owner rulings to build (opened 2026-10-21)
 
-- [ ] `.github/workflows/sync-bundle-key.yml` — DESIGN NEEDED (owner): environment-level secrets
+- [x] **CLOSED 2026-10-21 (v4.1.0): the composite action `actions/sync-bundle-key` runs in the
+  caller's own `environment:` job and reads environment secrets from `secrets_json`
+  (docs/sync-bundle-key-action.md). The rotator got the same treatment
+  (`actions/rotate-worker-signing-secret`). Live cross-org proof is the consumer's first run.**
+  `.github/workflows/sync-bundle-key.yml` — DESIGN NEEDED (owner): environment-level secrets
   cannot reach the sync from a caller in another organisation. Two cross-org dry runs on
   2026-10-21 refused with "No environment secret for listed key(s)". `payload_source: caller`
   reads repo/org secrets only, because the caller job cannot declare `environment:`. Until it's
@@ -38,7 +42,15 @@ section opens or closes. Closed sections live in
   and have workflow-preflight check every caller against it, so projects stop hand-maintaining
   their own key-recipient guards (owner, 2026-10-21; a consumer's guard needed a hand exception
   to adopt `repos-environments`).
-- [ ] `.github/workflows/bootstrap-cf-service.yml` — map AND remap a Cloud Run domain in the same
+- [x] **CLOSED 2026-10-21 (v4.1.0).** `.github/workflows/deploy-cloud-run.yml` — `image` input
+  deploys a prebuilt image by DIGEST (tag refused, owner ruling), skipping build/push and keeping
+  the full deploy path; a `Verify prebuilt image` step fails if the digest is not in GAR (DECISIONS
+  2026-10-21 "digest only").
+- [x] **CLOSED 2026-10-21 (v4.1.0), names changed by owner ruling:** `probe_path`/`expected_status`
+  are the existing `smoke_path`/`smoke_status`, and `cert_timeout_minutes` is the existing
+  `certificate_timeout_seconds` (default 1800; set 3600 for the 60 min below). DECISIONS
+  2026-10-21 "a remap fails where a fresh map warns".
+  `.github/workflows/bootstrap-cf-service.yml` — map AND remap a Cloud Run domain in the same
   workflow: an opt-in input re-targets a hostname from a named current service (delete → create →
   wait for the certificate → probe the status code); without it, refuse as today (owner,
   2026-10-21). Design agreed with the first consumer 2026-10-21 (build is a minor release):

@@ -29,6 +29,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from action_steps import job_steps  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 PROMOTE = ROOT / ".github" / "workflows" / "promote-image.yml"
 CI_NODE = ROOT / ".github" / "workflows" / "ci-node.yml"
@@ -57,9 +60,9 @@ FAILURES = []
 
 
 def extract_step(workflow: Path, job: str, step_name: str) -> str:
-    """Return the `run:` body of a named step, as shipped."""
-    doc = yaml.safe_load(workflow.read_text())
-    for step in doc["jobs"][job]["steps"]:
+    """Return the `run:` body of a named step, as shipped. A wrapper job (sync-bundle-key.yml)
+    resolves to its composite action's steps, and a script step to the script body."""
+    for step in job_steps(workflow, job):
         if step.get("name") == step_name:
             if "run" not in step:
                 raise SystemExit(f"step '{step_name}' has no run: body")
@@ -1008,6 +1011,74 @@ def _run_body(body, env_extra, *, stubs=None):
             res[key] = dict(l.split("=", 1) for l in f.read_text().splitlines()
                             if "=" in l) if f.exists() else {}
         return res
+
+
+def run_cf_retarget_step(body, *, current="", svc_json=None, ready_at=1, curl_run="200",
+                         curl_host="200", create_fails=False, delete_fails=False, **env_kw):
+    """Run a bootstrap-cf-service retarget-aware step with stubbed gcloud/curl and a fake clock.
+
+    current:    live mapping's routeName ('' = no mapping; describe fails).
+    svc_json:   what `gcloud run services describe --format=json` prints (default: healthy).
+    ready_at:   the Nth `domain-mappings describe --format=json` reports Ready (0 = never).
+    curl_run/curl_host: status printed for a *.run.app URL / any other URL.
+    Returns rc/out/outputs/env plus `calls` (gcloud argv lines), `curls` (urls), `elapsed`
+    (fake seconds) and `summary` (GITHUB_STEP_SUMMARY text).
+    """
+    healthy = {"status": {"url": "https://svc-new-as.a.run.app",
+                          "conditions": [{"type": "Ready", "status": "True"}],
+                          "latestCreatedRevisionName": "r2", "latestReadyRevisionName": "r2",
+                          "traffic": [{"revisionName": "r2", "percent": 100}]}}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        calls, curls, clock, jcount = (tmp / n for n in ("calls", "curls", "clock", "jcount"))
+        for f in (calls, curls, jcount):
+            f.write_text("")
+        clock.write_text("1000000000\n")
+        (tmp / "svc.json").write_text(json.dumps(svc_json if svc_json is not None else healthy))
+        ready = {"status": {"conditions": [{"type": "Ready", "status": "True"},
+                                           {"type": "CertificateProvisioned", "status": "True"}]}}
+        notready = {"status": {"conditions": [{"type": "Ready", "status": "Unknown"}]}}
+        (tmp / "ready.json").write_text(json.dumps(ready))
+        (tmp / "notready.json").write_text(json.dumps(notready))
+        gcloud = (
+            "#!/usr/bin/env bash\n"
+            f'echo "$*" >> "{calls}"\n'
+            'case "$*" in\n'
+            '  *"domain-mappings describe"*"spec.routeName"*)\n'
+            f'    [ -n "{current}" ] && echo "{current}" || exit 1 ;;\n'
+            '  *"domain-mappings describe"*"--format=json"*)\n'
+            f'    echo x >> "{jcount}"; n=$(wc -l < "{jcount}")\n'
+            f'    if [ "{ready_at}" -gt 0 ] && [ "$n" -ge "{ready_at}" ]; then cat "{tmp}/ready.json"; '
+            f'else cat "{tmp}/notready.json"; fi ;;\n'
+            f'  *"run services describe"*) cat "{tmp}/svc.json" ;;\n'
+            + ('  *"domain-mappings create"*) exit 1 ;;\n' if create_fails else '')
+            + ('  *"domain-mappings delete"*) exit 1 ;;\n' if delete_fails else '')
+            + 'esac\nexit 0\n')
+        curl = ("#!/usr/bin/env bash\n"
+                'for a in "$@"; do u="$a"; done\n'
+                f'echo "$u" >> "{curls}"\n'
+                f'case "$u" in *.run.app*) echo "{curl_run}" ;; *) echo "{curl_host}" ;; esac\n')
+        sleep = ("#!/usr/bin/env bash\n"
+                 f'now=$(cat "{clock}"); echo $(( now + ${{1%%.*}} )) > "{clock}"\n')
+        date = ("#!/usr/bin/env bash\n"
+                f'if [ "$1" = "+%s" ]; then cat "{clock}"; else /bin/date "$@"; fi\n')
+        env = {"HOST": "img.example.com", "SERVICE": "svc-new", "REGION": "r", "PROJECT": "p",
+               "DRY": "false", "RETARGET_FROM": "", "TIMEOUT": "1800", "INTERVAL": "15",
+               "SMOKE_PATH": "/healthz", "WANT": "", "PATH_": "/healthz",
+               "GITHUB_STEP_SUMMARY": str(tmp / "summary.md")}
+        env.update({k.upper(): v for k, v in env_kw.items()})
+        res = _run_body(body, env, stubs={"gcloud": gcloud, "curl": curl,
+                                          "sleep": sleep, "date": date})
+        summ = tmp / "summary.md"
+        res.update(calls=[l for l in calls.read_text().splitlines() if l],
+                   curls=[l for l in curls.read_text().splitlines() if l],
+                   elapsed=int(clock.read_text()) - 1000000000,
+                   summary=summ.read_text() if summ.exists() else "")
+        return res
+
+
+def has_call(r, *needles):
+    return any(all(n in c for n in needles) for c in r["calls"])
 
 
 def run_cf_validate_step(body, **kw):
@@ -3166,7 +3237,7 @@ def main():
               r["disabled"] == [], r["calls"])
 
         # 9. Ordering: disable only after the services rolled onto the new version.
-        names = [s.get("name") for s in doc["jobs"][job]["steps"]]
+        names = [s.get("name") for s in job_steps(wf, job)]
         check(f"{wf.stem} · disables after the Cloud Run roll",
               names.index(DISABLE_STEP) > names.index("Force new Cloud Run revision(s)"),
               names)
@@ -3542,6 +3613,154 @@ def main():
 
     r = run_cf_originrule_step(body, dry="true")
     check("dry_run writes no ruleset", r["sent"] is None, r["sent"])
+
+    # ── bootstrap-cf-service: retarget_from (v4.1.0) ────────────────────────
+    print("\nbootstrap-cf-service · retarget_from · Validate inputs")
+    body = extract_step(CFSERVICE, "bootstrap", "Validate inputs")
+    full = dict(mode="dns-only", service="new", wif="w", sa="a", project="p")
+    r = run_cf_validate_step(body, **full, retarget_from="old", smoke_path="/healthz")
+    check("retarget_from with smoke_path passes", r["rc"] == 0, r["out"])
+    r = run_cf_validate_step(body, **full, retarget_from="old")
+    check("retarget_from without smoke_path is refused", r["rc"] == 1, r["out"])
+    r = run_cf_validate_step(body, **full, retarget_from="new", smoke_path="/healthz")
+    check("retarget_from == service is refused", r["rc"] == 1, r["out"])
+    r = run_cf_validate_step(body, mode="proxied", service="new", wif="w", sa="a", project="p",
+                             retarget_from="old", smoke_path="/healthz")
+    check("retarget_from with mode: proxied is refused", r["rc"] == 1, r["out"])
+    r = run_cf_validate_step(body, **full)
+    check("an empty retarget_from changes nothing", r["rc"] == 0, r["out"])
+
+    print("\nbootstrap-cf-service · retarget_from · Converge")
+    body = extract_step(CFSERVICE, "bootstrap", "Converge the Cloud Run domain mapping")
+    r = run_cf_retarget_step(body, current="svc-old")
+    check("default: a mapping on another service still refuses",
+          r["rc"] == 1 and not has_call(r, "domain-mappings delete"), r["out"])
+    r = run_cf_retarget_step(body, current="svc-old", retarget_from="svc-old")
+    check("retarget: current == retarget_from succeeds", r["rc"] == 0, r["out"])
+    writes = [c for c in r["calls"] if "domain-mappings delete" in c or "domain-mappings create" in c]
+    check("retarget deletes then creates",
+          len(writes) == 2 and "delete" in writes[0] and "create" in writes[1]
+          and "--service=svc-new" in writes[1], r["calls"])
+    check("retarget records T_DELETE", r["env"].get("T_DELETE", "").isdigit(), r["env"])
+    # F3: a failed delete leaves the old mapping serving: no T_DELETE, so no map-back advice.
+    r = run_cf_retarget_step(body, current="svc-old", retarget_from="svc-old", delete_fails=True)
+    check("F3: a failed delete fails the step and records no T_DELETE",
+          r["rc"] != 0 and "T_DELETE" not in r["env"] and not has_call(r, "domain-mappings create"),
+          r["env"])
+    sbody = extract_step(CFSERVICE, "bootstrap", "Summary")
+    s = run_cf_retarget_step(sbody, retarget_from="svc-old", job_status="failure",
+                             t_delete=r["env"].get("T_DELETE", ""))
+    check("F3: a failed delete prints no map-back command",
+          "domain-mappings" not in s["summary"] and "map back" not in s["summary"], s["summary"])
+    # F4: after a failed CREATE no mapping exists, so the map-back must not depend on delete.
+    r = run_cf_retarget_step(body, current="svc-old", retarget_from="svc-old", create_fails=True)
+    check("F4: a failed create after a successful delete records T_DELETE",
+          r["rc"] != 0 and r["env"].get("T_DELETE", "").isdigit(), r["env"])
+    s = run_cf_retarget_step(sbody, retarget_from="svc-old", job_status="failure",
+                             t_delete=r["env"].get("T_DELETE", ""))
+    lines = s["summary"].splitlines()
+    di = [i for i, l in enumerate(lines) if "domain-mappings delete" in l]
+    check("F4: map-back delete line tolerates NOT_FOUND (|| true) and create is its own line",
+          len(di) == 1 and "|| true" in lines[di[0]] and "&&" not in " ".join(lines)
+          and any("domain-mappings create --service=svc-old" in l for l in lines[di[0] + 1:]),
+          s["summary"])
+    r = run_cf_retarget_step(body, current="svc-third", retarget_from="svc-old")
+    check("a third service still refuses",
+          r["rc"] == 1 and not has_call(r, "domain-mappings delete"), r["out"])
+    r = run_cf_retarget_step(body, current="svc-new", retarget_from="svc-old")
+    check("already on service is a no-op",
+          r["rc"] == 0 and not has_call(r, "domain-mappings delete")
+          and not has_call(r, "domain-mappings create"), r["calls"])
+    r = run_cf_retarget_step(body, current="svc-old", retarget_from="svc-old", dry="true")
+    check("dry run makes no writes and prints the plan",
+          r["rc"] == 0 and not has_call(r, "domain-mappings delete")
+          and not has_call(r, "domain-mappings create") and "svc-old" in r["out"]
+          and "would" in r["out"], r["out"])
+
+    print("\nbootstrap-cf-service · retarget_from · Wait for the managed certificate")
+    body = extract_step(CFSERVICE, "bootstrap", "Wait for the managed certificate")
+    r = run_cf_retarget_step(body, ready_at=0, retarget_from="svc-old", timeout="120")
+    check("retarget: a cert timeout FAILS", r["rc"] == 1, r["out"])
+    check("retarget polls every 30s", r["elapsed"] % 30 == 0 and r["elapsed"] >= 120, r["elapsed"])
+    r = run_cf_retarget_step(body, ready_at=0, timeout="120")
+    check("non-retarget: a cert timeout still only warns",
+          r["rc"] == 0 and "::warning::" in r["out"], r["out"])
+    r = run_cf_retarget_step(body, ready_at=3, retarget_from="svc-old")
+    check("retarget: cert arriving in time succeeds", r["rc"] == 0, r["out"])
+
+    print("\nbootstrap-cf-service · retarget_from · Smoke probe")
+    body = extract_step(CFSERVICE, "bootstrap", "Smoke probe")
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_host="200")
+    check("retarget: probe 200 passes and records T_OK",
+          r["rc"] == 0 and r["env"].get("T_OK", "").isdigit(), r["out"])
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_host="401")
+    check("retarget: an empty smoke_status means 200 (401 fails)", r["rc"] == 1, r["out"])
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_host="000")
+    check("retarget: no response FAILS (non-retarget only warns)", r["rc"] == 1, r["out"])
+    r = run_cf_retarget_step(body, curl_host="000")
+    check("non-retarget: no response still warns", r["rc"] == 0, r["out"])
+
+    print("\nbootstrap-cf-service · retarget_from · Summary")
+    body = extract_step(CFSERVICE, "bootstrap", "Summary")
+    r = run_cf_retarget_step(body, retarget_from="svc-old", job_status="failure",
+                             t_delete="1000000000")
+    check("failure after delete prints the map-back command",
+          "domain-mappings delete --domain=img.example.com" in r["summary"]
+          and "domain-mappings create --service=svc-old" in r["summary"], r["summary"])
+    r = run_cf_retarget_step(body, retarget_from="svc-old", job_status="success",
+                             t_delete="1000000000", t_ok="1000000900")
+    check("success records the outage window", "15m" in r["summary"], r["summary"])
+    check("success prints no map-back command",
+          "domain-mappings create" not in r["summary"], r["summary"])
+    r = run_cf_retarget_step(body, job_status="success")
+    check("no retarget: no outage line", "outage" not in r["summary"].lower(), r["summary"])
+
+    print("\nbootstrap-cf-service · retarget_from · Pre-flight the retarget")
+    body = extract_step(CFSERVICE, "bootstrap", "Pre-flight the retarget")
+    r = run_cf_retarget_step(body, retarget_from="svc-old")
+    check("healthy target passes", r["rc"] == 0, r["out"])
+    check("pre-flight probes the run.app URL at smoke_path",
+          "https://svc-new-as.a.run.app/healthz" in r["curls"], r["curls"])
+    bad = {"status": {"url": "https://svc-new-as.a.run.app",
+                      "conditions": [{"type": "Ready", "status": "False"}],
+                      "latestCreatedRevisionName": "r2", "latestReadyRevisionName": "r1",
+                      "traffic": [{"revisionName": "r1", "percent": 100}]}}
+    r = run_cf_retarget_step(body, retarget_from="svc-old", svc_json=bad)
+    check("latest revision not Ready refuses", r["rc"] == 1, r["out"])
+    split = {"status": {"url": "https://svc-new-as.a.run.app",
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "latestCreatedRevisionName": "r2", "latestReadyRevisionName": "r2",
+                        "traffic": [{"revisionName": "r2", "percent": 50},
+                                    {"revisionName": "r1", "percent": 50}]}}
+    r = run_cf_retarget_step(body, retarget_from="svc-old", svc_json=split)
+    check("less than 100% traffic on the latest revision refuses", r["rc"] == 1, r["out"])
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_run="401")
+    check("probe 401 (want 200) refuses", r["rc"] == 1, r["out"])
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_run="401", want="401")
+    check("an explicit smoke_status is honoured", r["rc"] == 0, r["out"])
+    r = run_cf_retarget_step(body, retarget_from="svc-old", svc_json={})
+    check("a missing service refuses", r["rc"] == 1, r["out"])
+    check("pre-flight never deletes", not has_call(r, "domain-mappings"), r["calls"])
+
+    print("\nbootstrap-cf-service · retarget_from · CAA warning")
+    body = extract_step(CFSERVICE, "bootstrap", "Check CAA records")
+
+    def caa(records):
+        stub = ("#!/usr/bin/env bash\n"
+                f"echo {shlex.quote(json.dumps({'success': True, 'result': records}))}\n")
+        return _run_body(body, {"CF_API_TOKEN": "t", "ZONE_ID": "z", "HOST": "img.example.com",
+                                "ZONE_NAME": "example.com"}, stubs={"curl": stub})
+    r = caa([{"type": "CAA", "content": '0 issue "letsencrypt.org"'}])
+    check("CAA without pki.goog warns", "::warning::" in r["out"] and r["rc"] == 0, r["out"])
+    r = caa([{"type": "CAA", "content": '0 issue "pki.goog"'}])
+    check("CAA allowing pki.goog is quiet", "::warning::" not in r["out"] and r["rc"] == 0, r["out"])
+    r = caa([])
+    check("no CAA records is quiet", "::warning::" not in r["out"] and r["rc"] == 0, r["out"])
+    # F5: the warning is only useful before Converge deletes the old mapping.
+    names = [s.get("name") for s in job_steps(CFSERVICE, "bootstrap")]
+    check("F5: CAA check precedes Converge (and so does the zone lookup it needs)",
+          names.index("Resolve the Cloudflare zone id") < names.index("Check CAA records")
+          < names.index("Converge the Cloud Run domain mapping"), names)
 
     # ── bootstrap-cf-dns ────────────────────────────────────────────────────
     print("\nbootstrap-cf-dns · Validate the inputs")

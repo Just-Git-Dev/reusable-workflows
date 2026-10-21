@@ -1,5 +1,12 @@
 name: Sync keys into Secret Manager bundle (reusable)
 
+# A THIN WRAPPER since v4.1.0: the one job below calls the composite action
+# actions/sync-bundle-key, where all the logic lives (scripts beside action.yml). Inputs,
+# secret and outputs are unchanged. A caller whose secrets are in an ENVIRONMENT and who is in
+# another org cannot use this workflow (environment secrets do not cross the org boundary into
+# a reusable workflow); it calls the action from its own environment job instead:
+# docs/sync-bundle-key-action.md.
+
 # Upserts one or more keys into a Secret Manager "bundle" secret — a dotenv
 # blob of KEY=value lines mounted into Cloud Run — adds a new secret version,
 # rolls the named Cloud Run service(s) onto it, and disables the old version.
@@ -105,9 +112,9 @@ on:
       payload_source:
         description: >-
           caller = the payload_json secret. environment = build the payload from the keys
-          named in secret_keys_file, read from the job's environment secrets. UNPROVEN:
-          whether an environment secret reaches a cross-org callee is not yet demonstrated
-          (docs/sync-bundle-key.md).
+          named in secret_keys_file, read from the job's environment secrets. Does NOT work
+          from another organisation through this workflow: use the composite action
+          actions/sync-bundle-key (docs/sync-bundle-key-action.md).
         type: string
         required: false
         default: 'caller'
@@ -196,554 +203,47 @@ env:
   # the tag. A called workflow cannot discover its own ref at runtime.
   WORKFLOW_VERSION: v4.0.0
 
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: ${{ inputs.environment }}
-    defaults:
-      run:
-        shell: bash
-    env:
-      GCP_PROJECT:   ${{ inputs.gcp_project }}
-      GCP_REGION:    ${{ inputs.gcp_region }}
-      BUNDLE_SECRET: ${{ inputs.bundle_secret }}
-      MOUNT_PATH:    ${{ inputs.mount_path }}
-      SERVICES_CSV:  ${{ inputs.services_csv }}
-      DRY_RUN:       ${{ inputs.dry_run }}
-      MIN_VALUE_LEN: ${{ inputs.min_value_length }}
     outputs:
-      old_version: ${{ steps.cur.outputs.current_version }}
-      new_version: ${{ steps.new_version.outputs.new_version }}
-      services_rolled: ${{ steps.roll.outputs.rolled }}
+      old_version: ${{ steps.sync.outputs.old_version }}
+      new_version: ${{ steps.sync.outputs.new_version }}
+      services_rolled: ${{ steps.sync.outputs.services_rolled }}
 
     steps:
-      - name: Validate payload_source
-        # An unknown value must not silently fall back to `caller` (a typo would then read
-        # a different secret than the caller meant).
-        env:
-          PAYLOAD_SOURCE: ${{ inputs.payload_source }}
-        run: |
-          case "$PAYLOAD_SOURCE" in
-            caller|environment) ;;
-            *) echo "::error::payload_source must be 'caller' or 'environment' (got '${PAYLOAD_SOURCE}')." >&2; exit 1 ;;
-          esac
-
-      - name: Guard environment branch policy
-        # S0. A job that names a missing environment makes GitHub CREATE it with no
-        # deployment branch policy; refuse to run in one. No-op without an environment.
-        if: inputs.environment != '' && inputs.require_branch_policy
-        env:
-          ENVIRONMENT: ${{ inputs.environment }}
-          REQUIRE_BRANCH_POLICY: ${{ inputs.require_branch_policy }}
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          [ -n "$ENVIRONMENT" ] || exit 0
-          [ "$REQUIRE_BRANCH_POLICY" = "true" ] || exit 0
-          ENV_JSON=$(gh api "repos/${REPO}/environments/${ENVIRONMENT}")
-          if ! printf '%s' "$ENV_JSON" | jq -e '.deployment_branch_policy != null' >/dev/null 2>&1; then
-            echo "::error::Environment '${ENVIRONMENT}' has no deployment branch policy. Refusing to run: any branch could deploy to it. Run repos-environments to converge it, or set require_branch_policy: false."
-            exit 1
-          fi
-          echo "Environment '${ENVIRONMENT}' has a deployment branch policy."
-
-      - name: Check out the key list
-        # secret_keys_file is a committed file in the CALLER's repo (the default checkout
-        # of a called workflow). Only that one path is fetched.
-        if: inputs.mode == 'replace' || inputs.payload_source == 'environment'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A thin wrapper: every step lives once, in the composite action (its scripts sit beside
+      # action.yml). The ref is REMOTE on purpose: `./actions/...` would resolve to the CALLER's
+      # repo. scripts/stamp_version.py rewrites the vX.Y.Z at release. The action warns that it
+      # cannot see this job's concurrency group; the group is declared above.
+      - name: Sync keys into the bundle
+        id: sync
+        uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.0.0
         with:
-          persist-credentials: false
-          sparse-checkout: ${{ inputs.secret_keys_file }}
-          sparse-checkout-cone-mode: false
-
-      - name: Authenticate to GCP via WIF
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ inputs.wif_provider }}
-          service_account:            ${{ inputs.service_account }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
-      - name: Build payload from environment secrets
-        # P1, UNPROVEN: relies on environment secrets reaching a cross-org callee.
-        id: envpayload
-        if: inputs.payload_source == 'environment'
-        env:
-          # Reason: payload_source: environment must pick the keys named in secret_keys_file out
-          # of the environment's secrets, and a key name cannot be a static `secrets.NAME`.
-          # Only the listed keys leave this step (see the jq filter); the step is P1-gated.
-          ALL_SECRETS_JSON: ${{ toJSON(secrets) }}  # zizmor: ignore[overprovisioned-secrets]
-          SECRET_KEYS_FILE: ${{ inputs.secret_keys_file }}
-        run: |
-          if [ ! -s "$SECRET_KEYS_FILE" ]; then
-            echo "::error::secret_keys_file '$SECRET_KEYS_FILE' is missing or empty; payload_source: environment needs it."
-            exit 1
-          fi
-          # Key names: strip comments, CR and surrounding space; drop blanks.
-          sed -e 's/#.*//' -e 's/\r//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$SECRET_KEYS_FILE" \
-            | grep -v '^$' | LC_ALL=C sort -u > /tmp/keys.txt || true
-          MISSING=()
-          while IFS= read -r k; do
-            if ! printf '%s' "$ALL_SECRETS_JSON" | jq -e --arg k "$k" 'has($k) and (.[$k] | type == "string")' >/dev/null 2>&1; then
-              MISSING+=("$k")
-            fi
-          done < /tmp/keys.txt
-          if [ "${#MISSING[@]}" -gt 0 ]; then
-            echo "::error::No environment secret for listed key(s): ${MISSING[*]}. Refusing to build a partial payload."
-            exit 1
-          fi
-          # Exactly the listed keys: github_token and any unlisted secret stay out.
-          PAYLOAD=$(printf '%s' "$ALL_SECRETS_JSON" | jq -c --rawfile keys /tmp/keys.txt \
-            '($keys | split("\n") | map(select(. != ""))) as $ks | with_entries(select(.key as $k | $ks | index($k)))')
-          while IFS= read -r v; do
-            [ -n "$v" ] && echo "::add-mask::$v"
-          done < <(printf '%s' "$PAYLOAD" | jq -r '.[]')
-          {
-            echo "payload_json<<JGD_PAYLOAD_EOF"
-            printf '%s\n' "$PAYLOAD"
-            echo "JGD_PAYLOAD_EOF"
-          } >> "$GITHUB_OUTPUT"
-          echo "Payload built from $(printf '%s' "$PAYLOAD" | jq 'length') environment secret(s)."
-
-      - name: Validate payload
-        env:
-          PAYLOAD_JSON: ${{ inputs.payload_source == 'environment' && steps.envpayload.outputs.payload_json || secrets.payload_json }}
-          STRICT_VALUES: ${{ inputs.strict_values }}
-        run: |
-          if ! printf '%s' "$PAYLOAD_JSON" | jq -e 'type == "object" and length > 0' >/dev/null 2>&1; then
-            echo "::error::payload_json must be a non-empty JSON object of {DEST_KEY: value}."
-            exit 1
-          fi
-          if ! printf '%s' "$PAYLOAD_JSON" | jq -e 'all(.[]; type == "string")' >/dev/null 2>&1; then
-            echo "::error::every payload_json value must be a string."
-            exit 1
-          fi
-          # Value-safety guards (the merge below writes `KEY=value` lines into an env
-          # file). Every refusal names the KEY only, never the value.
-          #
-          # ALWAYS: a newline, CR or NUL in a key or value is written as raw bytes and
-          # splits or truncates the line, corrupting the bundle. (Byte test via explode:
-          # no regex or string-escape quirks across jq versions.) TRAILING newlines of a
-          # value are not refused: the merge reads it with `val=$(...)`, which strips
-          # them, exactly as v3.7.0 did, so they never reach the file.
-          BADBYTES=$(printf '%s' "$PAYLOAD_JSON" | jq -r '
-            def bad: explode | any(. == 0 or . == 10 or . == 13);
-            [to_entries[] | select((.key | bad) or (.value | sub("\n+\\z"; "") | bad)) | .key | @json] | join(", ")')
-          if [ -n "$BADBYTES" ]; then
-            echo "::error::payload_json key or value contains a newline, carriage return or NUL: $BADBYTES. A bundle line is KEY=value on one line; refusing to write what would corrupt the .env."
-            exit 1
-          fi
-          # strict_values (default false, so v3.7.0 payloads keep working): the checks
-          # below only refuse what v3.7.0 wrote without corrupting anything.
-          if [ "$STRICT_VALUES" = "true" ]; then
-            # Keys must be env-var names. Printed JSON-quoted (@json) because a bad key
-            # may hold `::` that would forge a workflow command.
-            BADKEYS=$(printf '%s' "$PAYLOAD_JSON" \
-              | jq -r '[keys[] | select(test("\\A[A-Za-z_][A-Za-z0-9_]*\\z") | not) | @json] | join(", ")')
-            if [ -n "$BADKEYS" ]; then
-              echo "::error::payload_json key(s) are not valid env names (^[A-Za-z_][A-Za-z0-9_]*\$): $BADKEYS"
-              exit 1
-            fi
-            # Empty / whitespace-only values, and values that are a whole placeholder
-            # (-, changeme, todo, xxx..., <...>, ${...}). Compared after trimming and
-            # lowercasing; a real credential merely CONTAINING one of these passes.
-            # Not subject to min_value_length: 0, which only relaxes the length floor.
-            PLACEHOLDER=$(printf '%s' "$PAYLOAD_JSON" | jq -r '
-              [to_entries[]
-               | select((.value | gsub("\\A\\s+|\\s+\\z"; "") | ascii_downcase)
-                        | (. == "" or . == "-" or test("\\A(change[-_]?me|placeholder|todo|tbd|dummy|example|x{3,})\\z")
-                           or test("\\A<.*>\\z") or test("\\A\\$\\{.*\\}\\z")))
-               | .key] | join(", ")')
-            if [ -n "$PLACEHOLDER" ]; then
-              echo "::error::payload_json value(s) are empty, whitespace-only or a placeholder: $PLACEHOLDER. Refusing to distribute a value that cannot be a credential. Source the real value from a GitHub secret."
-              exit 1
-            fi
-          fi
-          # Mask every value so nothing leaks in later logs.
-          while IFS= read -r v; do
-            [ -n "$v" ] && echo "::add-mask::$v"
-          done < <(printf '%s' "$PAYLOAD_JSON" | jq -r '.[]')
-          # Reject values too short to be a real credential. A rotation workflow
-          # "succeeded" in May 2026 while distributing the literal string "-":
-          # it is a non-empty string, so the two checks above both passed, and
-          # the placeholder sat in the bundle for two months. Report the KEY
-          # only — never the value, which may be a real secret.
-          if [ "${MIN_VALUE_LEN:-0}" -gt 0 ]; then
-            SHORT=$(printf '%s' "$PAYLOAD_JSON" \
-              | jq -r --argjson n "$MIN_VALUE_LEN" '[to_entries[] | select((.value|length) < $n) | .key] | join(", ")')
-            if [ -n "$SHORT" ]; then
-              echo "::error::payload_json value(s) shorter than $MIN_VALUE_LEN chars: $SHORT. Refusing to distribute a value that cannot be a credential. Pass min_value_length: 0 to override."
-              exit 1
-            fi
-          fi
-          COUNT=$(printf '%s' "$PAYLOAD_JSON" | jq 'length')
-          echo "Payload carries $COUNT key(s)."
-          printf '%s' "$PAYLOAD_JSON" | jq -r 'keys[] | "  will upsert: \(.)"'
-
-      - name: Read current bundle (or start empty)
-        id: cur
-        run: |
-          if ! gcloud secrets describe "$BUNDLE_SECRET" --project="$GCP_PROJECT" >/dev/null 2>&1; then
-            echo "::error::Secret $BUNDLE_SECRET does not exist in $GCP_PROJECT. Create it first."
-            exit 1
-          fi
-          # `--limit=1` rather than `| head -1`: head closing the pipe can
-          # SIGPIPE gcloud, which under pipefail would fail the step.
-          CURRENT_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" \
-            --project="$GCP_PROJECT" --filter='state=ENABLED' \
-            --sort-by=~createTime --limit=1 --format='value(name)')
-          if [ -n "$CURRENT_VERSION" ]; then
-            gcloud secrets versions access "$CURRENT_VERSION" \
-              --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" > /tmp/bundle.env
-            echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
-            echo "Current enabled version: $CURRENT_VERSION"
-          else
-            : > /tmp/bundle.env
-            echo "No enabled version yet — starting from an empty bundle."
-          fi
-
-      - name: Compute new bundle
-        env:
-          PAYLOAD_JSON: ${{ inputs.payload_source == 'environment' && steps.envpayload.outputs.payload_json || secrets.payload_json }}
-          MODE: ${{ inputs.mode }}
-          SECRET_KEYS_FILE: ${{ inputs.secret_keys_file }}
-          CONFIRM_REMOVED: ${{ inputs.confirm_removed }}
-        run: |
-          case "$MODE" in
-            replace|merge) ;;
-            *) echo "::error::mode must be 'replace' or 'merge' (got '$MODE')."; exit 1 ;;
-          esac
-          upsert() {
-            local key="$1" val="$2"
-            # Key and value reach awk through ENVIRON, never `-v` (which processes
-            # backslash escapes and corrupts a value holding one) and never as a
-            # regex (`A.B` must not match `AxB`). Bytes are written exactly.
-            if KEY="$key" awk 'BEGIN{FS="="} $1""==ENVIRON["KEY"]""{f=1} END{exit !f}' /tmp/bundle.env; then
-              KEY="$key" VAL="$val" awk 'BEGIN{FS=OFS="="} $1""==ENVIRON["KEY"]""{print ENVIRON["KEY"] "=" ENVIRON["VAL"]; next} {print}' /tmp/bundle.env > /tmp/bundle.env.new
-              mv /tmp/bundle.env.new /tmp/bundle.env
-            else
-              # A last line with no trailing newline would swallow the appended key.
-              if [ -s /tmp/bundle.env ] && [ -n "$(tail -c1 /tmp/bundle.env)" ]; then
-                echo >> /tmp/bundle.env
-              fi
-              echo "${key}=${val}" >> /tmp/bundle.env
-            fi
-          }
-          # Key names only, from here on: current keys, payload keys, listed keys.
-          # Blank lines and comments in the current bundle are not keys.
-          awk 'BEGIN{FS="="} NF && $0 !~ /^[[:space:]]*#/ {print $1}' /tmp/bundle.env \
-            | LC_ALL=C sort -u > /tmp/keys.cur
-          printf '%s' "$PAYLOAD_JSON" | jq -r 'keys[]' | LC_ALL=C sort -u > /tmp/keys.payload
-          if [ "$MODE" = "replace" ]; then
-            if [ ! -s "$SECRET_KEYS_FILE" ]; then
-              echo "::error::mode: replace needs secret_keys_file; '$SECRET_KEYS_FILE' is missing or empty."
-              exit 1
-            fi
-            sed -e 's/#.*//' -e 's/\r//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$SECRET_KEYS_FILE" \
-              | grep -v '^$' | LC_ALL=C sort -u > /tmp/keys.listed || true
-            if [ ! -s /tmp/keys.listed ]; then
-              echo "::error::secret_keys_file '$SECRET_KEYS_FILE' lists no keys; refusing to replace the bundle with nothing."
-              exit 1
-            fi
-            # A listed key that is in neither the payload nor the bundle cannot be written.
-            LC_ALL=C sort -u /tmp/keys.cur /tmp/keys.payload > /tmp/keys.have
-            MISSING=$(LC_ALL=C comm -23 /tmp/keys.listed /tmp/keys.have | paste -sd, -)
-            if [ -n "$MISSING" ]; then
-              echo "::error::Listed in $SECRET_KEYS_FILE but in neither the payload nor the current bundle: $MISSING. Nothing written."
-              exit 1
-            fi
-            LC_ALL=C comm -23 /tmp/keys.cur /tmp/keys.listed > /tmp/keys.dropped
-            UNLISTED=$(LC_ALL=C comm -13 /tmp/keys.listed /tmp/keys.payload | paste -sd, -)
-            if [ -n "$UNLISTED" ]; then
-              echo "::warning::Payload key(s) not listed in $SECRET_KEYS_FILE: $UNLISTED. They are written now and dropped by the next replace run."
-            fi
-            DROPPED=$(paste -sd, - < /tmp/keys.dropped)
-            if [ -n "$DROPPED" ] && [ "$DRY_RUN" != "true" ]; then
-              CONFIRMED=$(printf '%s' "$CONFIRM_REMOVED" | tr ',' '\n' \
-                | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | LC_ALL=C sort -u | paste -sd, - || true)
-              if [ "$CONFIRMED" != "$DROPPED" ]; then
-                echo "::error::This run would drop key(s) from the bundle: $DROPPED. Set confirm_removed to exactly that list to proceed (got '${CONFIRMED}')."
-                exit 1
-              fi
-            fi
-            # Keep only the listed keys' current lines (order preserved).
-            awk -F= 'NR==FNR{k[$0]=1; next} ($1"" in k)' /tmp/keys.listed /tmp/bundle.env > /tmp/bundle.env.new
-            mv /tmp/bundle.env.new /tmp/bundle.env
-          else
-            : > /tmp/keys.dropped
-          fi
-          # Overlay the payload (base64 per value so newlines/special chars survive the shell).
-          while IFS=$'\t' read -r key b64; do
-            val=$(printf '%s' "$b64" | base64 -d)
-            upsert "$key" "$val"
-          done < <(printf '%s' "$PAYLOAD_JSON" | jq -r 'to_entries[] | [.key, (.value | @base64)] | @tsv')
-          # The diff, by NAME only: +added -removed =kept.
-          LC_ALL=C comm -13 /tmp/keys.cur /tmp/keys.payload > /tmp/keys.added
-          LC_ALL=C comm -23 /tmp/keys.cur /tmp/keys.dropped > /tmp/keys.kept
-          {
-            echo "### Bundle diff by key name (${MODE})"
-            echo '```'
-            sed 's/^/+ /' /tmp/keys.added
-            sed 's/^/- /' /tmp/keys.dropped
-            sed 's/^/= /' /tmp/keys.kept
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Add new bundle version
-        id: new_version
-        if: inputs.dry_run == false
-        run: |
-          gcloud secrets versions add "$BUNDLE_SECRET" \
-            --project="$GCP_PROJECT" \
-            --data-file=/tmp/bundle.env
-          NEW_VERSION=$(gcloud secrets versions list "$BUNDLE_SECRET" \
-            --project="$GCP_PROJECT" --filter='state=ENABLED' \
-            --sort-by=~createTime --limit=1 --format='value(name)')
-          if [ -z "$NEW_VERSION" ]; then
-            echo "::error::Could not resolve the newly added version of $BUNDLE_SECRET."
-            exit 1
-          fi
-          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Force new Cloud Run revision(s)
-        id: roll
-        if: inputs.dry_run == false
-        env:
-          NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
-          PIN_VERSIONS: ${{ inputs.pin_versions }}
-        run: |
-          # `value(name)` may return a full resource path; the mount wants the number.
-          NEW_VERSION="${NEW_VERSION##*/}"
-          if [ "$PIN_VERSIONS" = "true" ]; then
-            if [ -z "$NEW_VERSION" ]; then
-              echo "::error::pin_versions needs the new bundle version, which is empty."
-              exit 1
-            fi
-            SECRET_REF="${BUNDLE_SECRET}:${NEW_VERSION}"
-            LABELS="jgd_env_version=${NEW_VERSION},jgd_run=${GITHUB_RUN_ID}"
-          else
-            SECRET_REF="${BUNDLE_SECRET}:latest"
-            LABELS=""
-          fi
-          IFS=',' read -ra SERVICES <<< "$SERVICES_CSV"
-          ROLLED=0
-          FAILED=()
-          for svc in "${SERVICES[@]}"; do
-            svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
-            svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
-            [ -z "$svc" ] && continue
-            if gcloud run services update "$svc" \
-                 --region="$GCP_REGION" \
-                 --project="$GCP_PROJECT" \
-                 --update-secrets="${MOUNT_PATH}=${SECRET_REF}" \
-                 ${LABELS:+--update-labels="$LABELS"}; then
-              echo "rolled: $svc"
-              ROLLED=$((ROLLED + 1))
-            elif [ "${BOOTSTRAP:-false}" = "true" ]; then
-              echo "::warning::Failed to update $svc during bootstrap (may not exist yet) — continuing."
-            else
-              echo "::error::Failed to roll $svc onto ${SECRET_REF}"
-              FAILED+=("$svc")
-            fi
-          done
-          echo "rolled=$ROLLED" >> "$GITHUB_OUTPUT"
-
-          # Fail loud and leave the old version ENABLED. Disabling it now would
-          # strand any service still reading it.
-          if [ "${#FAILED[@]}" -gt 0 ]; then
-            echo "::error::${#FAILED[@]} service(s) failed to roll: ${FAILED[*]}"
-            echo "::error::The previous bundle version is still enabled. Fix and re-run."
-            exit 1
-          fi
-          if [ "$ROLLED" -eq 0 ]; then
-            if [ "${BOOTSTRAP:-false}" = "true" ]; then
-              echo "::warning::No service rolled during bootstrap — continuing."
-            else
-              echo "::error::services_csv resolved to zero service names."
-              exit 1
-            fi
-          fi
-
-      - name: Disable superseded bundle version(s)
-        # Reached only when every service rolled: a failed roll fails the step
-        # above, and `if: success()` is the implicit default for later steps.
-        #
-        # KEEP-SET (v4). ENABLED versions kept = the union of
-        #   - the new version N+1,
-        #   - the version pinned by each of the two newest PREVIOUS revisions of every
-        #     rolled service (read only from volumes a volumeMount actually uses; an
-        #     orphan declared volume pins nothing), so the previous revision stays a
-        #     valid rollback target, and
-        #   - the `keep_enabled_count` newest ENABLED versions (a floor, minimum 1).
-        # Everything else is disabled. A pre-existing ENABLED tail (a hand-added
-        # version, or one from manage-config-secrets) is therefore mopped up too.
-        #
-        # DISABLE ONLY, never destroy. Destruction needs a quarantine clock (GSM
-        # stores no disabled-at timestamp, so it comes from Admin Activity audit
-        # logs) and the Cloud Run consumer scan; both live in
-        # cleanup-secret-versions, and this workflow deliberately holds neither
-        # roles/logging.viewer nor roles/run.viewer. See DECISIONS.md 2026-08-17.
-        if: inputs.dry_run == false && steps.cur.outputs.current_version != ''
-        env:
-          KEEP_ENABLED_COUNT: ${{ inputs.keep_enabled_count }}
-          NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
-        run: |
-          case "$KEEP_ENABLED_COUNT" in
-            ''|*[!0-9]*)
-              echo "::error::keep_enabled_count must be a non-negative integer (got '$KEEP_ENABLED_COUNT')."
-              exit 1 ;;
-          esac
-          if [ "$KEEP_ENABLED_COUNT" -lt 1 ]; then
-            echo "::error::keep_enabled_count must be >= 1: 0 disables every version and leaves 'latest' unresolvable."
-            exit 1
-          fi
-          NEW_VERSION="${NEW_VERSION##*/}"
-          # `latest` resolves SERVER-SIDE to the newest ENABLED version, so keeping
-          # at least one guarantees this step can never silently repoint it.
-          # Written to a file rather than piped: a heredoc consumer downstream of a
-          # pipe claims stdin and kills the producer (shellcheck SC2259).
-          gcloud secrets versions list "$BUNDLE_SECRET" \
-            --project="$GCP_PROJECT" --filter='state=ENABLED' \
-            --sort-by=~createTime --format='value(name)' > /tmp/enabled.raw
-          sed 's|.*/||' /tmp/enabled.raw | grep -v '^$' > /tmp/enabled.txt || true
-          TOTAL=$(wc -l < /tmp/enabled.txt | tr -d ' ')
-          # Keep-set, one version per line.
-          : > /tmp/keep.txt
-          [ -z "$NEW_VERSION" ] || echo "$NEW_VERSION" >> /tmp/keep.txt
-          head -n "$KEEP_ENABLED_COUNT" /tmp/enabled.txt >> /tmp/keep.txt
-          # Keep-set = every pin a LIVE or recent revision holds, across EVERY consumer of the
-          # bundle secret in the project, in EVERY region (not only services_csv / GCP_REGION):
-          #   (a) each revision with traffic > 0, or a tag (served at its tag URL), on a Service
-          #       (after a `rollback to_revision` traffic stays pinned to an old revision until
-          #       `--to-latest`). Read BY NAME as well as out of the newest-50 list: a pin can
-          #       sit on a revision older than the 50 newest for as long as traffic is held there,
-          #   (b) the two newest revisions before the one just rolled, per Service,
-          #   (c) every Cloud Run Job's pin (a Job has no traffic; its pin is live).
-          # A pin is a secret volume item (`volumes[].secret.items[].key`) a volumeMount uses OR an
-          # env var `valueFrom.secretKeyRef{name,key}`.
-          # A listing/describe failure fails the step BEFORE anything is disabled.
-          # shellcheck disable=SC2016
-          # (jq program: the $vars are jq's, not the shell's)
-          PINS_JQ='def pins($s): . as $r
-                    | [$r.spec.containers[]?.volumeMounts[]?.name] as $mounted
-                    | ( [$r.spec.volumes[]?
-                         | select(.secret.secretName == $s and (.name as $v | $mounted | index($v) != null))
-                         | .secret.items[]? | (.key // .version) | tostring | sub("^.*/"; "")]
-                      + [$r.spec.containers[]?.env[]?.valueFrom.secretKeyRef?
-                         | select(.name == $s) | .key | tostring | sub("^.*/"; "")] );'
-          # No --region: list every region the project uses; the label carries each one's region.
-          LOC='metadata.labels."cloud.googleapis.com/location"'
-          gcloud --project="$GCP_PROJECT" run services list \
-            --format="value(metadata.name,${LOC})" </dev/null > /tmp/consumers.raw 2> /tmp/consumers.err
-          # An all-region list that skipped a region ("did not respond ... may be incomplete") would
-          # hide that region's consumers from the keep-set: refuse, disable nothing.
-          cat /tmp/consumers.err >&2
-          if grep -qiE 'did not respond|may be incomplete' /tmp/consumers.err; then
-            echo "::error::the all-region services list did not cover every region (refusing; nothing disabled): $(head -c 300 /tmp/consumers.err)" >&2
-            exit 1
-          fi
-          IFS=',' read -ra LISTED <<< "$SERVICES_CSV"
-          for svc in "${LISTED[@]}"; do
-            svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
-            svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
-            [ -z "$svc" ] || printf '%s\t%s\n' "$svc" "$GCP_REGION" >> /tmp/consumers.raw
-          done
-          # name<TAB>region, an empty region meaning GCP_REGION.
-          awk -F'\t' -v r="$GCP_REGION" 'NF && $1 != "" { print $1 "\t" ($2 == "" ? r : $2) }' \
-            /tmp/consumers.raw | sort -u > /tmp/consumers.txt
-          while IFS=$'\t' read -r svc reg; do
-            [ -n "$svc" ] || continue
-            gcloud --project="$GCP_PROJECT" run services describe "$svc" \
-              --region="$reg" --format=json </dev/null > /tmp/service.json
-            [ -s /tmp/service.json ] || echo '{}' > /tmp/service.json
-            gcloud --project="$GCP_PROJECT" run revisions list --service="$svc" \
-              --region="$reg" \
-              --sort-by=~metadata.creationTimestamp --limit=50 --format=json \
-              </dev/null > /tmp/revisions.json
-            [ -s /tmp/revisions.json ] || echo '[]' > /tmp/revisions.json
-            jq -r --arg s "$BUNDLE_SECRET" --arg n "$NEW_VERSION" --slurpfile svc /tmp/service.json "
-              $PINS_JQ
-              (\$svc[0].status.latestReadyRevisionName // \"\") as \$latest
-              | ([\$svc[0].status.traffic[]? | select((.percent // 0) > 0 or ((.tag // \"\") != \"\"))
-                  | (.revisionName // \$latest)]) as \$live
-              | ( [.[] | select(.metadata.name as \$nm | \$live | index(\$nm)) | pins(\$s)[]]
-                + [.[0:3] | map({pins: pins(\$s)}) | map(select((.pins | index(\$n)) == null))
-                   | .[0:2][].pins[]] )
-              | .[] | select(test(\"^[0-9]+\$\"))" /tmp/revisions.json >> /tmp/keep.txt
-            # (a) by name: every traffic-holding (or tagged) revision, listed or not.
-            jq -r '(.status.latestReadyRevisionName // "") as $latest | .status.traffic[]?
-                   | select((.percent // 0) > 0 or ((.tag // "") != "")) | (.revisionName // $latest)
-                   | select(. != "")' /tmp/service.json | sort -u > /tmp/live.txt
-            while read -r rev; do
-              [ -n "$rev" ] || continue
-              gcloud --project="$GCP_PROJECT" run revisions describe "$rev" \
-                --region="$reg" --format=json </dev/null > /tmp/rev.json
-              [ -s /tmp/rev.json ] || echo '{}' > /tmp/rev.json
-              jq -r --arg s "$BUNDLE_SECRET" "
-                $PINS_JQ
-                pins(\$s)[] | select(test(\"^[0-9]+\$\"))" /tmp/rev.json >> /tmp/keep.txt
-            done < /tmp/live.txt
-          done < /tmp/consumers.txt
-          gcloud --project="$GCP_PROJECT" run jobs list \
-            --format="value(metadata.name,${LOC})" </dev/null > /tmp/jobs.raw 2> /tmp/jobs.err
-          cat /tmp/jobs.err >&2
-          if grep -qiE 'did not respond|may be incomplete' /tmp/jobs.err; then
-            echo "::error::the all-region jobs list did not cover every region (refusing; nothing disabled): $(head -c 300 /tmp/jobs.err)" >&2
-            exit 1
-          fi
-          awk -F'\t' -v r="$GCP_REGION" 'NF && $1 != "" { print $1 "\t" ($2 == "" ? r : $2) }' \
-            /tmp/jobs.raw | sort -u > /tmp/jobs.txt
-          while IFS=$'\t' read -r job reg; do
-            [ -n "$job" ] || continue
-            gcloud --project="$GCP_PROJECT" run jobs describe "$job" \
-              --region="$reg" --format=json </dev/null > /tmp/job.json
-            [ -s /tmp/job.json ] || echo '{}' > /tmp/job.json
-            jq -r --arg s "$BUNDLE_SECRET" "
-              $PINS_JQ
-              (.spec.template.spec.template // {}) | pins(\$s)[] | select(test(\"^[0-9]+\$\"))" \
-              /tmp/job.json >> /tmp/keep.txt
-          done < /tmp/jobs.txt
-          grep -vxFf /tmp/keep.txt /tmp/enabled.txt > /tmp/to-disable.txt || true
-          COUNT=$(wc -l < /tmp/to-disable.txt | tr -d ' ')
-          echo "ENABLED versions: $TOTAL; keeping $(sort -u /tmp/keep.txt | wc -l | tr -d ' ') in the keep-set; disabling $COUNT."
-          if [ "$COUNT" -gt 1 ]; then
-            echo "::warning::Disabling $COUNT versions, more than the one this run superseded — a pre-existing ENABLED tail was present. Every one is reversible with 'gcloud secrets versions enable'."
-          fi
-          while read -r v; do
-            [ -n "$v" ] || continue
-            echo "Disabling version $v"
-            gcloud secrets versions disable "$v" \
-              --secret="$BUNDLE_SECRET" \
-              --project="$GCP_PROJECT" </dev/null
-          done < /tmp/to-disable.txt
-
-      - name: Shred local bundle copy
-        if: always()
-        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/enabled.raw /tmp/enabled.txt /tmp/keep.txt /tmp/to-disable.txt /tmp/revisions.json /tmp/service.json /tmp/job.json /tmp/consumers.raw /tmp/consumers.txt /tmp/jobs.txt /tmp/jobs.raw /tmp/rev.json /tmp/live.txt /tmp/keys.*
-
-      - name: Summary
-        if: always()
-        env:
-          TITLE:       ${{ inputs.title }}
-          OLD_VERSION: ${{ steps.cur.outputs.current_version }}
-          NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
-          ROLLED:      ${{ steps.roll.outputs.rolled }}
-        run: |
-          {
-            if [ "$DRY_RUN" = "true" ]; then
-              echo "## [dry run] Would sync ${TITLE} into ${BUNDLE_SECRET} (${GCP_PROJECT})"
-              echo ""
-              echo "- Current bundle version: ${OLD_VERSION:-<none>} (would be disabled)"
-              echo "- Services that would roll: \`${SERVICES_CSV}\`"
-            else
-              echo "## Synced ${TITLE} into ${BUNDLE_SECRET} (${GCP_PROJECT})"
-              echo ""
-              echo "- Old bundle version: ${OLD_VERSION:-<none>}"
-              echo "- New bundle version: ${NEW_VERSION:-<not created>}"
-              echo "- Cloud Run services rolled: ${ROLLED:-0} of \`${SERVICES_CSV}\`"
-            fi
-            echo "- Mount path: ${MOUNT_PATH}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          # Reason: the action picks `payload_json` (or the keys named in secret_keys_file) out of
+          # the job's secrets, and a key name cannot be a static `secrets.NAME`.
+          secrets_json: ${{ toJSON(secrets) }}  # zizmor: ignore[overprovisioned-secrets]
+          gcp_project: ${{ inputs.gcp_project }}
+          gcp_region: ${{ inputs.gcp_region }}
+          wif_provider: ${{ inputs.wif_provider }}
+          service_account: ${{ inputs.service_account }}
+          bundle_secret: ${{ inputs.bundle_secret }}
+          mount_path: ${{ inputs.mount_path }}
+          services_csv: ${{ inputs.services_csv }}
+          title: ${{ inputs.title }}
+          dry_run: ${{ inputs.dry_run }}
+          min_value_length: ${{ inputs.min_value_length }}
+          strict_values: ${{ inputs.strict_values }}
+          environment: ${{ inputs.environment }}
+          require_branch_policy: ${{ inputs.require_branch_policy }}
+          payload_source: ${{ inputs.payload_source }}
+          mode: ${{ inputs.mode }}
+          secret_keys_file: ${{ inputs.secret_keys_file }}
+          confirm_removed: ${{ inputs.confirm_removed }}
+          pin_versions: ${{ inputs.pin_versions }}
+          keep_enabled_count: ${{ inputs.keep_enabled_count }}
+          # This workflow declares the concurrency group above, so the action only needs a notice.
+          concurrency_declared: 'true'

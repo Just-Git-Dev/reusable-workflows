@@ -171,3 +171,11 @@ jobs:
   first-time setup never blocks on services or a bundle that don't exist yet.
   Run scheduled rotations with `bootstrap: false`.
 - The local copies of the bundle are removed in an `always()` step.
+
+## Cross-org callers: use the composite action
+
+Environment secrets (such as the Cloudflare token in a production environment) cannot cross an org
+boundary into a reusable workflow. A caller in another organisation uses the composite action
+[`actions/rotate-worker-signing-secret`](rotate-worker-signing-secret-action.md) from its own
+`environment:` job instead. This workflow is a thin wrapper around that action and behaves the
+same; the action page has the caller job template and the `concurrency:` block the job must declare.

@@ -375,8 +375,78 @@ def forward_cases():
           r["rc"] == 0 and "::notice::" in r["out"], r["out"])
 
 
+REF = "Resolve tag + image ref"
+VERIFY = "Verify prebuilt image"
+DIGEST = "r-docker.pkg.dev/p/repo/img@sha256:" + "a" * 64
+REF_ENV = {"IN_TAG": "v1.2.3", "FALLBACK_TAG": "", "REQUIRE_SEMVER": "true", "REGION": "r",
+           "PROJECT": "p", "GAR_REPO": "repo", "IMAGE_NAME": "img", "ALSO_LATEST": "false",
+           "BUILD_ONLY": "false", "IMAGE": "", "DOCKER_TARGET": "", "BUILD_ARGS": ""}
+
+
+def image_cases():
+    print("\ndeploy-cloud-run v4.1 · prebuilt image input")
+    doc = yaml.safe_load(DEPLOY.read_text())
+    inputs = (doc.get("on") or doc.get(True))["workflow_call"]["inputs"]
+    check("input image exists, default ''", inputs.get("image", {}).get("default") == "",
+          f"got {inputs.get('image')}")
+    steps = doc["jobs"]["deploy"]["steps"]
+    by = {s.get("name"): s for s in steps}
+    for n in ("Configure docker for Artifact Registry", "Build & push image"):
+        check(f"'{n}' is skipped when image is set", "inputs.image == ''" in str(by.get(n, {}).get("if")),
+              str(by.get(n, {}).get("if")))
+    bx = [s for s in steps if "setup-buildx-action" in str(s.get("uses"))]
+    check("setup-buildx is skipped when image is set",
+          bool(bx) and "inputs.image == ''" in str(bx[0].get("if")), str(bx[:1]))
+    v = by.get(VERIFY, {})
+    check("Verify prebuilt image runs only when image is set, id verify",
+          "inputs.image != ''" in str(v.get("if")) and v.get("id") == "verify", str(v))
+    man = by.get(MANIFEST, {})
+    check("manifest IMAGE_DIGEST falls back to verify output",
+          man.get("env", {}).get("IMAGE_DIGEST") ==
+          "${{ steps.build.outputs.digest || steps.verify.outputs.digest }}", str(man.get("env")))
+    body = step_or_red("image", REF)
+    if body is None:
+        return
+    r = run_body(body, {**REF_ENV, "IMAGE": DIGEST})
+    check("digest ref accepted; image output is the input; tag still resolved",
+          r["rc"] == 0 and r["outputs"].get("image") == DIGEST and r["outputs"].get("tag") == "v1.2.3",
+          f"{r['out']} {r['outputs']}")
+    r = run_body(body, REF_ENV)
+    check("default image '' still builds the tag ref",
+          r["rc"] == 0 and r["outputs"].get("image") == "r-docker.pkg.dev/p/repo/img:v1.2.3", str(r["outputs"]))
+    for label, ref in (("tag ref", "r-docker.pkg.dev/p/repo/img:v1.2.3"),
+                       ("short digest", "r-docker.pkg.dev/p/repo/img@sha256:abc"),
+                       ("uppercase hex", "r-docker.pkg.dev/p/repo/img@sha256:" + "A" * 64),
+                       ("non-GAR host", "ghcr.io/x/img@sha256:" + "a" * 64),
+                       ("F8 one path segment", "r-docker.pkg.dev/img@sha256:" + "a" * 64),
+                       ("F8 two path segments", "r-docker.pkg.dev/p/img@sha256:" + "a" * 64),
+                       ("F8 empty segment", "r-docker.pkg.dev/p//img@sha256:" + "a" * 64),
+                       ("F8 name:tag@sha256", "r-docker.pkg.dev/p/repo/img:v1@sha256:" + "a" * 64)):
+        r = run_body(body, {**REF_ENV, "IMAGE": ref})
+        check(f"{label} refused, error names image",
+              r["rc"] != 0 and "::error::" in r["out"] and "image" in r["out"], r["out"])
+    r = run_body(body, {**REF_ENV, "IMAGE": DIGEST, "BUILD_ONLY": "true"})
+    check("image + build_only refused", r["rc"] != 0 and "build_only" in r["out"], r["out"])
+    r = run_body(body, {**REF_ENV, "IMAGE": DIGEST, "ALSO_LATEST": "true", "BUILD_ARGS": "A=1"})
+    check("build-only inputs ignored with a notice listing them",
+          r["rc"] == 0 and "::notice::" in r["out"] and "also_tag_latest" in r["out"]
+          and "build_args" in r["out"] and "docker_target" not in r["out"], r["out"])
+    vb = step_or_red("verify", VERIFY)
+    if vb is None:
+        return
+    r = run_body(vb, {"IMAGE": DIGEST}, gcloud='echo "sha256:' + "a" * 64 + '"')
+    check("verify describes the digest and emits it",
+          r["rc"] == 0 and "artifacts docker images describe" in r["calls"] and DIGEST in r["calls"]
+          and r["outputs"].get("digest") == "sha256:" + "a" * 64, f"{r['out']} {r['calls']} {r['outputs']}")
+    r = run_body(vb, {"IMAGE": DIGEST}, gcloud='echo "NOT_FOUND" >&2; exit 1')
+    check("verify fails the run when the digest is not in Artifact Registry",
+          r["rc"] != 0 and not r["outputs"].get("digest"), r["out"])
+    r = run_body(vb, {"IMAGE": DIGEST}, gcloud='true')
+    check("verify fails on an empty digest answer", r["rc"] != 0, r["out"])
+
+
 def main():
-    for fn in (input_cases, render_cases, pin_cases, label_cases, manifest_cases, forward_cases):
+    for fn in (input_cases, image_cases, render_cases, pin_cases, label_cases, manifest_cases, forward_cases):
         fn()
     pin = extract_step(PIN)
     if pin is not None:

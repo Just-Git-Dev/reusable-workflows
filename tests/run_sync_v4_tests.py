@@ -26,9 +26,13 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from action_steps import ACTIONS, action_steps, extract_action_step, job_steps  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 WF = ROOT / ".github" / "workflows"
 SYNC = WF / "sync-bundle-key.yml"
+ACTION = ACTIONS / "sync-bundle-key"             # the single source of truth; SYNC is a thin wrapper
 KEYPAIR = WF / "rotate-signing-keypair.yml"
 WORKER = WF / "rotate-worker-signing-secret.yml"
 
@@ -56,9 +60,12 @@ def check(name, cond, detail=""):
 
 
 def extract_step(workflow: Path, job: str, step_name: str):
-    """Return the `run:` body of a named step, or None when the step does not exist."""
-    doc = yaml.safe_load(workflow.read_text())
-    for step in doc["jobs"][job]["steps"]:
+    """Return the `run:` body of a named step, or None when the step does not exist.
+
+    A wrapper job (sync-bundle-key.yml) resolves to its action's steps, and a step that runs a
+    script beside action.yml yields the script body (tests/action_steps.py).
+    """
+    for step in job_steps(workflow, job):
         if step.get("name") == step_name and "run" in step:
             return step["run"]
     return None
@@ -226,7 +233,7 @@ def strict_cases():
         check("Validate step exists", False)
         return
     # The step must read the default from the workflow env, not hard-code false.
-    doc_text = SYNC.read_text()
+    doc_text = (ACTION / "action.yml").read_text() if (ACTION / "action.yml").exists() else ""
     check("Validate step is fed STRICT_VALUES from inputs.strict_values",
           re.search(r"STRICT_VALUES:\s*\$\{\{\s*inputs\.strict_values", doc_text) is not None)
     r = run_body(body, {"PAYLOAD_JSON": json.dumps({"K": ""}), "MIN_VALUE_LEN": "0",
@@ -569,9 +576,165 @@ def env_source_cases():
           r["rc"] != 0 and "REDIS_PASSWORD" in r["out"] and "pw-one-1" not in r["out"], r["out"])
 
 
+# --- the composite action (single source of truth) and the thin wrapper -------------------------
+
+READ_PAYLOAD_STEP = "Read payload_json from secrets_json"  # env: SECRETS_JSON
+WARN_STEP = "Warn about the caller's concurrency group"    # env: GCP_PROJECT BUNDLE_SECRET
+WRAPPER_USES = re.compile(r"^Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v\d+\.\d+\.\d+$")
+
+
+def action_doc():
+    p = ACTION / "action.yml"
+    return yaml.safe_load(p.read_text()) if p.exists() else None
+
+
+def action_cases():
+    print("\nsync-bundle-key action · secrets_json, concurrency warning, no interpolation")
+    doc = action_doc()
+    check("actions/sync-bundle-key/action.yml exists", doc is not None)
+    if doc is None:
+        return
+    inp = doc.get("inputs", {})
+    check("secrets_json is a required action input",
+          inp.get("secrets_json", {}).get("required") is True, inp.get("secrets_json"))
+    steps = doc["runs"]["steps"]
+    # (1) environment secrets reach the action as the secrets_json input.
+    build = next((s for s in steps if s.get("name") == ENVPAYLOAD_STEP), {})
+    check("the env-payload step reads ALL_SECRETS_JSON from inputs.secrets_json",
+          "inputs.secrets_json" in str(build.get("env", {}).get("ALL_SECRETS_JSON", "")), build.get("env"))
+    body = extract_action_step(ACTION, READ_PAYLOAD_STEP)
+    check(f"step '{READ_PAYLOAD_STEP}' exists", body is not None, "(not implemented yet)")
+    if body is not None:
+        payload = {"DB_PASSWORD": "pw-one-1", "REDIS_PASSWORD": "pw-two-2"}
+        secrets = {"payload_json": json.dumps(payload), "OTHER": "must-not-leak-9", "github_token": "x"}
+        r = run_body(body, {"SECRETS_JSON": json.dumps(secrets)})
+        out = r["outputs"]
+        check("caller source: payload_json is read out of secrets_json",
+              r["rc"] == 0 and "DB_PASSWORD" in out and "pw-two-2" in out, r["out"] + out)
+        check("caller source: nothing else in secrets_json reaches the output",
+              "must-not-leak-9" not in out and "github_token" not in out, out)
+        check("caller source: every payload value is registered with ::add-mask::",
+              "::add-mask::pw-one-1" in r["out"] and "::add-mask::pw-two-2" in r["out"], r["out"])
+        r = run_body(body, {"SECRETS_JSON": json.dumps({"PAYLOAD_JSON": json.dumps(payload), "OTHER": "must-not-leak-9"})})
+        check("F2: an UPPERCASE PAYLOAD_JSON key is found (secret names are case-insensitive)",
+              r["rc"] == 0 and "DB_PASSWORD" in r["outputs"] and "must-not-leak-9" not in r["outputs"], r["out"] + r["outputs"])
+        r = run_body(body, {"SECRETS_JSON": json.dumps({"OTHER": "y"})})
+        check("caller source: no payload_json secret leaves an empty payload for Validate to refuse",
+              r["rc"] == 0 and '"y"' not in r["outputs"] and "OTHER" not in r["outputs"], r["out"] + r["outputs"])
+    # (2) a composite action cannot see or declare concurrency: it always warns, naming the block.
+    body = extract_action_step(ACTION, WARN_STEP)
+    check(f"step '{WARN_STEP}' exists", body is not None, "(not implemented yet)")
+    if body is not None:
+        r = run_body(body, {"GCP_PROJECT": "proj-x", "BUNDLE_SECRET": "app-secrets"})
+        check("the warning is a ::warning:: naming the exact concurrency group",
+              r["rc"] == 0 and "::warning::" in r["out"]
+              and "group: bundle-write-proj-x-app-secrets" in r["out"], r["out"])
+        check("the warning says cancel-in-progress: false", "cancel-in-progress: false" in r["out"], r["out"])
+        r = run_body(body, {"GCP_PROJECT": "proj-x", "BUNDLE_SECRET": "app-secrets", "CONCURRENCY_DECLARED": "false"})
+        check("a direct caller (concurrency_declared false) still gets the ::warning::",
+              "::warning::" in r["out"] and "::notice::" not in r["out"], r["out"])
+        r = run_body(body, {"GCP_PROJECT": "proj-x", "BUNDLE_SECRET": "app-secrets", "CONCURRENCY_DECLARED": "true"})
+        check("the wrapper (concurrency_declared true) gets a ::notice::, not a ::warning::",
+              r["rc"] == 0 and "::notice::" in r["out"] and "::warning::" not in r["out"]
+              and "group: bundle-write-proj-x-app-secrets" in r["out"], r["out"])
+    cd = inp.get("concurrency_declared", {})
+    check("concurrency_declared is an optional action input defaulting to 'false'",
+          cd.get("default") == "false" and cd.get("required") is not True, cd)
+    warn = next((s for s in steps if s.get("name") == WARN_STEP), {})
+    check("the warn step reads concurrency_declared through env:",
+          "inputs.concurrency_declared" in str(warn.get("env", {}).get("CONCURRENCY_DECLARED", "")), warn.get("env"))
+    # Hygiene: no `${{ }}` inside a run body; every step that runs shell declares shell: bash.
+    runs = [s for s in steps if "run" in s]
+    check("every run step names shell: bash", runs and all(s.get("shell") == "bash" for s in runs))
+    check("no run step interpolates ${{ }} (env: then \"$VAR\")",
+          runs and not any("${{" in s["run"] for s in runs), [s.get("name") for s in runs if "${{" in s["run"]])
+    check("every run step is a script beside action.yml",
+          runs and all(re.fullmatch(r'"\$GITHUB_ACTION_PATH/[\w.-]+\.sh"', s["run"].strip()) for s in runs))
+
+
+BOOL_STEP = "Validate boolean inputs"
+
+
+def boolean_cases():
+    print("\nF7 · boolean inputs are exactly 'true' or 'false' (an if: and a bash [ = ] must agree)")
+    doc = yaml.safe_load((ACTION / "action.yml").read_text())
+    steps = action_steps(ACTION)
+    bools = sorted(k.upper() for k, v in doc["inputs"].items() if v.get("default") in ("true", "false"))
+    check("the boolean validation step runs FIRST", steps[0].get("name") == BOOL_STEP, steps[0].get("name"))
+    check("it covers every boolean-typed input of the action",
+          sorted(steps[0].get("env", {})) == bools, f"{sorted(steps[0].get('env', {}))} vs {bools}")
+    body = extract_action_step(ACTION, BOOL_STEP)
+    if body is None:
+        check(f"step '{BOOL_STEP}' exists", False)
+        return
+    good = {b: "true" for b in bools}
+    check("all 'true' is accepted", run_body(body, good)["rc"] == 0)
+    check("all 'false' is accepted", run_body(body, {b: "false" for b in bools})["rc"] == 0)
+    for bad in ("yes", "1", "True", "FALSE", "", " true"):
+        for b in bools:
+            r = run_body(body, {**good, b: bad})
+            check(f"{b}={bad!r} is refused and named", r["rc"] != 0 and b.lower() in r["out"].lower(), r["out"])
+
+
+def checkout_cases():
+    print("\nF6 · the key-list checkout must not touch the caller's workspace root")
+    steps = action_steps(ACTION)
+    co = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
+    check("the action has exactly one checkout step", len(co) == 1, len(co))
+    if len(co) != 1:
+        return
+    path = str(co[0].get("with", {}).get("path", ""))
+    check("the checkout has a non-empty relative path: (a clean checkout in the root wipes the caller's tree)",
+          path not in ("", ".") and not path.startswith("/") and ".." not in path.split("/"), path)
+    readers = [s for s in steps if "SECRET_KEYS_FILE" in s.get("env", {})]
+    check("steps read the key list", len(readers) >= 2, [s.get("name") for s in readers])
+    check("every reader points SECRET_KEYS_FILE into the checkout path",
+          all(path in str(s["env"]["SECRET_KEYS_FILE"]) and "github.workspace" in str(s["env"]["SECRET_KEYS_FILE"])
+              for s in readers), [s["env"]["SECRET_KEYS_FILE"] for s in readers])
+
+
+def wrapper_cases():
+    print("\nsync-bundle-key wrapper · calls the action, contract unchanged")
+    inputs, secrets, doc = workflow_inputs()
+    steps = doc["jobs"]["sync"]["steps"]
+    calls = [s for s in steps if WRAPPER_USES.match(s.get("uses", ""))]
+    check("the wrapper job calls the action by its REMOTE vX.Y.Z ref (a ./ ref resolves to the caller)",
+          len(calls) == 1, [s.get("uses") for s in steps])
+    check("the wrapper job has no inline run: steps", not any("run" in s for s in steps))
+    if len(calls) != 1:
+        return
+    call = calls[0]
+    with_ = call.get("with", {})
+    missing = sorted(set(inputs) - set(with_))
+    check("every workflow_call input is forwarded to the action's with:", not missing, f"missing {missing}")
+    ad = action_doc() or {"inputs": {}}
+    unknown = sorted(set(with_) - set(ad.get("inputs", {})))
+    check("every with: key is an input of the action", not unknown, f"unknown {unknown}")
+    same = [k for k in inputs if k in with_ and with_[k] != "${{ inputs.%s }}" % k]
+    check("each input is passed through unchanged (${{ inputs.<name> }})", not same, same)
+    check("the wrapper sets concurrency_declared: 'true' (it declares the group itself)",
+          str(with_.get("concurrency_declared")).lower() == "true", with_.get("concurrency_declared"))
+    check("secrets_json is the caller's toJSON(secrets)",
+          with_.get("secrets_json") == "${{ toJSON(secrets) }}", with_.get("secrets_json"))
+    check("the wrapper keeps the payload_json secret", "payload_json" in secrets)
+    outs = (doc.get("on") or doc[True])["workflow_call"].get("outputs", {})
+    check("the three outputs are unchanged",
+          sorted(outs) == ["new_version", "old_version", "services_rolled"], sorted(outs))
+    job_outs = doc["jobs"]["sync"].get("outputs", {})
+    check("each job output comes from the action step",
+          len(job_outs) == 3 and all(f"steps.{call.get('id')}.outputs." in str(v) for v in job_outs.values()),
+          job_outs)
+    check("the wrapper keeps permissions, concurrency and timeout",
+          doc.get("permissions", {}).get("id-token") == "write"
+          and doc.get("permissions", {}).get("actions") == "read"
+          and doc.get("concurrency", {}).get("cancel-in-progress") is False
+          and doc["jobs"]["sync"].get("timeout-minutes") == 10, doc.get("permissions"))
+
+
 def main():
     for fn in (input_cases, source_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases, rollback_cases,
-               round2_keep_cases, unresponsive_cases, round2_undo_cases, identical_cases, env_source_cases):
+               round2_keep_cases, unresponsive_cases, round2_undo_cases, identical_cases, env_source_cases,
+               action_cases, boolean_cases, checkout_cases, wrapper_cases):
         fn()
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0

@@ -45,7 +45,8 @@ identity.
 | `dry_run` | `false` | Prints the zone id, the DNS record and the Origin Rule it would write. |
 | `wait_for_certificate` | `true` | `dns-only` only. A timeout **warns**, see below. |
 | `check_ssl_mode` | `true` | `proxied` only. Warns, never flips. |
-| `smoke_path` / `smoke_status` | `''` / `''` | Probe after bootstrapping. |
+| `smoke_path` / `smoke_status` | `''` / `''` | Probe after bootstrapping. **Required** when `retarget_from` is set; an empty `smoke_status` then means `200`. |
+| `retarget_from` | `''` | `dns-only` only. Move a hostname that is mapped to *this* service name onto `service`. Empty = refuse, as always. See [Re-target a hostname](#re-target-a-hostname). |
 
 ### Leave `cloud_run_url` empty
 
@@ -80,13 +81,71 @@ resource scope:
 | Permission | When |
 |---|---|
 | `run.services.get` | Resolving the `*.run.app` URL (`roles/run.viewer` covers it) |
-| `run.domainmappings.create`, `run.domainmappings.get` | `mode: dns-only` (needs `roles/run.admin` or a custom role) |
+| `run.domainmappings.create`, `run.domainmappings.get` | `mode: dns-only` (needs a custom role, below) |
+| `run.domainmappings.delete`, `run.services.get` | `retarget_from` only: the delete, and the pre-flight read of the target service |
+
+Never grant `roles/run.admin` for this. A custom role carrying exactly the verbs above is enough:
+
+```bash
+gcloud iam roles create domainMappingBootstrap --project=<project> \
+  --title="Domain mapping bootstrap" \
+  --permissions=run.services.get,run.domainmappings.get,run.domainmappings.create,run.domainmappings.delete
+```
+
+Leave `run.domainmappings.delete` off the role of a caller that never sets `retarget_from`.
 
 A `proxied` caller that passes `cloud_run_url` explicitly needs **no GCP access**: leave
 `wif_provider`/`service_account` empty and no auth step runs at all.
 
 **Cloudflare API token:** `Zone:Zone:Read` + `Zone:DNS:Edit` (both modes),
 `Zone:Rulesets:Edit` (`proxied`), `Zone:Zone Settings:Read` (optional, for the SSL check).
+
+## Re-target a hostname
+
+By default a hostname already mapped to a different service is **refused**: re-pointing it
+silently would move live traffic. `retarget_from: <current-service>` is the deliberate opt-in
+to do it in one run (`mode: dns-only` only; `proxied` has no Cloud Run mapping, so the
+combination fails validation).
+
+Validation refuses `retarget_from` when `mode` is `proxied`, when `smoke_path` is empty, and
+when it equals `service`.
+
+The sequence:
+
+1. **Pre-flight (nothing is deleted if it fails).** The target `service` exists, its latest
+   revision is Ready, that revision serves 100% of traffic, and its own `*.run.app` URL
+   answers `smoke_path` with `smoke_status` (default `200`; the status code is asserted).
+2. **Converge.** The live mapping's `routeName` must equal `retarget_from`. Then the mapping
+   is deleted and created for `service`. If it is already on `service` the run is a no-op, so
+   a re-run is safe. Any *third* service still refuses, exactly as without the input.
+3. **Wait for the cert.** Polls every 30 s up to `certificate_timeout_seconds`. On a remap run
+   a timeout **fails** (non-remap runs still only warn), and the wait runs even if
+   `wait_for_certificate` is `false`. Default is 1800 s (30 min); set `3600` if you want 60
+   min, and raise `timeout_minutes` above it (default 40).
+4. **Probe** `https://<hostname><smoke_path>`; anything but the expected status, or no
+   response, fails the run.
+
+**Expect an outage.** Between the delete and the first good probe the hostname serves
+nothing, because the managed cert is re-issued. The step summary records the window (delete
+time to probe time). Plan for roughly the cert issuance time.
+
+**No auto-rollback.** Re-mapping the old service is a second cert issue, so the workflow does
+not attempt it. On any failure after the delete SUCCEEDED the summary prints the exact map-back
+command (a failed delete leaves the old mapping serving, so no command is printed). The delete
+line ends in `|| true` because, when the create is what failed, no mapping exists to delete:
+
+```bash
+gcloud beta run domain-mappings delete --domain=<host> --region=<region> --project=<project> --quiet || true
+gcloud beta run domain-mappings create --service=<retarget_from> --domain=<host> \
+  --region=<region> --project=<project>
+```
+
+**Dry run** prints the plan (the current `routeName`, the target's readiness, the delete and
+create that would happen) and writes nothing. The pre-flight is read-only, so it still runs.
+
+**CAA.** The zone's (and hostname's) CAA records are read; if any exist and none allows
+`pki.goog`, a warning is emitted, since Google could not then issue the new cert. This check
+runs BEFORE the old mapping is deleted, so the warning arrives while nothing is down yet.
 
 ## Copy-paste
 

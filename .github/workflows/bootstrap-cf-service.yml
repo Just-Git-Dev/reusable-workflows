@@ -26,8 +26,9 @@ name: Bootstrap a public hostname for a Cloud Run service (reusable)
 # be held at resource scope):
 #   run.services.get                                    (resolve the *.run.app URL)
 #   run.domainmappings.create|get                       (mode: dns-only only)
-# `roles/run.viewer` covers the first; the domain-mapping verbs need `roles/run.admin` or a
-# custom role. A `proxied` caller that passes cloud_run_url explicitly needs no GCP access
+#   run.domainmappings.delete                           (retarget_from only)
+# `roles/run.viewer` covers the first; the domain-mapping verbs need a custom role (see
+# docs/bootstrap-cf-service.md; never `roles/run.admin`). A `proxied` caller that passes cloud_run_url explicitly needs no GCP access
 # at all — leave wif_provider/service_account empty and no auth step runs.
 #
 # Cloudflare API token scopes:
@@ -132,6 +133,16 @@ on:
         type: string
         required: false
         default: ''
+      retarget_from:
+        description: >-
+          mode: dns-only. The service the hostname is mapped to NOW. When set, a hostname mapped
+          to exactly this service is moved onto `service` (pre-flight, delete, create, cert wait,
+          probe). Empty (the default) refuses a hostname mapped to another service, as ever.
+          Requires smoke_path (smoke_status empty means 200). A cert timeout or failed probe
+          FAILS the run; there is no auto-rollback, the summary prints the map-back command.
+        type: string
+        required: false
+        default: ''
       timeout_minutes:
         description: 'Job timeout. The default accommodates a first-time cert provision.'
         type: number
@@ -184,12 +195,20 @@ jobs:
           WIF:      ${{ inputs.wif_provider }}
           SA:       ${{ inputs.service_account }}
           PROJECT:  ${{ inputs.gcp_project }}
+          RETARGET_FROM: ${{ inputs.retarget_from }}
+          SMOKE_PATH:    ${{ inputs.smoke_path }}
         run: |
           fail() { echo "::error::$1" >&2; exit 1; }
           case "$MODE" in
             dns-only|proxied) ;;
             *) fail "mode must be 'dns-only' or 'proxied', got '$MODE'." ;;
           esac
+
+          if [ -n "$RETARGET_FROM" ]; then
+            [ "$MODE" = "dns-only" ] || fail "retarget_from needs mode: dns-only (proxied has no Cloud Run domain mapping to move)."
+            [ -n "$SMOKE_PATH" ] || fail "retarget_from requires smoke_path (the post-remap probe; an empty smoke_status means 200)."
+            [ "$RETARGET_FROM" != "$SERVICE" ] || fail "retarget_from equals service ('$SERVICE'); there is nothing to move."
+          fi
 
           need_gcloud=false
           if [ "$MODE" = "dns-only" ]; then
@@ -249,31 +268,35 @@ jobs:
           fi
           echo "cloud_run_url=$url" >> "$GITHUB_OUTPUT"
 
-      - name: Converge the Cloud Run domain mapping
-        if: inputs.mode == 'dns-only'
+      - name: Pre-flight the retarget
+        # Read-only, so it also runs on a dry run. Nothing has been deleted when it refuses.
+        if: inputs.mode == 'dns-only' && inputs.retarget_from != ''
         env:
-          HOST:    ${{ inputs.hostname }}
-          SERVICE: ${{ inputs.service }}
-          REGION:  ${{ inputs.gcp_region }}
-          PROJECT: ${{ inputs.gcp_project }}
-          DRY:     ${{ inputs.dry_run }}
+          SERVICE:   ${{ inputs.service }}
+          REGION:    ${{ inputs.gcp_region }}
+          PROJECT:   ${{ inputs.gcp_project }}
+          SMOKE_PATH: ${{ inputs.smoke_path }}
+          WANT:      ${{ inputs.smoke_status }}
         run: |
-          if current=$(gcloud beta run domain-mappings describe --domain="$HOST" --region="$REGION" \
-                        --project="$PROJECT" --format='value(spec.routeName)' 2>/dev/null) \
-             && [ -n "$current" ]; then
-            if [ "$current" != "$SERVICE" ]; then
-              # Re-targeting silently would move a live hostname to a different service.
-              echo "::error::$HOST is already mapped to '$current', not '$SERVICE'. Refusing to re-target; delete the mapping deliberately if that is the intent." >&2
-              exit 1
-            fi
-            echo "Domain mapping already correct: $HOST -> $SERVICE"
-          elif [ "$DRY" = "true" ]; then
-            echo "would create domain mapping: $HOST -> $SERVICE ($REGION)"
-          else
-            gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
-              --region="$REGION" --project="$PROJECT" --quiet >/dev/null
-            echo "Created domain mapping: $HOST -> $SERVICE"
-          fi
+          fail() { echo "::error::Pre-flight: $1 Nothing was deleted." >&2; exit 1; }
+          want="${WANT:-200}"
+          json=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
+                   --format=json 2>/dev/null || echo '{}')
+          url=$(jq -r '.status.url // empty' <<<"$json")
+          [ -n "$url" ] || fail "service '$SERVICE' was not found in $PROJECT/$REGION."
+          [ "$(jq -r '[.status.conditions[]? | select(.type=="Ready") | .status][0] // ""' <<<"$json")" = "True" ] \
+            || fail "service '$SERVICE' is not Ready."
+          latest=$(jq -r '.status.latestReadyRevisionName // empty' <<<"$json")
+          [ -n "$latest" ] && [ "$latest" = "$(jq -r '.status.latestCreatedRevisionName // empty' <<<"$json")" ] \
+            || fail "the latest revision of '$SERVICE' is not Ready."
+          jq -e --arg r "$latest" '[.status.traffic[]? | select(.percent == 100)
+                                    | select(.revisionName == $r or .latestRevision == true)] | length > 0' \
+            <<<"$json" >/dev/null \
+            || fail "'$SERVICE' does not serve 100% of traffic on its latest revision ($latest)."
+          probe="${url}${SMOKE_PATH}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$probe" || echo "000")
+          [ "$code" = "$want" ] || fail "$probe returned HTTP $code, want $want."
+          echo "Pre-flight ok: $SERVICE is Ready on $latest, 100% traffic, $probe -> HTTP $code"
 
       - name: Resolve the Cloudflare zone id
         id: zone
@@ -295,6 +318,72 @@ jobs:
           fi
           echo "zone_id=$zone_id" >> "$GITHUB_OUTPUT"
           echo "Zone $ZONE_NAME -> $zone_id"
+
+      - name: Check CAA records
+        # Warn only: a CAA set that excludes Google's CA stops the NEW cert being issued, which
+        # on a remap is the outage. Read errors are skipped, never failed.
+        if: inputs.retarget_from != ''
+        env:
+          CF_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          ZONE_ID:      ${{ steps.zone.outputs.zone_id }}
+          HOST:         ${{ inputs.hostname }}
+          ZONE_NAME:    ${{ inputs.cf_zone_name }}
+        run: |
+          for name in "$ZONE_NAME" "$HOST"; do
+            resp=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
+                     "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?type=CAA&name=${name}" \
+                     2>/dev/null || echo '{}')
+            [ "$(jq -r '.success // false' <<<"$resp")" = "true" ] || continue
+            n=$(jq -r '.result | length' <<<"$resp")
+            [ "$n" -gt 0 ] || continue
+            if ! jq -e '[.result[] | (.content // "")] | any(contains("pki.goog"))' <<<"$resp" >/dev/null; then
+              echo "::warning::$name has CAA records that do not allow pki.goog (Google's CA); the new managed cert may not issue. Add: 0 issue \"pki.goog\""
+            fi
+          done
+
+      - name: Converge the Cloud Run domain mapping
+        if: inputs.mode == 'dns-only'
+        env:
+          HOST:    ${{ inputs.hostname }}
+          SERVICE: ${{ inputs.service }}
+          REGION:  ${{ inputs.gcp_region }}
+          PROJECT: ${{ inputs.gcp_project }}
+          DRY:     ${{ inputs.dry_run }}
+          RETARGET_FROM: ${{ inputs.retarget_from }}
+        run: |
+          if current=$(gcloud beta run domain-mappings describe --domain="$HOST" --region="$REGION" \
+                        --project="$PROJECT" --format='value(spec.routeName)' 2>/dev/null) \
+             && [ -n "$current" ]; then
+            if [ "$current" = "$SERVICE" ]; then
+              echo "Domain mapping already correct: $HOST -> $SERVICE"
+            elif [ -n "$RETARGET_FROM" ] && [ "$current" = "$RETARGET_FROM" ]; then
+              if [ "$DRY" = "true" ]; then
+                echo "would re-target $HOST: routeName is '$current'; would delete the mapping, then create $HOST -> $SERVICE ($REGION)"
+              else
+                # The clock is read just BEFORE the delete but only recorded once it succeeded:
+                # a failed delete leaves the old mapping serving, and a T_DELETE would make the
+                # summary print a map-back command that deletes it. From a successful delete the
+                # hostname serves nothing until the new cert is issued.
+                t_delete=$(date +%s)
+                gcloud beta run domain-mappings delete --domain="$HOST" --region="$REGION" \
+                  --project="$PROJECT" --quiet >/dev/null
+                echo "T_DELETE=$t_delete" >> "$GITHUB_ENV"
+                gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
+                  --region="$REGION" --project="$PROJECT" --quiet >/dev/null
+                echo "Re-targeted domain mapping: $HOST $current -> $SERVICE"
+              fi
+            else
+              # Re-targeting silently would move a live hostname to a different service.
+              echo "::error::$HOST is already mapped to '$current', not '$SERVICE'. Refusing to re-target; set retarget_from: $current to move it deliberately, or delete the mapping." >&2
+              exit 1
+            fi
+          elif [ "$DRY" = "true" ]; then
+            echo "would create domain mapping: $HOST -> $SERVICE ($REGION)"
+          else
+            gcloud beta run domain-mappings create --service="$SERVICE" --domain="$HOST" \
+              --region="$REGION" --project="$PROJECT" --quiet >/dev/null
+            echo "Created domain mapping: $HOST -> $SERVICE"
+          fi
 
       - name: Upsert the DNS record
         env:
@@ -388,14 +477,16 @@ jobs:
           echo "Origin Rule set: $HOST -> host_header $RUN_URL"
 
       - name: Wait for the managed certificate
-        if: inputs.mode == 'dns-only' && inputs.wait_for_certificate && !inputs.dry_run
+        if: inputs.mode == 'dns-only' && (inputs.wait_for_certificate || inputs.retarget_from != '') && !inputs.dry_run
         env:
           HOST:     ${{ inputs.hostname }}
           REGION:   ${{ inputs.gcp_region }}
           PROJECT:  ${{ inputs.gcp_project }}
           TIMEOUT:  ${{ inputs.certificate_timeout_seconds }}
           INTERVAL: ${{ inputs.certificate_poll_seconds }}
+          RETARGET_FROM: ${{ inputs.retarget_from }}
         run: |
+          if [ -n "$RETARGET_FROM" ] && [ "$INTERVAL" -lt 30 ]; then INTERVAL=30; fi
           deadline=$(( $(date +%s) + TIMEOUT ))
           while true; do
             json=$(gcloud beta run domain-mappings describe --domain="$HOST" --region="$REGION" \
@@ -407,6 +498,11 @@ jobs:
               break
             fi
             if [ "$(date +%s)" -ge "$deadline" ]; then
+              if [ -n "$RETARGET_FROM" ]; then
+                # The old service is already unmapped, so "later" is an outage, not a warning.
+                echo "::error::Timed out after ${TIMEOUT}s waiting for the managed cert on $HOST. The hostname is down until it issues; see the map-back command in the summary." >&2
+                exit 1
+              fi
               # NOT a failure: the mapping and the DNS record are already correct, and the
               # cert lands on Google's schedule. Failing here would make a green run mean
               # "Google was quick today".
@@ -442,9 +538,22 @@ jobs:
           HOST: ${{ inputs.hostname }}
           PATH_: ${{ inputs.smoke_path }}
           WANT: ${{ inputs.smoke_status }}
+          RETARGET_FROM: ${{ inputs.retarget_from }}
         run: |
           url="https://${HOST}${PATH_}"
           code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo "000")
+          if [ -n "$RETARGET_FROM" ]; then
+            # The old service is unmapped: a probe that does not return the expected status
+            # is a down hostname, so it fails (no "still propagating" pass).
+            want="${WANT:-200}"
+            if [ "$code" != "$want" ]; then
+              echo "::error::$url returned HTTP $code, want $want, after the re-target." >&2
+              exit 1
+            fi
+            echo "T_OK=$(date +%s)" >> "$GITHUB_ENV"
+            echo "$url -> HTTP $code"
+            exit 0
+          fi
           if [ "$code" = "000" ]; then
             # DNS and cert propagation are both eventually consistent; a fresh hostname
             # routinely fails here and is fine minutes later. Surfacing beats failing.
@@ -466,11 +575,35 @@ jobs:
           SERVICE: ${{ inputs.service }}
           DRY:     ${{ inputs.dry_run }}
           VERSION: ${{ env.WORKFLOW_VERSION }}
+          RETARGET_FROM: ${{ inputs.retarget_from }}
+          REGION:  ${{ inputs.gcp_region }}
+          PROJECT: ${{ inputs.gcp_project }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
             echo "## \`${HOST}\` — mode \`${MODE}\`"
             echo ""
             if [ "$DRY" = "true" ]; then echo "**Dry run — nothing was changed.**"; echo ""; fi
+            if [ -n "$RETARGET_FROM" ] && [ -n "${T_DELETE:-}" ]; then
+              # T_DELETE / T_OK arrive via GITHUB_ENV from the Converge and Smoke steps.
+              if [ -n "${T_OK:-}" ]; then
+                win=$(( T_OK - T_DELETE ))
+                echo "- Outage window (delete to probe ok): $(( win / 60 ))m $(( win % 60 ))s"
+              else
+                echo "- Outage window: **still open**, the probe never passed after the delete."
+              fi
+              if [ "$JOB_STATUS" != "success" ]; then
+                echo ""
+                echo "**The run failed after the old mapping was deleted. There is no auto-rollback.** To map back to \`${RETARGET_FROM}\` (a second cert issue):"
+                echo ""
+                echo '```bash'
+                echo "# the delete finds nothing when the create is what failed; that is fine"
+                echo "gcloud beta run domain-mappings delete --domain=${HOST} --region=${REGION} --project=${PROJECT} --quiet || true"
+                echo "gcloud beta run domain-mappings create --service=${RETARGET_FROM} --domain=${HOST} --region=${REGION} --project=${PROJECT}"
+                echo '```'
+              fi
+              echo ""
+            fi
             if [ "$MODE" = "dns-only" ]; then
               echo "- Domain mapping: \`${HOST}\` → \`${SERVICE}\`"
               echo "- DNS: CNAME → \`ghs.googlehosted.com\` (DNS-only)"

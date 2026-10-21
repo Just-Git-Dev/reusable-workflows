@@ -2,8 +2,13 @@
 
 ## Index
 
-120 entries total — 110 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+125 entries total — 115 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [v4.1.0 review fixes — composite-action inputs and the remap fail closed](#2026-10-21--v410-review-fixes--composite-action-inputs-and-the-remap-fail-closed)
+- `2026-10-21` — [sync-bundle-key + rotate-worker-signing-secret as composite actions; rotator secret via env (RCA)](#2026-10-21--sync-bundle-key--rotate-worker-signing-secret-as-composite-actions-rotator-secret-via-env-rca)
+- `2026-10-21` — [pinned gate allows own composite actions at an exact vX.Y.Z tag](#2026-10-21--pinned-gate-allows-own-composite-actions-at-an-exact-vxyz-tag)
+- `2026-10-21` — [deploy-cloud-run image input — digest only](#2026-10-21--deploy-cloud-run-image-input--digest-only)
+- `2026-10-21` — [bootstrap-cf-service retarget_from — a remap fails where a fresh map warns](#2026-10-21--bootstrap-cf-service-retarget_from--a-remap-fails-where-a-fresh-map-warns)
 - `2026-10-21` — [sync-bundle-key: environment secrets do not reach the sync from another organisation (doc corrected)](#2026-10-21--sync-bundle-key-environment-secrets-do-not-reach-the-sync-from-another-organisation-doc-corrected)
 - `2026-10-21` — [Doc fixes: app key names, rollback bundle_secret, sync never destroys](#2026-10-21--doc-fixes-app-key-names-rollback-bundle_secret-sync-never-destroys)
 - `2026-10-21` — [repos-* workflows: one App key, no second REPO_ADMIN key (owner)](#2026-10-21--repos--workflows-one-app-key-no-second-repo_admin-key-owner)
@@ -236,6 +241,141 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — v4.1.0 review fixes — composite-action inputs and the remap fail closed
+
+**What:** the fixes from the pre-merge review of v4.1.0, made before anything shipped. They tighten
+the rules for composite actions and the remap so that a mistake fails closed.
+
+- **Secret names from `toJSON(secrets)` are matched case-insensitively.** GitHub secret names are
+  case-insensitive and are often stored in uppercase. The exception is the caller-listed
+  `secret_keys_file` keys, which are matched exactly because they become the payload's key names.
+- **Boolean action inputs accept only `true` or `false`, and a first step validates them.** A
+  composite input is a string. GitHub's `if:` compares case-insensitively and bash `=` does not, so
+  `dry_run: True` used to be dry for one and live for the other, and `yes`/`1` were live writes.
+- **The remap records `T_DELETE` only after the delete succeeded.** Before this fix, a failed
+  delete (a missing `run.domainmappings.delete`) printed a map-back command that would have deleted
+  the mapping that still works. The map-back now works in both states: `delete … || true`, then
+  `create`.
+- **The CAA check runs before Converge.** Its only purpose is to warn before the outage starts.
+- **A checkout inside a composite action goes to a dedicated workspace subdirectory**
+  (`.rw-sync-bundle-key`), never the workspace root. The root checkout's `clean: true` wiped the
+  caller's own tree, which the old isolated reusable job never had to care about.
+- **A digest reference needs three path segments** (`<project>/<repo>/<name>`), and the pin gate's
+  own-action name must start with an alphanumeric character.
+
+## 2026-10-21 — sync-bundle-key + rotate-worker-signing-secret as composite actions; rotator secret via env (RCA)
+
+**What:** `sync-bundle-key` and `rotate-worker-signing-secret` are now composite actions
+(`actions/<name>/action.yml` plus one shell script per step). The old reusable workflows are thin
+wrappers whose single job calls the action at the same release tag. Existing callers keep the
+same inputs, secrets and outputs.
+
+**Why the action is the single source of truth:** an environment-level secret cannot cross an org
+boundary into a reusable workflow (proven in PR #151). It does reach a step of the job that
+declares `environment:`, and a composite action runs as steps of the CALLER's job. So a caller in
+another org runs the action in its own environment job and passes `secrets_json: ${{ toJSON(secrets) }}`.
+Keeping both a workflow body and an action body would let the two drift apart. The logic therefore
+lives once, in scripts, which `make shellcheck` lints (inline action `run:` bodies are not
+linted). The workflow stays as a wrapper so the existing callers' contract does not break.
+WIF is unchanged, because the bindings key on `attribute.repository` (the caller repo) either way.
+
+**Accepted limits:** a composite action cannot declare `concurrency:`, and no context exposes the
+caller job's concurrency group. The action therefore always names the group the caller must
+declare (`bundle-write-<project>-<secret>`). A direct caller gets it as a `::warning::`. A run
+through our own wrapper, which declares the group itself and passes `concurrency_declared: 'true'`,
+gets a `::notice::` (owner ruling, 2026-10-21). The action cannot read its own job's environment name either, so the caller
+repeats it in the `environment` input for the branch-policy guard.
+
+**D also fixes a secret-handling bug (RCA).**
+
+
+**Symptom.** `rotate-worker-signing-secret.yml` wrote `${{ steps.gen.outputs.new_secret }}` (and
+`${{ steps.cur.outputs.old_secret }}`) directly inside four `run:` bodies (bundle patch, the Worker
+PRIMARY and PREVIOUS slot pushes). No run failed; the value was part of the rendered script text.
+
+**Root cause.** GitHub substitutes `${{ }}` expressions into the step's script source BEFORE bash
+starts. The secret therefore sat in the script text (anywhere the rendered script is shown or
+logged, e.g. debug logging), masking only protected the log lines, and a value holding quotes,
+`$(...)`, backticks or a backslash would have been parsed as shell, or as broken JSON in the Worker
+payload. Today's value is `openssl rand -hex` output, so it was safe by accident, but the old
+secret is read from the bundle and is arbitrary.
+
+**Why it wasn't caught.** The step-body tests extract a body and run it with env vars; a body with
+an unresolved `${{ }}` was never executed against a hostile value, and no check forbade expressions
+in `run:`. zizmor's template-injection audit does not flag step OUTPUTS that are known-safe-looking.
+The value being hex hid the problem in practice.
+
+**Fix.** The logic moved into `actions/rotate-worker-signing-secret/*.sh`. The new and old secrets
+and the Cloudflare token reach scripts only through `env:` (`NEW_SECRET`, `OLD_SECRET`,
+`CF_API_TOKEN`) and are read as `"$VAR"`; they stay masked and travel between steps as heredoc
+outputs. The Worker payload is built with `jq -n --arg`, so any value is valid JSON data.
+
+**Prevention.** `tests/run_rotator_action_tests.py` (in `make step-bodies`) fails if any `${{ }}`
+appears in a `run:` of the action or wrapper, or in any script, and runs the Worker-push scripts
+with a hostile value (`a"b$(touch pwned)...`) asserting valid JSON and no execution.
+
+## 2026-10-21 — pinned gate allows own composite actions at an exact vX.Y.Z tag
+
+**What:** `scripts/check_pinned_actions.py` (the `pinned` gate) now accepts
+`Just-Git-Dev/reusable-workflows/actions/<name>@vX.Y.Z` — this repo's own composite actions at an
+exact release tag. Every other ref still needs a 40-hex SHA: third-party actions, a partial tag
+(`@v4`), a branch, a pre-release tag, a look-alike org, and our own reusable WORKFLOWS. Cases in
+`tests/run_pinned_actions_tests.py`, run by `make pinned`.
+
+**Why (owner ruling, 2026-10-21):** v4.1.0 turns `sync-bundle-key` and
+`rotate-worker-signing-secret` into composite actions wrapped by the old workflows. The wrapper
+must call the action REMOTELY (a `./` ref resolves to the caller's repo), and it cannot SHA-pin an
+action that first exists in its own release commit. The tag form is what `stamp_version.py`
+already sweeps at release, so workflow vX.Y.Z always runs action vX.Y.Z. It matches the zizmor
+"Fleet ruling 2" policy for calls into our own repo. Rejected: checking out this repo at the
+running workflow's SHA (an extra step on every run, and the context value was unverified), and a
+two-step release (v4.1.0 could not pass its own CI).
+
+**Trade-off accepted:** a tag is mutable where a SHA is not. The release flow is the only writer
+of `vX.Y.Z` tags in this repo, and consumers pin those same tags for the workflows already.
+
+## 2026-10-21 — deploy-cloud-run image input — digest only
+
+**What:** `deploy-cloud-run` gains `image`: deploy a prebuilt image, skipping docker configure,
+buildx and build & push, while keeping the full deploy path (checkout, env render, bundle pin,
+Deploy, Deployment record, manifest, summary). A new `Verify prebuilt image` step describes the
+image in Artifact Registry and fails if it is absent; the manifest's IMAGE_DIGEST falls back to it.
+
+**Why digest-only (owner ruling 4, 2026-10-21):** the use case is a gate that tests an image and
+must deploy exactly those bytes. A tag can be moved between the gate's test and this deploy; a
+digest cannot. So `image` must match
+`^[a-z0-9.-]+-docker\.pkg\.dev/[^@:[:space:]]+@sha256:[0-9a-f]{64}$` and a tag reference is refused.
+`image` + `build_only` is refused as a contradiction; `also_tag_latest`, `docker_target` and
+`build_args` are ignored with a notice (`context`/`dockerfile`/`platforms` have defaults, so they
+cannot be detected as set and are ignored silently).
+
+**Not done, on purpose:** comparing the image's OCI revision label with the checked-out commit —
+images from other build systems may carry none. The caller passes the same tag for both. Use
+`promote-image` instead when only the image should move (it skips env/bundle/labels/manifest).
+
+## 2026-10-21 — bootstrap-cf-service retarget_from — a remap fails where a fresh map warns
+
+**What:** `bootstrap-cf-service` gains `retarget_from`: when the hostname is mapped to exactly that
+service, the run pre-flights the target (exists, Ready, 100% traffic on its latest revision, its
+run.app URL answers `smoke_path` with `smoke_status || 200`), deletes the mapping, creates it on
+`service`, waits for the managed cert and probes the hostname. Default `''` refuses as before.
+
+**Why a remap FAILS where a fresh map only WARNS:** on a fresh map nothing was serving the hostname
+before, so a slow cert means "not live yet", and a warning keeps a green run from meaning "Google was
+quick today". On a remap the old service is already unmapped when the cert wait starts, so every
+minute past the timeout is an outage — the run fails, and the summary prints the outage window and
+the exact map-back command. There is no auto-rollback: mapping back is a second cert issue with the
+same outage, so it is the operator's call, not the workflow's.
+
+**Owner rulings (2026-10-21), not re-litigated:** reuse `smoke_path`/`smoke_status` (no
+`probe_path`/`expected_status`; `smoke_path` required with `retarget_from`); reuse
+`certificate_timeout_seconds` (default 1800; docs advise 3600 for a remap) — no new timeout input.
+Inferred, not in the ruling: `retarget_from` refused with `mode: proxied` (no domain mapping to move);
+a remap forces the cert wait even with `wait_for_certificate: false`, and floors the poll at 30s.
+A re-run after a completed remap (`current == service`) is a no-op whose cert wait and probe stay
+strict, because strictness keys off the input. CAA records that exclude `pki.goog` only warn.
+IAM: `run.domainmappings.delete` + `run.services.get` via a documented custom role, never `run.admin`.
 
 ## 2026-10-21 — sync-bundle-key: environment secrets do not reach the sync from another organisation (doc corrected)
 

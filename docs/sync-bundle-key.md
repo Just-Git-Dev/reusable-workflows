@@ -190,7 +190,7 @@ Values still come only from the owning repo's workflow, never by hand.
 | `strict_values` | input | **`true`** (was `false`) | refuse non-env-name keys, empty/whitespace-only values and placeholders (even at `min_value_length: 0`) |
 | `keep_enabled_count` | input | `'1'` | a **floor** under the [keep-set](#version-retention--the-keep-set): at least this many newest ENABLED versions stay; minimum `1` |
 | `environment` | input | `''` | GitHub environment the job runs in (`environment: ${{ inputs.environment }}`). Empty = no environment, as in v3. When set, step S0 refuses an environment without a deployment branch policy |
-| `payload_source` | input | `caller` | `caller` = the `payload_json` secret below. `environment` = read the keys named in `secret_keys_file` from the job's environment secrets. **UNPROVEN, see below** |
+| `payload_source` | input | `caller` | `caller` = the `payload_json` secret below. `environment` = read the keys named in `secret_keys_file` from the job's environment secrets. Does not work cross-org through this workflow; use the [action](sync-bundle-key-action.md) |
 | `mode` | input | **`replace`** (was implicit merge) | `replace` or `merge`; see [Mode](#mode-replace-and-removal-by-list) |
 | `secret_keys_file` | input | `deploy/secret-keys.txt` | committed key-name list in the caller's checkout; required when `mode: replace` |
 | `confirm_removed` | input | `''` | CSV; a live run that drops keys refuses unless this equals the dropped set exactly |
@@ -208,18 +208,21 @@ Values still come only from the owning repo's workflow, never by hand.
 > as an input does not change that. If a repo-level copy of `X` also exists, the bundle silently
 > gets that copy, which may be stale. Use `caller` only with repo- or org-level secrets.
 
-**`payload_source: environment` does NOT work from a caller in another organisation** (proven
-by two cross-org dry runs on 2026-10-21). The callee job did run in the caller's environment
-(step S0 passed), but refused with "No environment secret for listed key(s): ...", both for a
-key held in the environment and for a key held only at repo level. It fails closed and writes
-nothing. Why: GitHub gives a callee job the environment's value only for a secret the caller
-PASSES ("The caller workflow must still pass the secret"; one not passed "resolves to an empty
-string"). This workflow reads `toJSON(secrets)` but declares only `payload_json`, and
-`secrets: inherit` works within one organisation only. A same-org caller using
-`secrets: inherit` is expected to work, but that is not demonstrated either.
+**`payload_source: environment` through this reusable WORKFLOW does NOT work from a caller in
+another organisation** (proven by two cross-org dry runs on 2026-10-21, PR #151). The callee job
+did run in the caller's environment (step S0 passed), but refused with "No environment secret
+for listed key(s): ...", both for a key held in the environment and for a key held only at repo
+level. It fails closed and writes nothing. Why: GitHub gives a callee job the environment's value
+only for a secret the caller PASSES ("The caller workflow must still pass the secret"; one not
+passed "resolves to an empty string"), and `secrets: inherit` works within one organisation only.
 
-**So today there is NO working path for environment-level secrets from another organisation.**
-Keep values that a v4 sync must read at repo level there. A design change is tracked in TODO.md.
+**Use the composite action instead.** [`actions/sync-bundle-key`](sync-bundle-key-action.md)
+runs as a step of the CALLER's own job, which declares `environment:`, so the environment's
+secrets reach it as `secrets_json: ${{ toJSON(secrets) }}` with no organisation boundary in the
+way. This workflow is now a thin wrapper that calls that same action, with the same inputs,
+secret and outputs; the logic lives once, in the action's scripts. A cross-org caller needing
+environment-level secrets copies the job template in
+[sync-bundle-key-action.md](sync-bundle-key-action.md), including its `concurrency:` block.
 
 The `actions: read` permission is required in the caller (step S0 reads the environment).
 

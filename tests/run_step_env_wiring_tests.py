@@ -17,6 +17,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from action_steps import job_steps  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 WF = ROOT / ".github" / "workflows"
 V4 = ["sync-bundle-key.yml", "rotate-signing-keypair.yml", "rotate-worker-signing-secret.yml",
@@ -112,7 +115,8 @@ def main():
         top = set((doc.get("env") or {}))
         for jid, job in (doc.get("jobs") or {}).items():
             jenv = top | set((job.get("env") or {}))
-            for i, st in enumerate(job.get("steps") or []):
+            # A wrapper job (sync-bundle-key.yml) is checked through its composite action's steps.
+            for i, st in enumerate(job_steps(WF / name, jid) if job.get("steps") else []):
                 body = st.get("run")
                 if not body:
                     continue
