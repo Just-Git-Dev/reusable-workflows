@@ -1,0 +1,73 @@
+name: Lint deploy env files (reusable)
+
+# Lints a service repo's committed `deploy/env.<stage>.yaml` files and
+# `deploy/secret-keys.txt` before they are deployed. Reads files only: no cloud
+# call, no credential. Rules and rationale: docs/deploy-env-lint.md. The rules
+# live in scripts/deploy_env_lint.py, fetched at this workflow's own version
+# (a called workflow cannot discover its ref at runtime, hence the stamp).
+
+on:
+  workflow_call:
+    inputs:
+      deploy_dir:
+        description: 'Directory in the caller repo holding env.<stage>.yaml and secret-keys.txt.'
+        type: string
+        required: false
+        default: 'deploy'
+    outputs:
+      files_examined:
+        description: 'Number of env files the lint examined (the run fails when this is zero).'
+        value: ${{ jobs.lint.outputs.files_examined }}
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.9.0
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        # Explicit bash => `-eo pipefail`; the implicit default is only `-e`.
+        shell: bash
+    env:
+      DEPLOY_DIR: ${{ inputs.deploy_dir }}
+    outputs:
+      files_examined: ${{ steps.lint.outputs.files_examined }}
+    steps:
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the lint script at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .deploy-env-lint-src
+          persist-credentials: false
+
+      - name: Lint
+        id: lint
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          rc=0
+          python3 .deploy-env-lint-src/scripts/deploy_env_lint.py --root "$GITHUB_WORKSPACE" \
+            --deploy-dir "$DEPLOY_DIR" | tee lint.out || rc=$?
+          n=$(sed -n 's/^deploy-env-lint: examined \([0-9]*\) env file.*/\1/p' lint.out | head -n1)
+          echo "files_examined=${n:-0}" >> "$GITHUB_OUTPUT"
+          {
+            echo '### deploy-env-lint'
+            echo '```'
+            cat lint.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f lint.out
+          exit "$rc"

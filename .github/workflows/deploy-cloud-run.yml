@@ -175,6 +175,38 @@ on:
         type: boolean
         required: false
         default: false
+      env_file:
+        description: >-
+          Path, in the checkout, of the YAML env file of plain (non-secret) config, deployed
+          with `gcloud --env-vars-file`. Empty ⇒ v3 behaviour, no env file.
+        type: string
+        required: false
+        default: ''
+      generated_env:
+        description: 'Newline-separated KEY=VALUE pairs the caller produces (e.g. APP_VERSION), merged into the env file. A key also in the file is refused.'
+        type: string
+        required: false
+        default: ''
+      env_secret:
+        description: 'Secret Manager bundle secret (a dotenv blob, e.g. <deployable>-env) mounted as a file. Empty ⇒ no bundle handling.'
+        type: string
+        required: false
+        default: ''
+      env_mount_path:
+        description: 'Path where the service mounts the bundle (required with env_secret).'
+        type: string
+        required: false
+        default: ''
+      pin_env:
+        description: 'Keep the bundle mounted at a numbered version (never latest). false skips pinning and warns.'
+        type: boolean
+        required: false
+        default: true
+      manifest_retention_days:
+        description: 'Retention, in days, of the config-manifest.json artifact (capped by the repository maximum).'
+        type: number
+        required: false
+        default: 400
     outputs:
       image:
         description: 'Fully-qualified image reference that was built.'
@@ -262,8 +294,18 @@ jobs:
         # so forward-only can read back "what is live" for this environment.
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
       # Forward-only: reject an out-of-order (older) deploy before the build.
-      # Uses github.token only (no cloud auth), so it runs early and fails fast.
+      # The baseline is the env's latest successful GitHub Deployment; when there is none
+      # (e.g. a renamed environment) it falls back to the service's jgd_commit label, which
+      # needs the cloud auth above.
       - name: Forward-only guard
         # build_only rolls nothing, so there is no environment lineage to protect.
         if: ${{ inputs.enforce_forward_only && !inputs.build_only }}
@@ -272,6 +314,9 @@ jobs:
           REPO: ${{ github.repository }}
           ENVIRONMENT: ${{ inputs.environment }}
           HEAD: ${{ steps.commit.outputs.sha }}
+          SERVICE: ${{ inputs.service }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
         run: |
           if [ -z "$ENVIRONMENT" ]; then
             echo "::error::enforce_forward_only requires 'environment' (to read the live commit)." >&2
@@ -289,7 +334,15 @@ jobs:
             fi
           done
           if [ -z "$BASE" ]; then
-            echo "::notice::forward-only: no prior successful deployment for '${ENVIRONMENT}' — allowing (no baseline)."
+            # No successful Deployment: fall back to the live revision's commit label.
+            BASE="$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" \
+                      --format='value(metadata.labels.jgd_commit)' 2>/dev/null || echo '')"
+            if [ -n "$BASE" ]; then
+              echo "::notice::forward-only: no successful Deployment for '${ENVIRONMENT}'; baseline is the service's jgd_commit label (${BASE})."
+            fi
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::notice::forward-only: no prior successful deployment or jgd_commit label for '${ENVIRONMENT}' — allowing (no baseline)."
             exit 0
           fi
           if [ "$BASE" = "$HEAD" ]; then
@@ -310,20 +363,13 @@ jobs:
               exit 1 ;;
           esac
 
-      - name: Authenticate to GCP via WIF
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ inputs.wif_provider }}
-          service_account: ${{ inputs.service_account }}
-
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
       - name: Configure docker for Artifact Registry
         run: gcloud auth configure-docker "${{ inputs.gcp_region }}-docker.pkg.dev" --quiet
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build & push image
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ inputs.context }}
@@ -340,9 +386,119 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Runtime config (v4): see docs/deploy-cloud-run.md "Runtime config (v4)".
+      - name: Render env file
+        id: render
+        if: ${{ !inputs.build_only && (inputs.env_file != '' || inputs.generated_env != '') }}
+        env:
+          ENV_FILE: ${{ inputs.env_file }}
+          GENERATED_ENV: ${{ inputs.generated_env }}
+        run: |
+          # Pure merge of env_file + generated_env into one flat YAML for --env-vars-file.
+          # Secret-looking keys are refused (names only, never values).
+          python3 - <<'PY'
+          import hashlib, os, re, sys
+          import yaml
+
+          out = os.path.join(os.environ["RUNNER_TEMP"], "env.rendered.yaml")
+          merged = {}
+          path = os.environ.get("ENV_FILE", "")
+          if path:
+              with open(path) as f:
+                  data = yaml.safe_load(f) or {}
+              if not isinstance(data, dict):
+                  sys.exit(f"::error::{path} must be a flat YAML mapping of KEY: value")
+              merged.update({str(k): v for k, v in data.items()})
+          gen = {}
+          for line in os.environ.get("GENERATED_ENV", "").splitlines():
+              if not line.strip():
+                  continue
+              k, sep, v = line.partition("=")
+              if not sep or not k.strip():
+                  sys.exit("::error::generated_env lines must be KEY=VALUE")
+              gen[k.strip()] = v
+          dup = sorted(set(gen) & set(merged))
+          if dup:
+              sys.exit(f"::error::key(s) in both env_file and generated_env: {', '.join(dup)}")
+          merged.update(gen)
+          bad = sorted(k for k in merged
+                       if re.search(r"PASSWORD|SECRET|TOKEN", k.upper()) or k.upper().endswith("_URL"))
+          if bad:
+              sys.exit(f"::error::secret-looking key(s) in the plain env file (put them in the bundle): {', '.join(bad)}")
+
+          def text(v):
+              if isinstance(v, bool):
+                  return "true" if v else "false"
+              return "" if v is None else str(v)
+
+          with open(out, "w") as f:
+              yaml.safe_dump({k: text(v) for k, v in sorted(merged.items())}, f, default_flow_style=False)
+          sha = hashlib.sha256(open(out, "rb").read()).hexdigest()[:8]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as g:
+              g.write(f"path={out}\nenv_sha={sha}\n")
+          PY
+
+      - name: Pin env bundle
+        id: pin
+        if: ${{ !inputs.build_only && inputs.env_secret != '' }}
+        env:
+          ENV_SECRET: ${{ inputs.env_secret }}
+          ENV_MOUNT_PATH: ${{ inputs.env_mount_path }}
+          PIN_ENV: ${{ inputs.pin_env }}
+          SERVICE: ${{ inputs.service }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+        run: |
+          if [ "$PIN_ENV" != "true" ]; then
+            echo "::warning::pin_env is false: the bundle ${ENV_SECRET} is NOT pinned to a version by this deploy." >&2
+            exit 0
+          fi
+          if [ -z "$ENV_MOUNT_PATH" ]; then
+            echo "::error::env_mount_path is required with env_secret" >&2
+            exit 1
+          fi
+          # The version the live service mounts the bundle at (empty if no service yet).
+          CUR="$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" --format=json 2>/dev/null \
+                  | jq -r --arg s "$ENV_SECRET" \
+                    '[.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]?.version][0] // ""' \
+                  || echo '')"
+          if [[ "$CUR" =~ ^[0-9]+$ ]]; then
+            N="$CUR"          # a numeric pin: a deploy never moves it
+          else
+            # latest (a v3 service) or not mounted yet: resolve the newest ENABLED version.
+            N="$(gcloud secrets versions list "$ENV_SECRET" --project="$PROJECT" \
+                   --filter='state=ENABLED' --format='value(name)' | sort -n | tail -n 1)"
+            if ! [[ "$N" =~ ^[0-9]+$ ]]; then
+              echo "::error::no ENABLED version of secret ${ENV_SECRET}" >&2
+              exit 1
+            fi
+          fi
+          {
+            echo "env_version=$N"
+            echo "update_secrets=${ENV_MOUNT_PATH}=${ENV_SECRET}:${N}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read bundle key names
+        id: bundle
+        if: ${{ !inputs.build_only && !inputs.dry_run && steps.pin.outputs.env_version != '' }}
+        env:
+          ENV_SECRET: ${{ inputs.env_secret }}
+          ENV_VERSION: ${{ steps.pin.outputs.env_version }}
+          PROJECT: ${{ inputs.gcp_project }}
+        run: |
+          # Key NAMES only (the part before '='); values never leave the pipe.
+          KEYS="$(gcloud secrets versions access "$ENV_VERSION" --secret="$ENV_SECRET" --project="$PROJECT" \
+                    | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | paste -sd, -)"
+          echo "keys=$KEYS" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to Cloud Run
         if: ${{ !inputs.build_only }}
         env:
+          ENV_RENDERED: ${{ steps.render.outputs.path }}
+          ENV_SHA: ${{ steps.render.outputs.env_sha }}
+          ENV_VERSION: ${{ steps.pin.outputs.env_version }}
+          UPDATE_SECRETS: ${{ steps.pin.outputs.update_secrets }}
+          RUN_ID: ${{ github.run_id }}
           IMAGE: ${{ steps.ref.outputs.image }}
           SERVICE: ${{ inputs.service }}
           PROJECT: ${{ inputs.gcp_project }}
@@ -354,9 +510,18 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          # Stamp the live commit as a resource label (keys are slash-free).
+          # Stamp the live commit, bundle version, env-file hash and run as resource
+          # labels (keys are slash-free). The v4 labels appear only when their input exists.
+          LABELS=""
+          [ -n "$COMMIT" ] && LABELS="jgd_commit=$COMMIT"
+          [ -n "$ENV_VERSION" ] && LABELS="${LABELS:+$LABELS,}jgd_env_version=$ENV_VERSION"
+          [ -n "$ENV_SHA" ] && LABELS="${LABELS:+$LABELS,}jgd_env_sha=$ENV_SHA"
+          [ -n "$ENV_SHA$ENV_VERSION" ] && LABELS="${LABELS:+$LABELS,}jgd_run=$RUN_ID"
           LABEL=()
-          [ -n "$COMMIT" ] && LABEL=(--update-labels="jgd_commit=$COMMIT")
+          [ -n "$LABELS" ] && LABEL=(--update-labels="$LABELS")
+          # v4 runtime config: the rendered env file and the version-pinned bundle mount.
+          [ -n "$ENV_RENDERED" ] && LABEL+=(--env-vars-file="$ENV_RENDERED")
+          [ -n "$UPDATE_SECRETS" ] && LABEL+=(--update-secrets="$UPDATE_SECRETS")
           if [ "$MODE" = "update-image" ]; then
             set -- gcloud run services update "$SERVICE" \
               --project="$PROJECT" --region="$REGION" --image="$IMAGE" "${LABEL[@]}"
@@ -412,6 +577,57 @@ jobs:
             -f state=success -f environment="$ENVIRONMENT" -f description="deploy ${IMAGE}" >/dev/null 2>&1 \
             || echo "::warning::deployment #${DEP_ID} created but status update failed." >&2
           echo "::notice::recorded GitHub Deployment #${DEP_ID} (${ENVIRONMENT} @ ${COMMIT})"
+
+      - name: Write config manifest
+        id: manifest
+        if: ${{ !inputs.build_only && !inputs.dry_run && (inputs.env_file != '' || inputs.generated_env != '' || inputs.env_secret != '') }}
+        env:
+          COMMIT: ${{ steps.commit.outputs.sha }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          ENV_VERSION: ${{ steps.pin.outputs.env_version }}
+          GENERATED_ENV: ${{ inputs.generated_env }}
+          BUNDLE_KEYS: ${{ steps.bundle.outputs.keys }}
+          RENDERED_PATH: ${{ steps.render.outputs.path }}
+          SERVICE: ${{ inputs.service }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+        run: |
+          # The revision this deploy created; the rendered file is the non-secret config.
+          REVISION="${REVISION:-$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" \
+                      --format='value(status.latestReadyRevisionName)' 2>/dev/null || echo '')}"
+          export REVISION
+          RENDERED="${RENDERED:-}"
+          if [ -z "$RENDERED" ] && [ -n "$RENDERED_PATH" ]; then RENDERED="$(cat "$RENDERED_PATH")"; fi
+          export RENDERED
+          python3 - <<'PY'
+          import json, os
+          import yaml
+
+          rendered = yaml.safe_load(os.environ.get("RENDERED", "")) or {}
+          gen = {l.partition("=")[0].strip() for l in os.environ.get("GENERATED_ENV", "").splitlines() if "=" in l}
+          keys = [{"name": k, "source": "generated" if k in gen else "file", "value": str(v)}
+                  for k, v in sorted(rendered.items())]
+          keys += [{"name": k, "source": "bundle"}
+                   for k in sorted(filter(None, os.environ.get("BUNDLE_KEYS", "").split(",")))]
+          ver = os.environ.get("ENV_VERSION", "")
+          m = {"commit": os.environ["COMMIT"], "image_digest": os.environ.get("IMAGE_DIGEST", ""),
+               "revision": os.environ.get("REVISION", ""),
+               "env_secret_version": int(ver) if ver.isdigit() else None, "keys": keys}
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "config-manifest.json"), "w") as f:
+              json.dump(m, f, indent=2)
+          summary = ["", "### Config manifest", "", "| key | source | value |", "|---|---|---|"]
+          summary += [f"| `{k['name']}` | {k['source']} | {('`' + k['value'] + '`') if 'value' in k else ''} |" for k in keys]
+          with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
+              f.write("\n".join(summary) + "\n")
+          PY
+
+      - name: Upload config manifest
+        if: ${{ steps.manifest.conclusion == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: config-manifest
+          path: ${{ runner.temp }}/config-manifest.json
+          retention-days: ${{ inputs.manifest_retention_days }}
 
       - name: Get service URL
         id: url

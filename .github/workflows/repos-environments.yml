@@ -1,0 +1,251 @@
+name: Repos environments (reusable)
+
+# F9 of the repos-as-code family (docs/repos-register.md, docs/repos-environments.md): report or enforce the GitHub environments, and their deployment branch/tag rules, that the register's `environments:` key lists.
+#
+# EVERY EDIT TO THIS FILE IS A SECURITY CHANGE. What bounds it:
+#   - The decision is made by scripts/repos_env_plan.py, a pure planner checked out from this repo at
+#     WORKFLOW_VERSION. Its vocabulary has no verb that deletes an environment or writes a secret,
+#     variable, reviewer or wait timer; this workflow additionally refuses any action outside the
+#     allow-lists below.
+#   - The job refuses to start unless `environment` is `repo-admin` and the ref is the caller's
+#     main branch, BEFORE any token is minted. The App key is one declared secret, passed by name,
+#     and is named only as the `private-key` of the two mint steps.
+#   - A READ token (metadata:read, actions:read) is minted first and is all a `report` run ever
+#     holds. The administration:write token is minted only when the plan holds at least one write
+#     action, narrowed to exactly the repos those actions are for.
+#   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
+#   - No step runs caller code: only the planner and the pinned requirements of this repo.
+
+on:
+  workflow_call:
+    inputs:
+      register:
+        description: 'Path of the register in the caller repo (a plain relative path)'
+        type: string
+        required: false
+        default: repos.yaml
+      environment:
+        description: 'The caller environment holding the App key; must be repo-admin'
+        type: string
+        required: false
+        default: repo-admin
+      app_id:
+        description: 'The GitHub App id (not secret) that creates the environments'
+        type: string
+        required: true
+    secrets:
+      app_key:
+        description: 'The private key of the App. Pass it BY NAME (inherit is same-org only)'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
+  # the tag. A called workflow cannot discover its own ref at runtime.
+  WORKFLOW_VERSION: v3.9.0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  repos:
+    name: repos-environments
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse unless repo-admin on the main branch
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          REF: ${{ github.ref }}
+          REGISTER: ${{ inputs.register }}
+        run: |
+          set -euo pipefail
+          [ "$ENVIRONMENT" = "repo-admin" ] || { echo "::error::environment is '$ENVIRONMENT', this workflow runs only in repo-admin"; exit 1; }
+          [ "$REF" = "refs/heads/main" ] || { echo "::error::ref is '$REF'; repos-as-code runs only on refs/heads/main"; exit 1; }
+          [[ "$REGISTER" =~ ^[A-Za-z0-9._/-]+$ && "$REGISTER" != *..* && "$REGISTER" != /* ]] || { echo "::error::register '$REGISTER' is not a plain relative path"; exit 1; }
+
+      - name: Checkout the caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout the planner at this workflow's version
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Just-Git-Dev/reusable-workflows
+          ref: ${{ env.WORKFLOW_VERSION }}
+          path: .repos-src
+          persist-credentials: false
+
+      - name: Install the pinned planner dependencies
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet --disable-pip-version-check -r .repos-src/requirements-ci.txt
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Validate the register (F1) and list the repos and environments to look up
+        id: reg
+        env:
+          REGISTER: ${{ inputs.register }}
+        run: |
+          set -euo pipefail
+          python3 .repos-src/scripts/repos_plan.py --feature register --register "$REGISTER" > /dev/null
+          python3 - <<'PY'
+          import json, os, yaml
+          reg = yaml.safe_load(open(os.environ["REGISTER"]))
+          wanted = {}
+          for r in reg["repos"]:
+              if isinstance(r.get("environments"), list):
+                  wanted[r["name"]] = [e["name"] for e in r["environments"]
+                                       if isinstance(e, dict) and isinstance(e.get("name"), str)]
+          if not wanted:
+              print("::error::no repo in the register has an environments: key; nothing to examine")
+              raise SystemExit(1)
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "wanted.json"), "w") as f:
+              json.dump(wanted, f)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("org=%s\n" % reg["org"])
+              f.write("repos=%s\n" % ",".join(wanted))
+          PY
+
+      - name: Mint App token (READ-ONLY)
+        id: app-ro
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.app_key }}
+          owner: ${{ steps.reg.outputs.org }}
+          repositories: ${{ steps.reg.outputs.repos }}
+          permission-metadata: read
+          permission-actions: read
+
+      - name: Fetch live state
+        env:
+          GH_TOKEN: ${{ steps.app-ro.outputs.token }}
+          ORG: ${{ steps.reg.outputs.org }}
+        run: |
+          set -euo pipefail
+          state='{"repos":{}}'
+          while IFS= read -r n; do
+            [ -n "$n" ] || continue
+            if body=$(gh api "repos/$ORG/$n" 2> "$RUNNER_TEMP/gh.err"); then
+              entry=$(jq -c --arg n "$n" 'if (.name | ascii_downcase) == ($n | ascii_downcase) then {exists: true, environments: {}} else {exists: false} end' <<<"$body")
+            elif grep -q "HTTP 404" "$RUNNER_TEMP/gh.err"; then
+              entry='{"exists":false}'
+            else
+              cat "$RUNNER_TEMP/gh.err"; echo "::error::could not read repo $n"; exit 1
+            fi
+            if [ "$(jq -r .exists <<<"$entry")" = "true" ]; then
+              envs=$(gh api "repos/$ORG/$n/environments" --paginate --jq '.environments[] | {name, custom: (.deployment_branch_policy.custom_branch_policies // false)}' | jq -cs '.')
+              while IFS= read -r e; do
+                [ -n "$e" ] || continue
+                custom=$(jq -r '.[] | select(.name == $e) | .custom' --arg e "$e" <<<"$envs")
+                pols='[]'
+                if [ "$custom" = "true" ]; then
+                  enc=$(jq -rn --arg e "$e" '$e | @uri')
+                  pols=$(gh api "repos/$ORG/$n/environments/$enc/deployment-branch-policies" --paginate --jq '.branch_policies[] | {name, type: (.type // "branch")}' | jq -cs '.')
+                fi
+                entry=$(jq -c --arg e "$e" --argjson c "$custom" --argjson p "$pols" '.environments[$e] = {custom_branch_policies: $c, policies: $p}' <<<"$entry")
+              done < <(jq -r '.[].name' <<<"$envs")
+            fi
+            state=$(jq -c --arg n "$n" --argjson e "$entry" '.repos[$n] = $e' <<<"$state")
+          done < <(jq -r 'keys[]' "$RUNNER_TEMP/wanted.json")
+          echo "$state" > "$RUNNER_TEMP/state.json"
+
+      - name: Plan
+        id: plan
+        env:
+          REGISTER: ${{ inputs.register }}
+        run: |
+          set -euo pipefail
+          if ! python3 .repos-src/scripts/repos_env_plan.py --feature environments --register "$REGISTER" --state "$RUNNER_TEMP/state.json" > "$RUNNER_TEMP/plan.json" 2> "$RUNNER_TEMP/plan.err"; then
+            sed 's/^error: /::error::/' "$RUNNER_TEMP/plan.err"
+            exit 1
+          fi
+          # Defence in depth: nothing outside this feature's verbs may appear in the plan.
+          bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","unmanaged-environment","create-environment","add-branch-policy","remove-branch-policy"] | index($a) | not)] | length' "$RUNNER_TEMP/plan.json")
+          [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list"; exit 1; }
+          writes=$(jq '[.[] | select(.action as $a | ["create-environment","add-branch-policy","remove-branch-policy"] | index($a))] | length' "$RUNNER_TEMP/plan.json")
+          examined=$(jq '[.[].repo] | unique | length' "$RUNNER_TEMP/plan.json")
+          envs=$(jq '[.[] | [.repo, (.details.environment // "")] | select(.[1] != "")] | unique | length' "$RUNNER_TEMP/plan.json")
+          echo "writes=$writes" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Repos environments"
+            echo
+            echo "Examined **$examined** repo(s) and **$envs** environment(s); **$writes** write action(s) in the plan."
+            echo
+            echo "| repo | action | details |"
+            echo "|---|---|---|"
+            jq -r '.[] | "| \(.repo) | \(.action) | `\(.details | tojson | gsub("[|]"; "/"))` |"' "$RUNNER_TEMP/plan.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$examined" != "0" ] || { echo "::error::no repo with an environments: key was examined"; exit 1; }
+
+      - name: Compute write targets
+        id: targets
+        run: |
+          set -euo pipefail
+          # The write token is narrowed to exactly the repos the plan writes to (the planner only
+          # plans writes for repos that exist). An EMPTY list would mean ALL repos to the token
+          # action, so the mint and apply steps below run only when this list is non-empty.
+          targets=$(jq -r '[.[] | select(.action as $a | ["create-environment","add-branch-policy","remove-branch-policy"] | index($a)) | .repo] | reduce .[] as $r ([]; if index($r) then . else . + [$r] end) | join(",")' "$RUNNER_TEMP/plan.json")
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token (administration:write)
+        id: app-rw
+        if: ${{ steps.targets.outputs.targets != '' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.app_key }}
+          owner: ${{ steps.reg.outputs.org }}
+          repositories: ${{ steps.targets.outputs.targets }}
+          permission-metadata: read
+          permission-administration: write
+
+      - name: Apply the write actions in order
+        if: ${{ steps.targets.outputs.targets != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-rw.outputs.token }}
+          ORG: ${{ steps.reg.outputs.org }}
+        run: |
+          set -euo pipefail
+          applied=0
+          declare -A ready
+          # PUT is idempotent: it creates the environment, or switches custom branch policies on.
+          ensure_env() {
+            local repo=$1 env=$2
+            [ -z "${ready["$repo/$env"]:-}" ] || return 0
+            jq -n '{deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}' \
+              | gh api -X PUT "repos/$ORG/$repo/environments/$env" --input - > /dev/null
+            ready["$repo/$env"]=1
+          }
+          while IFS= read -r a; do
+            repo=$(jq -r .repo <<<"$a")
+            verb=$(jq -r .action <<<"$a")
+            d=$(jq -c .details <<<"$a")
+            env=$(jq -r '.environment // ""' <<<"$d")
+            case "$verb" in
+              create-environment)
+                ensure_env "$repo" "$env" ;;
+              add-branch-policy)
+                ensure_env "$repo" "$env"
+                gh api -X POST "repos/$ORG/$repo/environments/$env/deployment-branch-policies" \
+                  -f "name=$(jq -r .name <<<"$d")" -f "type=$(jq -r .type <<<"$d")" > /dev/null ;;
+              remove-branch-policy)
+                pname=$(jq -r .name <<<"$d"); ptype=$(jq -r .type <<<"$d")
+                pid=$(gh api "repos/$ORG/$repo/environments/$env/deployment-branch-policies" --paginate --jq '.branch_policies[]' | jq -rs --arg n "$pname" --arg t "$ptype" '[.[] | select(.name == $n and (.type // "branch") == $t) | .id][0] // empty')
+                [ -n "$pid" ] || { echo "::error::policy $pname ($ptype) not found on $repo/$env"; exit 1; }
+                gh api -X DELETE "repos/$ORG/$repo/environments/$env/deployment-branch-policies/$pid" > /dev/null ;;
+              *) continue ;;
+            esac
+            applied=$((applied + 1))
+            echo "applied $verb on $repo"
+          done < <(jq -c '.[]' "$RUNNER_TEMP/plan.json")
+          echo "Applied **$applied** write action(s)." >> "$GITHUB_STEP_SUMMARY"
