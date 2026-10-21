@@ -2,8 +2,9 @@
 
 ## Index
 
-125 entries total — 115 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+126 entries total — 116 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [RCA: release stamp skipped action pins inside workflows](#2026-10-21--rca-release-stamp-skipped-action-pins-inside-workflows)
 - `2026-10-21` — [v4.1.0 review fixes — composite-action inputs and the remap fail closed](#2026-10-21--v410-review-fixes--composite-action-inputs-and-the-remap-fail-closed)
 - `2026-10-21` — [sync-bundle-key + rotate-worker-signing-secret as composite actions; rotator secret via env (RCA)](#2026-10-21--sync-bundle-key--rotate-worker-signing-secret-as-composite-actions-rotator-secret-via-env-rca)
 - `2026-10-21` — [pinned gate allows own composite actions at an exact vX.Y.Z tag](#2026-10-21--pinned-gate-allows-own-composite-actions-at-an-exact-vxyz-tag)
@@ -241,6 +242,32 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — RCA: release stamp skipped action pins inside workflows
+
+**RCA — the release stamp did not sweep action pins inside workflows (caught before v4.1.0 shipped).**
+
+**Symptom.** Running `stamp_version.py v4.1.0` left both new wrapper workflows calling
+`Just-Git-Dev/reusable-workflows/actions/<name>@v4.0.0`, and `--check --expect v4.1.0` still
+reported the tree as consistent. Released as it was, workflow v4.1.0 would have called the action
+at v4.0.0, where it does not exist, so every run of both wrappers would have failed.
+
+**Root cause.** `scan()` and `sweep()` collected `…@vX.Y.Z` pins only from `doc_files()` (docs/,
+README, AGENTS). Until v4.1.0 no published workflow called this repo by tag. The one self-call,
+`release-plan.yml`, pins a SHA, so pins in docs were all that existed.
+
+**Why it wasn't caught.** The plan and the C builder both stated that the stamp "sweeps
+`actions/<name>@vX.Y.Z`". That was true of the regex and false of the set of files it was applied
+to. Nobody checked the file set, and no test asserted that a workflow file is swept. The pre-merge
+review accepted the same claim. The gap showed only when the stamp ran for real and the wrapper
+lines were grepped afterwards.
+
+**Fix.** A new `pin_files(root)` returns the docs plus the published (`workflow_call`) workflows.
+`scan` and `sweep` both use it, so a stale in-workflow pin is now swept AND fails `--check`.
+
+**Prevention.** `tests/run_stamp_tests.py::test_workflow_action_pins_are_swept_and_checked`
+asserts that both wrappers are in the swept set and that their pins are collected by the scan. The
+release step reads back the wrapper `uses:` lines after the stamp, before the tag.
 
 ## 2026-10-21 — v4.1.0 review fixes — composite-action inputs and the remap fail closed
 
