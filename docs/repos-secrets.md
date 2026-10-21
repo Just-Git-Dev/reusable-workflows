@@ -18,11 +18,12 @@ register, the live-state JSON and the action list are defined in
   | Principal | Roles | Why |
   |---|---|---|
   | `<service>-run` (the runtime SA) | `roles/secretmanager.secretAccessor` | the running service reads the secret |
-  | `<service>-deployer` (the repo's own deployer) | `roles/secretmanager.secretAccessor`, `roles/secretmanager.secretVersionManager`, `roles/secretmanager.viewer` | the value sync (`sync-bundle-key`) reads the blob, adds a version, disables and destroys old ones, and `describe`s the secret |
+  | `<service>-deployer` (the repo's own deployer) | `roles/secretmanager.secretAccessor`, `roles/secretmanager.secretVersionManager`, `roles/secretmanager.viewer` | the value sync (`sync-bundle-key`) reads the blob, adds a version, disables old ones, and `describe`s the secret |
 
   The deployer's three roles are Google's predefined roles, which include `versions.destroy`: the
-  syncing identity MAY destroy versions (the sync destroys every disabled version except the newest,
-  see [sync-bundle-key](sync-bundle-key.md)). There is no custom no-destroy role.
+  syncing identity MAY destroy versions, but the sync only disables (see
+  [sync-bundle-key](sync-bundle-key.md)); destruction is the opt-in job of `cleanup-secret-versions`
+  (`enable_destroy`, gated by a quarantine). There is no custom no-destroy role.
 - **Values are never touched here.** F8 holds no `secretmanager.versions.*` permission: it cannot
   add, read, disable, enable or destroy a version. Values come only from the owning repo's
   workflow ([sync-bundle-key](sync-bundle-key.md)), never by hand.

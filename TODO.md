@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-48 open across 16 live sections. 8 closed items archived.
+50 open across 17 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 2 open
 - **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
 - **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open, 5 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
@@ -23,6 +24,35 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## Owner rulings to build (opened 2026-10-21)
+
+- [ ] `catalog.json` + `scripts/workflow_preflight.py` (fleet) — ship the list of workflows that
+  receive the App private key (workflow, secret input name, required caller environment) with rw,
+  and have workflow-preflight check every caller against it, so projects stop hand-maintaining
+  their own key-recipient guards (owner, 2026-10-21; a consumer's guard needed a hand exception
+  to adopt `repos-environments`).
+- [ ] `.github/workflows/bootstrap-cf-service.yml` — map AND remap a Cloud Run domain in the same
+  workflow: an opt-in input re-targets a hostname from a named current service (delete → create →
+  wait for the certificate → probe the status code); without it, refuse as today (owner,
+  2026-10-21). Design agreed with the first consumer 2026-10-21 (build is a minor release):
+  - `retarget_from: <service>` (default empty = refuse exactly as today). The run refuses unless the
+    live mapping's routeName EQUALS it. Already on `service` = no-op, so a re-run is safe.
+  - `probe_path` is REQUIRED whenever `retarget_from` is set: an API often answers `/` with 401, so
+    `/` is a poor default. `expected_status` defaults to 200 and is asserted as a status code.
+  - Pre-flight before any delete: the target `service` exists, its latest revision is Ready and
+    serves 100% of traffic, and its own run.app URL answers `probe_path` with `expected_status`.
+    Otherwise refuse with nothing deleted.
+  - Then: delete → create → poll the mapping's Ready condition every 30s up to
+    `cert_timeout_minutes` (default 60) → probe `https://<host><probe_path>`. A timeout or a failed
+    probe FAILS the run, because the old service is already unmapped.
+  - No automatic rollback: re-mapping the old service is a second cert issue. On failure the summary
+    prints the exact map-back command.
+  - `dry_run: true` prints the full plan (current routeName, the target's readiness, what would be
+    deleted and created) with no writes.
+  - The summary records the outage window: delete time → probe-200 time.
+  - IAM: run.domainmappings.get/create/delete + run.services.get (document a custom role; don't
+    require run.admin). A CAA record that does not allow Google's CA is reported as a warning.
 
 ## zizmor findings ignored at adoption (opened 2026-10-21)
 

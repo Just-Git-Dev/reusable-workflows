@@ -96,9 +96,9 @@ jobs:
   distribute:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v4.0.0
     with:
-      app_id: ${{ vars.APP_ID }}
+      app_id: ${{ vars.RELEASE_APP_ID }}
       dry_run: ${{ inputs.dry_run }}
     secrets:
-      app_key: ${{ secrets.AUTOMATION_APP_KEY }}
+      app_key: ${{ secrets.RELEASE_APP_KEY }}
       sources_json: ${{ toJSON(secrets) }}
 ```

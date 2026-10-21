@@ -26,8 +26,9 @@ version's state. If it is not ENABLED the job fails and changes nothing:
 ```
 
 To roll that far back, re-enable the version by hand
-(`gcloud secrets versions enable N --secret <d>-env`) and re-run. An empty `bundle_secret` skips the
-check with a notice (a service that mounts no bundle). A manual `update-traffic` in the Cloud
+(`gcloud secrets versions enable N --secret <d>-env`) and re-run. `mode=to_revision` with an empty
+`bundle_secret` is refused (exit 2, "Nothing was changed"). The check is skipped, with a notice, only
+when the target revision mounts no version of the given secret. A manual `update-traffic` in the Cloud
 Console cannot be guarded by any workflow.
 
 ## When to use it
