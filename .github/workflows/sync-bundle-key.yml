@@ -194,7 +194,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v3.9.0
+  WORKFLOW_VERSION: v4.0.0
 
 jobs:
   sync:
@@ -531,6 +531,8 @@ jobs:
                  ${LABELS:+--update-labels="$LABELS"}; then
               echo "rolled: $svc"
               ROLLED=$((ROLLED + 1))
+            elif [ "${BOOTSTRAP:-false}" = "true" ]; then
+              echo "::warning::Failed to update $svc during bootstrap (may not exist yet) — continuing."
             else
               echo "::error::Failed to roll $svc onto ${SECRET_REF}"
               FAILED+=("$svc")
@@ -546,8 +548,12 @@ jobs:
             exit 1
           fi
           if [ "$ROLLED" -eq 0 ]; then
-            echo "::error::services_csv resolved to zero service names."
-            exit 1
+            if [ "${BOOTSTRAP:-false}" = "true" ]; then
+              echo "::warning::No service rolled during bootstrap — continuing."
+            else
+              echo "::error::services_csv resolved to zero service names."
+              exit 1
+            fi
           fi
 
       - name: Disable superseded bundle version(s)

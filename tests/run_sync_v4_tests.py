@@ -242,6 +242,21 @@ def roll_cases():
     r = run_body(body, {**env, "PIN_VERSIONS": "false"})
     check("pin_versions: false keeps the v3 :latest roll",
           "app-secrets:latest" in r["calls"], r["calls"])
+    # v3 keypair-rotator parity: bootstrap tolerates a service that does not exist yet.
+    fail = 'if [ "$1 $2" = "run services" ]; then exit 1; fi'
+    r = run_body(body, {**env, "BOOTSTRAP": "true"}, gcloud=fail)
+    check("bootstrap=true: a failed roll warns and exits 0",
+          r["rc"] == 0 and "::warning::" in r["out"], r["out"])
+    r = run_body(body, {**env, "BOOTSTRAP": "true", "SERVICES_CSV": " , "})
+    check("bootstrap=true: zero services warns and exits 0",
+          r["rc"] == 0 and "::warning::" in r["out"], r["out"])
+    r = run_body(body, {**env, "BOOTSTRAP": "false"}, gcloud=fail)
+    check("bootstrap=false: a failed roll exits 1", r["rc"] == 1, r["out"])
+    r = run_body(body, {**env, "BOOTSTRAP": "false", "SERVICES_CSV": " , "})
+    check("bootstrap=false: zero services exits 1", r["rc"] == 1, r["out"])
+    r = run_body(body, {**env, "SERVICES_CSV": "svc-a"}, gcloud=fail)
+    check("BOOTSTRAP unset (sync-bundle-key) behaves as false: failed roll exits 1",
+          r["rc"] == 1, r["out"])
 
 
 # --- S6 keep-set --------------------------------------------------------------------------------

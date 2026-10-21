@@ -131,7 +131,7 @@ permissions:
 
 jobs:
   rollback:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v4.0.0
     with:
       gcp_region: asia-southeast1
       gar_project: <consumer-C-project-id>
@@ -150,7 +150,7 @@ jobs:
 ## Example — key-based GKE rollback to a prior tag
 
 ```yaml
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v4.0.0
     with:
       gcp_region: ${{ vars.CLUSTER_REGION }}
       image_registry: ${{ vars.IMAGE_REGISTRY }}

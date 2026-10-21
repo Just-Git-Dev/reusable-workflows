@@ -106,6 +106,7 @@ bundle if that is a real risk.
 | `bootstrap` | input | `false` | tolerate a missing secret / missing services on first run; no grace, no disable |
 | `dry_run` | input | `false` | print the plan; generate/write/roll nothing |
 | `keep_enabled_count` | input | `'1'` | a floor under the keep-set: at least this many newest ENABLED versions stay; minimum `1`. See [Version retention](sync-bundle-key.md#version-retention--the-keep-set) |
+| `pin_versions` | input | **`true`** | roll with `<bundle>:<N+1>` and the `jgd_env_version`/`jgd_run` labels instead of `:latest` |
 | `cloudflare_api_token` | **secret** (req) | — | needs Workers Scripts:Edit on `cf_account_id` |
 
 ## Outputs

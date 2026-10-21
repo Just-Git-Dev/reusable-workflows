@@ -160,6 +160,7 @@ repos-plan-fixtures: venv
 	$(PY) tests/run_repos_deploy_plan_tests.py
 	$(PY) tests/run_repos_secrets_tests.py
 	$(PY) tests/run_repos_apply_step_tests.py
+	$(PY) tests/run_repos_env_plan_tests.py
 
 # Bundle writers of the same blob serialise only if their concurrency-group strings are identical.
 concurrency-groups: venv
@@ -168,6 +169,12 @@ concurrency-groups: venv
 # Step bodies run against stubbed commands and a fake clock; shellcheck lints them but never runs them.
 step-bodies: venv
 	$(PY) tests/run_step_tests.py
+	$(PY) tests/run_sync_v4_tests.py
+	$(PY) tests/run_deploy_env_tests.py
+	$(PY) tests/run_distribute_env_tests.py
+	$(PY) tests/run_deploy_env_lint_tests.py
+	$(PY) tests/run_rollback_pin_tests.py
+	$(PY) tests/run_cloud_run_update_env_tests.py
 
 release-gate: venv
 	$(PY) tests/run_check_release_gate_tests.py
