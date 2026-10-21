@@ -223,6 +223,11 @@ way. This workflow is now a thin wrapper that calls that same action, with the s
 secret and outputs; the logic lives once, in the action's scripts. A cross-org caller needing
 environment-level secrets copies the job template in
 [sync-bundle-key-action.md](sync-bundle-key-action.md), including its `concurrency:` block.
+The action was proven cross-org on 2026-10-21: an environment-only key reached it from a
+consumer's `prod` environment job. Note what that run also showed: the job's `secrets` context
+MERGES org, repo and environment secrets, so a listed key that is missing from the environment
+is read silently from a repo- or org-level copy. Keep every listed key in the environment, and
+delete same-named repo/org copies (sync-bundle-key-action.md, "Inputs").
 
 The `actions: read` permission is required in the caller (step S0 reads the environment).
 
