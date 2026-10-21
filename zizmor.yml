@@ -1,0 +1,65 @@
+# zizmor (workflow security audit) policy. Run by `make zizmor`, which `make ci` and the ci.yml
+# `lint` job both call. Default persona (not pedantic), offline so no token is needed.
+# Why this exists and what is ignored: DECISIONS.md 2026-10-21 "workflow-preflight + zizmor".
+#
+# Every ignore below is per rule AND per file with a reason; there is no blanket ignore. These
+# workflows are public `workflow_call` bodies, so a fix that moved an input would change the
+# input contract, and the deploy bodies cannot be exercised without a real deploy: the ignored
+# template-injection sites are listed for a follow-up, not accepted as correct.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Fleet ruling 2: calls into the fleet's own reusable workflows may be pinned to a tag.
+        # zizmor can only say "any ref"; the exact vX.Y.Z-or-SHA rule is enforced by
+        # workflow-preflight `lint`/`calls` (make preflight).
+        Just-Git-Dev/reusable-workflows/*: ref-pin
+        # Everything else third-party is pinned to a full commit SHA.
+        "*": hash-pin
+  template-injection:
+    ignore:
+      # `${{ inputs.* }}` / `${{ needs.*.outputs.* }}` spliced into `run:` bodies. The values are
+      # supplied by the calling repo's own workflow (workflow_call), not by an external actor,
+      # and the callers are trusted fleet repos. Moving each into `env:` is mechanical but touches
+      # ~45 sites in deploy bodies that tests/run_step_tests.py only partly covers.
+      - ci-go.yml
+      - ci-node.yml
+      - deploy-cloud-run.yml
+      - deploy-cloudflare-worker.yml
+      - deploy-cluster-keyed.yml
+      - deploy-gke-service.yml
+      - neon-backup.yml
+      - release.yml
+      - rotate-signing-keypair.yml
+      - rotate-worker-signing-secret.yml
+      - validate-alerts.yml
+  github-app:
+    ignore:
+      # create-github-app-token without permission-* inputs inherits the whole App installation's
+      # permissions. These are the repo-admin Apps; their permissions are the job's purpose, and
+      # narrowing needs the exact permission set per App from the owner.
+      - repos-create.yml
+      - repos-settings.yml
+      - repos-variables.yml
+  unpinned-images:
+    ignore:
+      # The service-container image is a caller input (`image: ${{ inputs.postgres_image }}`);
+      # the caller chooses and pins it, the workflow cannot.
+      - ci-go.yml
+      - ci-node.yml
+  unsound-ternary:
+    ignore:
+      # Job display names (`name: ... ${{ inputs.x && '' || ' . test' }}`): the "falsy true value"
+      # is the empty string on purpose, and the result is only a label.
+      - ci-go.yml
+      - ci-node.yml
+  github-env:
+    ignore:
+      # release-flow puts its own checked-out directory on PATH; the path is a runner-controlled
+      # constant, not attacker input.
+      - action.yml
+  cache-poisoning:
+    ignore:
+      # Cloudflare Pages deploy publishes a build the caller's own job just made; the cache here
+      # is the caller's package-manager cache, keyed on its lockfile.
+      - deploy-cloudflare-pages.yml

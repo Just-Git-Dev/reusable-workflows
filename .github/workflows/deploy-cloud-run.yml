@@ -254,6 +254,7 @@ jobs:
         with:
           # Decoupled from the image tag: checkout_ref wins, else fall back to the tag.
           ref: ${{ inputs.checkout_ref || steps.ref.outputs.tag }}
+          persist-credentials: false
 
       - name: Resolve built commit
         id: commit
