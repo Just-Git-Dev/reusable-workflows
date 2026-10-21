@@ -27,7 +27,11 @@ section opens or closes. Closed sections live in
 
 ## Owner rulings to build (opened 2026-10-21)
 
-- [ ] `.github/workflows/sync-bundle-key.yml` — DESIGN NEEDED (owner): environment-level secrets
+- [x] **CLOSED 2026-10-21 (v4.1.0): the composite action `actions/sync-bundle-key` runs in the
+  caller's own `environment:` job and reads environment secrets from `secrets_json`
+  (docs/sync-bundle-key-action.md). The rotator got the same treatment
+  (`actions/rotate-worker-signing-secret`). Live cross-org proof is the consumer's first run.**
+  `.github/workflows/sync-bundle-key.yml` — DESIGN NEEDED (owner): environment-level secrets
   cannot reach the sync from a caller in another organisation. Two cross-org dry runs on
   2026-10-21 refused with "No environment secret for listed key(s)". `payload_source: caller`
   reads repo/org secrets only, because the caller job cannot declare `environment:`. Until it's
