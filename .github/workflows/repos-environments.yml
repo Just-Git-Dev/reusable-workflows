@@ -218,14 +218,28 @@ jobs:
         run: |
           set -euo pipefail
           applied=0
-          declare -A ready
-          # PUT is idempotent: it creates the environment, or switches custom branch policies on.
+          ready=" "   # space-delimited "repo/env" list (no associative array: also runs on bash 3.2)
+          # PUT creates the environment, or switches custom branch policies on. It is an update, so
+          # an existing environment's wait_timer / reviewers / prevent_self_review are read first
+          # (GET; 404 = new) and resent beside deployment_branch_policy rather than risk a reset.
           ensure_env() {
-            local repo=$1 env=$2
-            [ -z "${ready["$repo/$env"]:-}" ] || return 0
-            jq -n '{deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}' \
+            local repo=$1 env=$2 cur="" err
+            case "$ready" in *" $repo/$env "*) return 0 ;; esac
+            if ! cur=$(gh api "repos/$ORG/$repo/environments/$env" 2> "$RUNNER_TEMP/env-get.err"); then
+              err=$(cat "$RUNNER_TEMP/env-get.err")
+              case "$err" in *"HTTP 404"*) cur="" ;; *) echo "::error::GET $repo/$env failed: $err"; return 1 ;; esac
+            fi
+            jq -n --argjson cur "${cur:-null}" '
+              {deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}
+              + (if $cur == null then {} else
+                  ([$cur.protection_rules[]? | select(.type == "wait_timer") | .wait_timer][0]) as $w
+                  | ([$cur.protection_rules[]? | select(.type == "required_reviewers")][0]) as $r
+                  | (if $w != null then {wait_timer: $w} else {} end)
+                    + (if $r != null then {prevent_self_review: ($r.prevent_self_review // false),
+                                           reviewers: [$r.reviewers[]? | {type: .type, id: .reviewer.id}]} else {} end)
+                end)' \
               | gh api -X PUT "repos/$ORG/$repo/environments/$env" --input - > /dev/null
-            ready["$repo/$env"]=1
+            ready="$ready$repo/$env "
           }
           while IFS= read -r a; do
             repo=$(jq -r .repo <<<"$a")

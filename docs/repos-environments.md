@@ -58,11 +58,11 @@ protected-branches off, then `POST .../deployment-branch-policies` for each patt
 
 The write token carries `administration: write` plus `actions: read` (the same read the planning token
 has): removing a stale branch policy first LISTs the environment's policies, and that read needs it.
-The `PUT` body holds only `deployment_branch_policy` (the one thing this feature manages); it sends no
-`wait_timer`, `reviewers` or `prevent_self_review`. GitHub's documented contract for a `PUT` on an
-existing environment is an update, but whether an omitted `wait_timer` or reviewer list is preserved or
-reset has not been demonstrated against a live environment (unverified); until it is, run `report`
-mode on any environment that already has reviewers or a wait timer and check them after the first apply.
+Before each `PUT` the step `GET`s the environment and merges. If it exists, the `PUT` body resends its
+current `wait_timer`, `reviewers` (as `{type, id}`) and `prevent_self_review` beside
+`deployment_branch_policy`, so existing protection is carried through unchanged whether or not GitHub
+treats an omitted field as a reset. If the `GET` is a 404 the environment is new and the body holds only
+`deployment_branch_policy`. Any other `GET` failure stops the step before the `PUT`.
 
 ## The NEVER list
 
