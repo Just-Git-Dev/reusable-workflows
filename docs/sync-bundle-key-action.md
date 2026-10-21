@@ -95,6 +95,15 @@ here, with two differences:
   secret named `payload_json`; that name is matched case-insensitively (`PAYLOAD_JSON` works).
   The keys listed in `secret_keys_file` (environment source) are matched exactly, because they
   become the payload's key names.
+- **Booleans are exactly `'true'` or `'false'`.** `dry_run`, `strict_values`,
+  `require_branch_policy`, `pin_versions` and `concurrency_declared` are checked by the first
+  step, which refuses anything else (`yes`, `1`, `True`). GitHub's `if:` compares
+  case-insensitively and bash does not, so a loose value would be read two ways and could turn a
+  dry run into a live write.
+- **The key list is checked out into `.rw-sync-bundle-key/`** under the workspace (sparse, only
+  `secret_keys_file`), never into the workspace root: `actions/checkout` cleans its target, and a
+  root checkout would wipe the caller's own checkout and build. Do not use that directory name.
+  The checkout path must be inside `$GITHUB_WORKSPACE`, so `runner.temp` cannot be used.
 - **`environment`** is only the name for the S0 guard. The action cannot read its own job's
   `environment:`, so the caller repeats it. Leave it empty to skip S0.
 

@@ -113,6 +113,15 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Validate boolean inputs
+      shell: bash
+      env:
+        BOOTSTRAP: ${{ inputs.bootstrap }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        PIN_VERSIONS: ${{ inputs.pin_versions }}
+        CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
+      run: '"$GITHUB_ACTION_PATH/validate-booleans.sh"'
+
     - name: Warn about the caller's concurrency group
       shell: bash
       env:

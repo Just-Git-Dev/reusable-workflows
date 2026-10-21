@@ -92,6 +92,10 @@ meaning and default here, with these differences:
   `cloudflare_api_token` out of it (and not at all on a dry run); nothing else leaves its step.
   The caller must define exactly one secret named `cloudflare_api_token`; the name is matched
   case-insensitively, so `CLOUDFLARE_API_TOKEN` works.
+- **Booleans are exactly `'true'` or `'false'`.** `bootstrap`, `dry_run`, `pin_versions` and
+  `concurrency_declared` are checked by the first step, which refuses anything else (`yes`, `1`,
+  `True`). GitHub's `if:` compares case-insensitively and bash does not, so a loose value would be
+  read two ways and could turn a dry run into a live write.
 - **`concurrency_declared`** is set by the wrapper only (see above).
 
 Outputs are the workflow's: `old_version`, `new_version`.

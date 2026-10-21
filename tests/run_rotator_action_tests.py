@@ -101,8 +101,9 @@ def action_cases():
           {"old_version", "new_version"} <= set(doc.get("outputs", {})), list(doc.get("outputs", {})))
     check("no input description embeds a secrets expression",
           "${{" not in json.dumps(doc["inputs"]), "")
-    first = steps[0] if steps else {}
-    check("the first step is the concurrency reminder", "warn-concurrency" in first.get("run", ""), first)
+    first = steps[1] if len(steps) > 1 else {}
+    check("the concurrency reminder follows the boolean validation (F7)",
+          "warn-concurrency" in first.get("run", ""), first)
     # Every secret-carrying env var is fed from a step output or secrets_json, never from a literal.
     token = next((s for s in steps if s.get("name") == "Read the Cloudflare token"), {})
     check("the Cloudflare token is read out of secrets_json", "inputs.secrets_json" in str(token.get("env")), token)
@@ -167,6 +168,30 @@ def action_cases():
         check(f"'{name}': nothing in the value was executed", "pwned" not in r["out"].split("FILES:")[-1], r["out"])
 
 
+BOOL_STEP = "Validate boolean inputs"
+
+
+def boolean_cases():
+    print("\nF7 · boolean inputs are exactly 'true' or 'false' (an if: and a bash [ = ] must agree)")
+    doc = yaml.safe_load((ACTION / "action.yml").read_text())
+    steps = action_steps(ACTION)
+    bools = sorted(k.upper() for k, v in doc["inputs"].items() if v.get("default") in ("true", "false"))
+    check("the boolean validation step runs FIRST", steps[0].get("name") == BOOL_STEP, steps[0].get("name"))
+    check("it covers every boolean-typed input of the action",
+          sorted(steps[0].get("env", {})) == bools, f"{sorted(steps[0].get('env', {}))} vs {bools}")
+    body = extract_action_step(ACTION, BOOL_STEP)
+    if body is None:
+        check(f"step '{BOOL_STEP}' exists", False)
+        return
+    good = {b: "true" for b in bools}
+    check("all 'true' is accepted", run_body(body, good)["rc"] == 0)
+    check("all 'false' is accepted", run_body(body, {b: "false" for b in bools})["rc"] == 0)
+    for bad in ("yes", "1", "True", "FALSE", "", " true"):
+        for b in bools:
+            r = run_body(body, {**good, b: bad})
+            check(f"{b}={bad!r} is refused and named", r["rc"] != 0 and b.lower() in r["out"].lower(), r["out"])
+
+
 def wrapper_cases():
     print("\nrotate-worker-signing-secret wrapper · calls the action, contract unchanged")
     doc = yaml.safe_load(WRAPPER.read_text())
@@ -199,7 +224,7 @@ def wrapper_cases():
 
 
 def main():
-    for fn in (structural_cases, action_cases, wrapper_cases):
+    for fn in (structural_cases, action_cases, boolean_cases, wrapper_cases):
         fn()
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0

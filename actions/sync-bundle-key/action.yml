@@ -136,6 +136,16 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Validate boolean inputs
+      shell: bash
+      env:
+        DRY_RUN: ${{ inputs.dry_run }}
+        STRICT_VALUES: ${{ inputs.strict_values }}
+        REQUIRE_BRANCH_POLICY: ${{ inputs.require_branch_policy }}
+        PIN_VERSIONS: ${{ inputs.pin_versions }}
+        CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
+      run: '"$GITHUB_ACTION_PATH/validate-booleans.sh"'
+
     - name: Warn about the caller's concurrency group
       shell: bash
       env:
@@ -166,6 +176,10 @@ runs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
+        # A dedicated subdirectory: checkout cleans its target, and the default (the workspace
+        # root) would wipe a direct caller's own checkout and build. The path must lie inside
+        # $GITHUB_WORKSPACE, so runner.temp is not an option.
+        path: .rw-sync-bundle-key
         sparse-checkout: ${{ inputs.secret_keys_file }}
         sparse-checkout-cone-mode: false
 
@@ -195,7 +209,7 @@ runs:
         # job's secrets, and a key name cannot be a static `secrets.NAME`. Only the listed keys
         # leave the step (see the jq filter in build-env-payload.sh).
         ALL_SECRETS_JSON: ${{ inputs.secrets_json }}
-        SECRET_KEYS_FILE: ${{ inputs.secret_keys_file }}
+        SECRET_KEYS_FILE: ${{ github.workspace }}/.rw-sync-bundle-key/${{ inputs.secret_keys_file }}
       run: '"$GITHUB_ACTION_PATH/build-env-payload.sh"'
 
     - name: Validate payload
@@ -219,7 +233,7 @@ runs:
       env:
         PAYLOAD_JSON: ${{ inputs.payload_source == 'environment' && steps.envpayload.outputs.payload_json || steps.callerpayload.outputs.payload_json }}
         MODE: ${{ inputs.mode }}
-        SECRET_KEYS_FILE: ${{ inputs.secret_keys_file }}
+        SECRET_KEYS_FILE: ${{ github.workspace }}/.rw-sync-bundle-key/${{ inputs.secret_keys_file }}
         CONFIRM_REMOVED: ${{ inputs.confirm_removed }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: '"$GITHUB_ACTION_PATH/compute-bundle.sh"'
