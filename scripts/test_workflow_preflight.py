@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# VENDORED from claude-config skills/workflow-preflight @ 721364ee2f54 — edit canonical, not this copy
+# VENDORED from claude-config skills/workflow-preflight @ 3bd9034d0d5d — edit canonical, not this copy
 """Tests for workflow_preflight.py (W1: lint + parity) — stdlib + PyYAML, no runner to install.
 
 Fixtures are synthetic repos built in temp dirs (no checked-in tree, so the vendored copy of
@@ -282,7 +282,7 @@ class ParityTests(Base):
         self.assertIn("PIN_DRIFT", out)
 
     def test_shellcheck_version_is_not_attributed_to_actionlint(self):
-        """AutoMahn 2026-10-20: ci.yml: actionlint version is 0.11.0 (shellcheck's), config pins 1.7.12."""
+        """Consumer A 2026-10-20: ci.yml: actionlint version is 0.11.0 (shellcheck's), config pins 1.7.12."""
         extra = (f"      - uses: raven-actions/actionlint@{SHA}\n        with:\n          version: 1.7.12\n"
                  "      - name: Install shellcheck\n        env:\n          SC_VERSION: v0.11.0\n"
                  "        run: |\n          echo \"actionlint shells out to shellcheck v0.11.0\"\n"
@@ -294,26 +294,26 @@ class ParityTests(Base):
         self.assertNotIn("PIN_DRIFT", out)
 
     def _raven_job(self, raven_version):
-        """AutoMahn 2026-10-20 fixture, verbatim shape: job `lint` in ci.yml."""
+        """Consumer A 2026-10-20 fixture, verbatim shape: job `lint` in ci.yml."""
         return ("name: ci\non: [push, pull_request]\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n"
                 "      - name: install pinned shellcheck\n        env:\n          SC_VERSION: v0.11.0\n"
                 "        run: echo installing\n"
                 f"      - uses: raven-actions/actionlint@{SHA}\n        with:\n"
                 f"          version: {raven_version}\n"
                 "          flags: -shellcheck=${{ runner.temp }}/shellcheck-v0.11.0/shellcheck\n"
-                # the canary step of automahn 734bf7e: actionlint and a hyphen-bound shellcheck-v0.11.0 in ONE run text
+                # the canary step of consumer A (commit 734bf7e): actionlint and a hyphen-bound shellcheck-v0.11.0 in ONE run text
                 "      - name: canary\n        shell: bash\n        run: |\n"
                 "          out=$(\"$RUNNER_TEMP/actionlint-1.7.12/actionlint\" "
                 "-shellcheck=\"$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck\" .github/workflows/canary.yml 2>&1 || true)\n")
 
-    def test_automahn_raven_flags_shellcheck_path_is_not_actionlint_version(self):
+    def test_consumer_a_raven_flags_shellcheck_path_is_not_actionlint_version(self):
         self.wf("ci.yml", self._raven_job("1.7.12"))
         self.cfg(tools={"actionlint": "1.7.12", "shellcheck": "0.11.0"}, jobs={"ci.yml:lint": {"waiver": "ci-only", "reason": "uses an install-and-run action"}})
         rc, out = self.run_cli("parity")
         self.assertNotIn("PIN_DRIFT", out)
         self.assertEqual(rc, 0, out)
 
-    def test_automahn_raven_real_actionlint_drift_still_fires(self):
+    def test_consumer_a_raven_real_actionlint_drift_still_fires(self):
         self.wf("ci.yml", self._raven_job("1.7.11"))
         self.cfg(tools={"actionlint": "1.7.12", "shellcheck": "0.11.0"}, jobs={"ci.yml:lint": {"waiver": "ci-only", "reason": "uses an install-and-run action"}})
         rc, out = self.run_cli("parity")
