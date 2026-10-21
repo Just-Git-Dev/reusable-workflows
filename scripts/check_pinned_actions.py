@@ -17,7 +17,7 @@ SHA = re.compile(r'[0-9a-f]{40}\s*($|#)')
 # This repo's own composite actions may be pinned to an exact release tag (owner ruling,
 # 2026-10-21): a wrapper workflow cannot SHA-pin an action that first exists in its own release
 # commit, and stamp_version.py sweeps this exact form at release. Nothing looser is exempt.
-OWN_ACTION = re.compile(r'Just-Git-Dev/reusable-workflows/actions/[A-Za-z0-9._-]+$')
+OWN_ACTION = re.compile(r'Just-Git-Dev/reusable-workflows/actions/[A-Za-z0-9][A-Za-z0-9._-]*$')
 OWN_TAG = re.compile(r'v\d+\.\d+\.\d+\s*($|#)')
 
 

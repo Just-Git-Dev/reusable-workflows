@@ -27,6 +27,8 @@ CASES = [
      "uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.1.0-rc1", 1),
     ("own reusable WORKFLOW tag still fails (only actions/ are exempt)",
      "uses: Just-Git-Dev/reusable-workflows/.github/workflows/x.yml@v4.1.0", 1),
+    ("dot-dot action name fails",
+     "uses: Just-Git-Dev/reusable-workflows/actions/..@v4.1.0", 1),
     ("look-alike org fails",
      "uses: Just-Git-Dev-evil/reusable-workflows/actions/sync-bundle-key@v4.1.0", 1),
 ]
