@@ -586,18 +586,21 @@ Example (F3, one repo enforced, one reported):
 
 ## 9. The `repo-admin` environment
 
-The GitHub-side features act with the org's existing **release GitHub App**, extended with
-`Administration: Read and write` and installed on all repositories — but with a **second private
-key** held only in a protected environment, so it can be revoked without touching releases.
+The GitHub-side features act with the org's existing **automation GitHub App** (formerly the
+release App), extended with `Administration: Read and write` and installed on all repositories,
+using **the same private key releases use**. There is no second key (owner, 2026-10-21): every key
+of an App mints tokens with the App's full permission set, so a second key would add one more
+secret to rotate and no isolation. What bounds admin actions is the environment rule below, the
+narrowed tokens and the planner's allow-list, not which key is used.
 
 - In `<org>/project`: environment **`repo-admin`**, deployment branches **`main` only**, secret
-  **`REPO_ADMIN_APP_KEY`** (the second key). The App id is the existing repo variable
-  **`RELEASE_APP_ID`**.
+  **`RELEASE_APP_KEY`** (a copy of the release key, as an environment secret). The App id is the
+  existing repo variable **`RELEASE_APP_ID`**.
 - The reusable job declares `environment: ${{ inputs.environment }}` (default `repo-admin`), the
   same shape `release-drafts.yml` uses for its key, and F2-F4 and F9 enforce fail before minting a token unless
   the environment is `repo-admin` and `github.ref` is `refs/heads/main`.
-- Pass the key **by name** (`secrets: REPO_ADMIN_APP_KEY: ...`); `secrets: inherit` is same-org
-  only.
+- Pass the key **by name** into the workflows' `REPO_ADMIN_APP_KEY` input
+  (`REPO_ADMIN_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}`); `secrets: inherit` is same-org only.
 - **The write token is narrowed to the repos it writes to.** F3, F4 and F9 mint the write token with
   the action's `repositories:` input set to exactly the repos the plan has write actions for
   (unique, plan order, comma separated; every one exists, because the planner only plans writes
@@ -650,7 +653,7 @@ jobs:
       app-id: ${{ vars.RELEASE_APP_ID }}
       environment: repo-admin
     secrets:
-      REPO_ADMIN_APP_KEY: ${{ secrets.REPO_ADMIN_APP_KEY }}
+      REPO_ADMIN_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
 ```
 
 Pin an exact `vX.Y.Z` release, never `@main` or `@v1`. The input names above are the design of

@@ -85,12 +85,20 @@ jobs:
       - name: Run stamp-sweep tests
         run: python3 tests/run_stamp_tests.py
 
+      # The checkout persists no credentials (zizmor artipacked), so the push carries the job
+      # token itself, for this one command only. Without it: "could not read Username" (v4.0.0
+      # run 39588229527). Guarded by tests/release_flow_workflows/test_push_credentials.py.
       - name: Create and push the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "${{ inputs.version }}" -m "Release ${{ inputs.version }}"
-          git push origin "${{ inputs.version }}"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            push origin "${{ inputs.version }}"
 
       - name: Publish the GitHub Release
         env:

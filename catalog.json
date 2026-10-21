@@ -3328,7 +3328,7 @@
       "path": ".github/workflows/repos-create.yml",
       "secrets": {
         "REPO_ADMIN_APP_KEY": {
-          "description": "The second private key of the App. Pass it BY NAME (inherit is same-org only)",
+          "description": "The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)",
           "required": true
         }
       },
@@ -3593,7 +3593,7 @@
       "path": ".github/workflows/repos-settings.yml",
       "secrets": {
         "REPO_ADMIN_APP_KEY": {
-          "description": "The second private key of the App. Pass it BY NAME (inherit is same-org only)",
+          "description": "The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)",
           "required": true
         }
       },
@@ -3633,7 +3633,7 @@
       "path": ".github/workflows/repos-variables.yml",
       "secrets": {
         "REPO_ADMIN_APP_KEY": {
-          "description": "The second private key of the App. Pass it BY NAME (inherit is same-org only)",
+          "description": "The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)",
           "required": true
         }
       },

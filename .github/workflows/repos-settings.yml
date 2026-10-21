@@ -33,7 +33,7 @@ on:
         default: repo-admin
     secrets:
       REPO_ADMIN_APP_KEY:
-        description: 'The second private key of the App. Pass it BY NAME (inherit is same-org only)'
+        description: 'The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)'
         required: true
 
 permissions:
