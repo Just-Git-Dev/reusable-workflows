@@ -590,7 +590,76 @@ def targets_cases():
         check(f"{feature} read mint unchanged: no repositories input", "repositories" not in ro["with"], ro["with"])
 
 
+# ---------------------------------------------------------------- F9 repos-environments
+ENV_STEP = "Apply the write actions in order"
+ENV_STUB = """#!/bin/bash
+{ printf '%s\\x1f' "$(basename "$0")" "$@"; echo; } >> "$STUB_DIR/calls.log"
+case "$*" in
+  *"--input -"*) cat > "$STUB_DIR/put.json" ;;
+  *"-X "*) ;;
+  *"deployment-branch-policies"*) ;;
+  *"/environments/"*)
+    if [ -n "${ENV_GET_FILE:-}" ]; then cat "$ENV_GET_FILE"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi ;;
+esac
+exit 0
+"""
+
+
+def env_put(existing):
+    """Run the shipped apply step for one create-environment with a gh stub whose GET answers
+    `existing` (None = 404); return rc, output and the JSON body the PUT received (None if no PUT)."""
+    body = extract_step("repos-environments.yml", ENV_STEP)
+    plan = [act("environments", "r", "create-environment", {"environment": "prod"})]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        for d in ("bin", "stub", "work"):
+            (tmp / d).mkdir()
+        g = tmp / "bin" / "gh"
+        g.write_text(ENV_STUB)
+        g.chmod(0o755)
+        (tmp / "work" / "plan.json").write_text(json.dumps(plan))
+        e = dict(os.environ)
+        e.update({"PATH": f"{tmp / 'bin'}:{e['PATH']}", "STUB_DIR": str(tmp / "stub"),
+                  "RUNNER_TEMP": str(tmp / "work"), "GITHUB_STEP_SUMMARY": str(tmp / "summary.md"),
+                  "ORG": "Example-Org"})
+        if existing is not None:
+            (tmp / "get.json").write_text(json.dumps(existing))
+            e["ENV_GET_FILE"] = str(tmp / "get.json")
+        p = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body],
+                           capture_output=True, text=True, env=e, cwd=tmp / "work")
+        put = tmp / "stub" / "put.json"
+        return p.returncode, p.stdout + p.stderr, (json.loads(put.read_text()) if put.exists() else None)
+
+
+def env_cases():
+    policy = {"protected_branches": False, "custom_branch_policies": True}
+    existing = {"name": "prod", "protection_rules": [
+        {"id": 1, "type": "wait_timer", "wait_timer": 30},
+        {"id": 2, "type": "required_reviewers", "prevent_self_review": True,
+         "reviewers": [{"type": "User", "reviewer": {"id": 42, "login": "someone"}}]}]}
+    rc, out, put = env_put(existing)
+    check("F9 existing environment: PUT carries wait_timer, reviewers {type,id}, prevent_self_review "
+          "and the branch policy",
+          rc == 0 and put == {"deployment_branch_policy": policy, "wait_timer": 30,
+                              "prevent_self_review": True, "reviewers": [{"type": "User", "id": 42}]},
+          (rc, out, put))
+    rc, out, put = env_put(None)
+    check("F9 new environment (GET 404): PUT holds only deployment_branch_policy",
+          rc == 0 and put == {"deployment_branch_policy": policy}, (rc, out, put))
+
+
+def env_token_cases():
+    doc = yaml.safe_load((WF / "repos-environments.yml").read_text())
+    steps = [s for j in doc["jobs"].values() for s in j["steps"]
+             if s.get("name") == "Mint App token (administration:write)"]
+    w = steps[0]["with"] if steps else {}
+    check("F9 M6: write token requests actions: read and administration: write",
+          w.get("permission-actions") == "read" and w.get("permission-administration") == "write", w)
+
+
 def main():
+    env_cases()
+    env_token_cases()
     targets_cases()
     create_cases()
     wif_cases()

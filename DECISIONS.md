@@ -2,8 +2,13 @@
 
 ## Index
 
-111 entries total — 101 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+116 entries total — 106 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [v4 critic round 2: template pin, secretKeyRef pins, update :latest wiring, fail-closed baseline](#2026-10-21--v4-critic-round-2-template-pin-secretkeyref-pins-update-latest-wiring-fail-closed-baseline)
+- `2026-10-21` — [v4 owner rulings Q1-Q9 applied to docs](#2026-10-21--v4-owner-rulings-q1-q9-applied-to-docs)
+- `2026-10-21` — [v3.8.1 live proof carried over: a consumer's run destroyed 2 versions with a quoted etag](#2026-10-21--v381-live-proof-carried-over-a-consumers-run-destroyed-2-versions-with-a-quoted-etag)
+- `2026-10-21` — [F9 repos-environments: environments as code; credential is a PENDING owner decision (Q1)](#2026-10-21--f9-repos-environments-environments-as-code-credential-is-a-pending-owner-decision-q1)
+- `2026-10-21` — [RW v4: pinning, replace mode, strict values, env files; rotators also pin; S0 and forward-only fallback](#2026-10-21--rw-v4-pinning-replace-mode-strict-values-env-files-rotators-also-pin-s0-and-forward-only-fallback)
 - `2026-10-21` — [workflow-preflight + zizmor added to the gate](#2026-10-21--workflow-preflight--zizmor-added-to-the-gate)
 - `2026-10-20` — [F8 repos-secrets: one writer per <service>-env secret policy (ruling 24)](#2026-10-20--f8-repos-secrets-one-writer-per-service-env-secret-policy-ruling-24)
 - `2026-10-20` — [cleanup-secret-versions: pass etag verbatim (quotes kept) and fail when no mutation succeeded](#2026-10-20--cleanup-secret-versions-pass-etag-verbatim-quotes-kept-and-fail-when-no-mutation-succeeded)
@@ -227,6 +232,99 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — v4 critic round 2: template pin, secretKeyRef pins, update :latest wiring, fail-closed baseline
+
+**Decision.** Fix round 2 of the v4 critic findings. The partial-roll undo treats the service
+template and the latest ready/created revisions as live, not only revisions with traffic. All
+pin readers (both rotators and sync, deploy-cloud-run, cloud-run-update) read both
+`volumes[].secret.items[].key` and `env[].valueFrom.secretKeyRef{name,key}`. The `:latest`
+refusal now also runs without `env_secret` (live template or caller flags, matched by mount, not
+by a loose substring) and `cloud-run-update` wires `extra_args` into its pin step. The
+forward-only label fallback fails closed on a describe error. The keep-set reads traffic-holding
+and tagged revisions by name and scans services and jobs in every region.
+
+**Why.** The critic's probes showed each as a silent data-loss or silent-bypass path: a pin held
+only through a secretKeyRef was disabled (probe P1), a ready-but-0%-traffic revision's pin was
+disabled by the undo (P2), and the refusal read variables its step never set (`DEPLOY_FLAGS`,
+`EXTRA`), so `--update-secrets=/app/.env=svc-env:latest` passed.
+
+**Why it was not caught.** `run_body` injects env straight into a step body and never reads the
+YAML `env:` block, so a body reading an unwired variable stayed green. New
+`tests/run_step_env_wiring_tests.py` (in `make step-bodies`) fails when a v4 step body reads a
+variable that neither the body, the step, the job nor GitHub defines. It also caught
+`deploy-cloud-run` reading an unset `SECRETS`.
+
+**Rulings.** `BOOTSTRAP` in sync-bundle-key's roll step is read optionally on purpose (unset ==
+false, parity with the keypair rotator) and is allow-listed in the wiring test with that reason.
+Without `env_secret`, `cloud-run-update` now refuses ANY update of a service whose live template
+mounts a `*-env` bundle at `:latest` (per MIGRATION-v4 / plan 4.1), including an unrelated scale
+change; `pin_env: false` is the opt-out.
+
+## 2026-10-21 — v4 owner rulings Q1-Q9 applied to docs
+
+Owner rulings Q1-Q9 (2026-10-21) replace every pending-decision block in the v4 docs. Q1/Q2: one credential, the org automation App (<org>-automation, formerly the release App), holding Administration: write and Environments: write. Q4: rollback-service to_revision (doc owned elsewhere). Q5: delete old production environments after a per-environment provenance check. Q6: committed deploy/target.<stage>.yaml. Q7: stage = main + v* tags, stage-seed = main only. Q8: pin_env: false ships, warned. Q9: all in v4.0.0, no v3.10.0, so docs pin @v4.0.0 and callers create environments before their first v4 sync.
+
+## 2026-10-21 — v3.8.1 live proof carried over: a consumer's run destroyed 2 versions with a quoted etag
+
+Context: carried over from the v3.8.1 work (cleanup-secret-versions etag handling) so the evidence
+is not lost.
+
+Record: v3.8.1 was proven live by a consumer's run 39461189744. It destroyed 2 secret versions, the
+quoted etag was accepted by Secret Manager, and a GCP read-back confirmed the result.
+
+Status: informational; no behaviour change.
+
+## 2026-10-21 — F9 repos-environments: environments as code; credential is a PENDING owner decision (Q1)
+
+Context: GitHub environments must exist, with their branch rules, before any v4 job names one.
+Reusing the repos-register pattern avoids new machinery.
+
+Decision: F9 `repos-environments`: environments are declared per repo in the project's `repos.yaml`,
+planned by the existing planner pattern and applied from the project repo onto service repos
+(top-down). F9 never deletes an environment. Its credential is taken as inputs (`app_id` plus key) so
+the build does not depend on the answer to Q1.
+
+PENDING OWNER DECISION (Q1): which credential creates environments. The register's current design
+extends the release App with `Administration: write`, which the owner has refused for one project.
+Recommended option: a new per-org repo-admin App scoped to service repos only, with its key in a
+protected environment of the project repo. Until the owner answers, F9 enforce runs and the retention
+setting are blocked; report mode and the build are not. Q2 (who writes environment secrets for
+`distribute-env-secrets`) follows Q1.
+
+Status: design of record; supersedes nothing. Revisit this entry when Q1 is answered.
+
+## 2026-10-21 — RW v4: pinning, replace mode, strict values, env files; rotators also pin; S0 and forward-only fallback
+
+Context: the platform strategy wants every revision to record exactly which secret-bundle version and
+which env file it ran, and a removed key to actually disappear. At v3.9.0 none of that exists:
+`sync-bundle-key` rolls every service onto `<bundle>:latest`, upserts only, and `strict_values`
+defaults to false; `deploy-cloud-run` has no env-file input. The pinning phase the strategy planned
+for v3.9 never shipped (v3.9.0 was F8), so v4 is the first release of pinning.
+
+Decision: v4.0.0 (major, input contract) flips three defaults (pinning on, `mode: replace`,
+`strict_values: true`), adds `environment` to the sync, env-file deploys through gcloud
+`--env-vars-file deploy/env.<stage>.yaml`, revision labels, a `config-manifest.json` artifact, and a
+loud rollback refusal when a revision's pinned bundle version is disabled. Docs: `runtime-config.md`
+(model) and `MIGRATION-v4.md` (per-caller checklist). Three guards: S0 refuses a job that names a
+GitHub environment which does not exist (GitHub would otherwise auto-create it with no protection);
+forward-only falls back to the service's `jgd_commit` label when the environment has no successful
+deployment (see below); `mode: replace` keeps only keys listed in `deploy/secret-keys.txt`.
+
+Finding the first brief missed: `rotate-signing-keypair` and `rotate-worker-signing-secret` ALSO
+write the bundle and roll onto `:latest`. Pinning only the sync would let the next key rotation
+silently un-pin every service, so v4 pins in all three writers, and the keys those two generate must
+be listed in `deploy/secret-keys.txt` or `mode: replace` would drop them.
+
+Finding: renaming a deploy environment (for example `production` to `prod`) silently disables the
+forward-only guard once, because the guard allows any deploy when the environment has no successful
+deployment. The label fallback closes that window.
+
+Alternatives: pinning only the sync (rejected, rotators un-pin it); deploying with Google's deploy
+action (rejected, it has no file input, and the owner already ruled `--env-vars-file`).
+
+Status: design of record, wave 0 docs. Not released; whether v3.10.0 ships first is a pending owner
+decision (plan Q9). Open owner questions Q4 (rollback path) and Q8 (`pin_env: false` escape) still apply.
 
 ## 2026-10-21 — workflow-preflight + zizmor added to the gate
 

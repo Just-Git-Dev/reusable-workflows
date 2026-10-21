@@ -172,7 +172,7 @@ on:
 
 jobs:
   sweep:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-secret-versions.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-secret-versions.yml@v4.0.0
     permissions:
       contents: read
       id-token: write

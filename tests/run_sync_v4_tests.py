@@ -1,0 +1,581 @@
+#!/usr/bin/env python3
+"""Red tests for the v4 `sync-bundle-key` contract (docs/sync-bundle-key.md).
+
+Same method as run_step_tests.py: a named step's `run:` body is extracted from the workflow YAML
+and executed under `bash -eo pipefail` against stubbed `gcloud` / `gh`. Written BEFORE the
+implementation (v4 wave 1): every case here is expected to fail until the workflow grows the
+step, input or behaviour it names.
+
+Step names and the env-var names a step reads are the contract these tests pin; the docs fix the
+behaviour but not those names, so they are listed in CONTRACT below and are what wave 2 must
+implement (or the tests are amended in the same change).
+
+Cases marked P1 depend on the unproven premise that an environment-scoped secret reaches a
+cross-org reusable callee (plan premise P1); they encode the documented design only.
+
+Usage:  python3 tests/run_sync_v4_tests.py
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+WF = ROOT / ".github" / "workflows"
+SYNC = WF / "sync-bundle-key.yml"
+KEYPAIR = WF / "rotate-signing-keypair.yml"
+WORKER = WF / "rotate-worker-signing-secret.yml"
+
+# CONTRACT (invented names; docs describe behaviour only).
+S0_STEP = "Guard environment branch policy"      # env: ENVIRONMENT REQUIRE_BRANCH_POLICY GH_TOKEN REPO
+COMPUTE_STEP = "Compute new bundle"              # env: MODE SECRET_KEYS_FILE CONFIRM_REMOVED DRY_RUN
+                                                 #      PAYLOAD_JSON STRICT_VALUES MIN_VALUE_LEN; /tmp/bundle.env
+VALIDATE_STEP = "Validate payload"
+ROLL_STEP = "Force new Cloud Run revision(s)"    # env: NEW_VERSION PIN_VERSIONS GITHUB_RUN_ID
+KEEP_STEP = "Disable superseded bundle version(s)"  # env: NEW_VERSION KEEP_ENABLED_COUNT SERVICES_CSV
+ENVPAYLOAD_STEP = "Build payload from environment secrets"  # P1; env: ALL_SECRETS_JSON SECRET_KEYS_FILE
+
+FAILURES = []
+CASES = 0
+
+
+def check(name, cond, detail=""):
+    global CASES
+    CASES += 1
+    if cond:
+        print(f"  ok   {name}")
+    else:
+        print(f"  FAIL {name} {detail}"[:400])
+        FAILURES.append(name)
+
+
+def extract_step(workflow: Path, job: str, step_name: str):
+    """Return the `run:` body of a named step, or None when the step does not exist."""
+    doc = yaml.safe_load(workflow.read_text())
+    for step in doc["jobs"][job]["steps"]:
+        if step.get("name") == step_name and "run" in step:
+            return step["run"]
+    return None
+
+
+def workflow_inputs():
+    doc = yaml.safe_load(SYNC.read_text())
+    on = doc.get("on") or doc.get(True)
+    return on["workflow_call"]["inputs"], on["workflow_call"].get("secrets", {}), doc
+
+
+def run_body(body, env, *, gcloud="", gh="", files=None):
+    """Run a step body in a sandbox. /tmp is redirected; stubs log argv to `calls`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stub = tmp / "bin"
+        stub.mkdir()
+        calls = tmp / "calls"
+        calls.write_text("")
+        for name, script in (("gcloud", gcloud), ("gh", gh)):
+            p = stub / name
+            p.write_text('#!/usr/bin/env bash\n'
+                         f'echo "{name} $*" >> {calls}\n' + script + '\nexit 0\n')
+            p.chmod(0o755)
+        for rel, content in (files or {}).items():
+            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp / rel).write_text(content)
+        e = dict(os.environ)
+        e["PATH"] = f"{stub}:{e['PATH']}"
+        e.update(GITHUB_STEP_SUMMARY=str(tmp / "summary"), GITHUB_OUTPUT=str(tmp / "out"),
+                 BUNDLE_SECRET="app-secrets", GCP_PROJECT="p", GCP_REGION="r",
+                 MOUNT_PATH="/secrets/app.env", SERVICES_CSV="svc")
+        e.update(env)
+        proc = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+             body.replace("/tmp/", f"{tmp}/")],
+            capture_output=True, text=True, env=e, cwd=tmp)
+        out = tmp / "out"
+        return {"rc": proc.returncode, "out": proc.stdout + proc.stderr,
+                "calls": calls.read_text(),
+                "bundle": (tmp / "bundle.env").read_text() if (tmp / "bundle.env").exists() else "",
+                "outputs": out.read_text() if out.exists() else ""}
+
+
+def step_or_red(name, workflow, job, step):
+    body = extract_step(workflow, job, step)
+    if body is None:
+        check(f"{name}: step '{step}' exists in {workflow.name}", False,
+              "(step not found: not implemented yet)")
+    return body
+
+
+# --- inputs and defaults ------------------------------------------------------------------------
+
+def input_cases():
+    print("\nsync-bundle-key v4 · input contract")
+    inputs, secrets, doc = workflow_inputs()
+    want = {"mode": "replace", "strict_values": True, "pin_versions": True,
+            "secret_keys_file": "deploy/secret-keys.txt", "confirm_removed": "",
+            "require_branch_policy": True, "environment": "", "payload_source": "caller"}
+    for k, v in want.items():
+        check(f"input {k} exists with default {v!r}",
+              k in inputs and inputs[k].get("default") == v, f"got {inputs.get(k)}")
+    check("pin_versions default is the boolean true", inputs.get("pin_versions", {}).get("type") == "boolean")
+    check("job sets environment from the input",
+          doc["jobs"]["sync"].get("environment") == "${{ inputs.environment }}",
+          f"got {doc['jobs']['sync'].get('environment')!r}")
+    # P1-dependent: payload_json is only required for payload_source: caller.
+    check("P1: payload_json is not required (payload_source: environment omits it)",
+          secrets.get("payload_json", {}).get("required") is False,
+          f"got {secrets.get('payload_json')}")
+
+
+# --- m11: an unknown payload_source fails instead of falling back to caller ---------------------
+
+def source_cases():
+    print("\nsync-bundle-key v4 . payload_source validation")
+    body = step_or_red("source check", SYNC, "sync", "Validate payload_source")
+    if body is None:
+        return
+    for v, ok in (("caller", True), ("environment", True), ("enviroment", False), ("", False)):
+        r = run_body(body, {"PAYLOAD_SOURCE": v})
+        check(f"payload_source {v!r} -> {'accepted' if ok else 'refused'}",
+              (r["rc"] == 0) == ok, r["out"])
+
+
+# --- S0 -----------------------------------------------------------------------------------------
+
+def s0_cases():
+    print("\nsync-bundle-key v4 · S0 environment guard")
+    body = step_or_red("S0", SYNC, "sync", S0_STEP)
+    if body is None:
+        return
+    env = {"ENVIRONMENT": "stage", "REQUIRE_BRANCH_POLICY": "true", "GH_TOKEN": "t",
+           "REPO": "o/r"}
+
+    def gh_env(policy):
+        doc = json.dumps({"name": "stage", "deployment_branch_policy": policy})
+        return f"cat <<'J'\n{doc}\nJ"
+
+    r = run_body(body, env, gh=gh_env(None))
+    check("S0 refuses an environment with a null branch policy", r["rc"] != 0, r["out"])
+    r = run_body(body, env, gh=gh_env({"protected_branches": False, "custom_branch_policies": True}))
+    check("S0 passes an environment with a branch policy", r["rc"] == 0, r["out"])
+    check("S0 reads /environments/<env> of the repo",
+          "repos/o/r/environments/stage" in r["calls"], r["calls"])
+    r = run_body(body, {**env, "ENVIRONMENT": ""}, gh=gh_env(None))
+    check("S0 is a no-op without an environment", r["rc"] == 0 and r["calls"] == "", r["out"])
+
+
+# --- replace / merge ----------------------------------------------------------------------------
+
+def mode_cases():
+    print("\nsync-bundle-key v4 · mode: replace")
+    body = step_or_red("replace", SYNC, "sync", COMPUTE_STEP)
+    if body is None:
+        return
+    base = {"MODE": "replace", "SECRET_KEYS_FILE": "deploy/secret-keys.txt", "DRY_RUN": "false",
+            "STRICT_VALUES": "true", "MIN_VALUE_LEN": "8", "CONFIRM_REMOVED": ""}
+    keys = {"deploy/secret-keys.txt": "A\nB\n"}
+    bundle = "A=old-a\nSTALE=gone-soon\n"
+    payload = json.dumps({"B": "value-b-1"})
+
+    def go(**kw):
+        files = {**keys, **kw.pop("files", {})}
+        env = {**base, "PAYLOAD_JSON": kw.pop("payload", payload), **kw}
+        return run_body(body, env, files=files | {"bundle.env": bundle})
+
+    r = go(CONFIRM_REMOVED="STALE")
+    check("replace keeps listed current keys, overlays payload, drops unlisted",
+          r["rc"] == 0 and r["bundle"].splitlines() == ["A=old-a", "B=value-b-1"],
+          f"rc={r['rc']} bundle={r['bundle']!r} {r['out']}")
+    r = go(payload=json.dumps({"A": "value-a-2"}))
+    check("replace refuses a listed key absent from payload and bundle (B)",
+          r["rc"] != 0 and "B" in r["out"], r["out"])
+    r = go()
+    check("replace refuses a live run that drops STALE without confirm_removed",
+          r["rc"] != 0 and "STALE" in r["out"], r["out"])
+    r = go(CONFIRM_REMOVED="STALE,A")
+    check("confirm_removed must equal the dropped set EXACTLY (superset refused)",
+          r["rc"] != 0, r["out"])
+    r = go(CONFIRM_REMOVED="STALE")
+    check("exact confirm_removed lets the drop through", r["rc"] == 0, r["out"])
+    r = go(DRY_RUN="true", payload=json.dumps({"B": "SECRETVALUE99"}))
+    check("dry run prints +added -removed =kept by NAME only",
+          r["rc"] == 0 and "SECRETVALUE99" not in r["out"] and "old-a" not in r["out"]
+          and re.search(r"\+\s*B", r["out"]) and re.search(r"-\s*STALE", r["out"])
+          and re.search(r"=\s*A", r["out"]), r["out"])
+    r = go(DRY_RUN="true")
+    check("dry run needs no confirm_removed (it only reports)", r["rc"] == 0, r["out"])
+
+    print("\nsync-bundle-key v4 · mode: merge (v3 behaviour)")
+    r = go(MODE="merge")
+    check("merge keeps unlisted keys and needs no list or confirm",
+          r["rc"] == 0 and "STALE=gone-soon" in r["bundle"] and "B=value-b-1" in r["bundle"],
+          r["out"])
+
+
+def strict_cases():
+    print("\nsync-bundle-key v4 · strict_values by default")
+    inputs, _, _ = workflow_inputs()
+    check("strict_values defaults true", inputs.get("strict_values", {}).get("default") is True)
+    body = extract_step(SYNC, "sync", VALIDATE_STEP)
+    if body is None:
+        check("Validate step exists", False)
+        return
+    # The step must read the default from the workflow env, not hard-code false.
+    doc_text = SYNC.read_text()
+    check("Validate step is fed STRICT_VALUES from inputs.strict_values",
+          re.search(r"STRICT_VALUES:\s*\$\{\{\s*inputs\.strict_values", doc_text) is not None)
+    r = run_body(body, {"PAYLOAD_JSON": json.dumps({"K": ""}), "MIN_VALUE_LEN": "0",
+                        "STRICT_VALUES": "true"})
+    check("an empty value is refused under the strict default", r["rc"] != 0, r["out"])
+
+
+# --- S5 roll, pinned ----------------------------------------------------------------------------
+
+def roll_cases():
+    print("\nsync-bundle-key v4 · S5 pinned roll")
+    body = step_or_red("roll", SYNC, "sync", ROLL_STEP)
+    if body is None:
+        return
+    env = {"NEW_VERSION": "8", "PIN_VERSIONS": "true", "GITHUB_RUN_ID": "4242",
+           "SERVICES_CSV": "svc-a, svc-b"}
+    r = run_body(body, env)
+    check("roll succeeds", r["rc"] == 0, r["out"])
+    updates = [c for c in r["calls"].splitlines() if "run services update" in c]
+    check("one update per service", len(updates) == 2, r["calls"])
+    check("roll pins the bundle to :N+1 (version number from NEW_VERSION), never :latest",
+          all("--update-secrets=/secrets/app.env=app-secrets:8" in c for c in updates)
+          and ":latest" not in r["calls"], r["calls"])
+    check("roll stamps jgd_env_version and jgd_run labels",
+          all("jgd_env_version=8" in c and "jgd_run=4242" in c for c in updates), r["calls"])
+    r = run_body(body, {**env, "PIN_VERSIONS": "false"})
+    check("pin_versions: false keeps the v3 :latest roll",
+          "app-secrets:latest" in r["calls"], r["calls"])
+    # v3 keypair-rotator parity: bootstrap tolerates a service that does not exist yet.
+    fail = 'if [ "$1 $2" = "run services" ]; then exit 1; fi'
+    r = run_body(body, {**env, "BOOTSTRAP": "true"}, gcloud=fail)
+    check("bootstrap=true: a failed roll warns and exits 0",
+          r["rc"] == 0 and "::warning::" in r["out"], r["out"])
+    r = run_body(body, {**env, "BOOTSTRAP": "true", "SERVICES_CSV": " , "})
+    check("bootstrap=true: zero services warns and exits 0",
+          r["rc"] == 0 and "::warning::" in r["out"], r["out"])
+    r = run_body(body, {**env, "BOOTSTRAP": "false"}, gcloud=fail)
+    check("bootstrap=false: a failed roll exits 1", r["rc"] == 1, r["out"])
+    r = run_body(body, {**env, "BOOTSTRAP": "false", "SERVICES_CSV": " , "})
+    check("bootstrap=false: zero services exits 1", r["rc"] == 1, r["out"])
+    r = run_body(body, {**env, "SERVICES_CSV": "svc-a"}, gcloud=fail)
+    check("BOOTSTRAP unset (sync-bundle-key) behaves as false: failed roll exits 1",
+          r["rc"] == 1, r["out"])
+
+
+# --- S6 keep-set --------------------------------------------------------------------------------
+
+def revision(name, volume, version, mounted=True):
+    """A Cloud Run v1 revision JSON: one secret volume pinning `version`."""
+    mounts = [{"name": volume}] if mounted else []
+    return {"metadata": {"name": name},
+            "spec": {"volumes": [{"name": volume, "secret": {
+                "secretName": "app-secrets", "items": [{"key": version, "path": "app.env"}]}}],
+                "containers": [{"volumeMounts": mounts}]}}
+
+
+def keep_cases():
+    print("\nsync-bundle-key v4 · S6 keep-set")
+    body = step_or_red("keep", SYNC, "sync", KEEP_STEP)
+    if body is None:
+        return
+
+    def go(revs, enabled=("8", "7", "6", "5", "4"), keep="1", traffic=None, others=None):
+        """`traffic`: the service's status.traffic (default 100% on the newest revision).
+        `others`: {service: [revisions]} the project holds beyond services_csv."""
+        others = others or {}
+        top = revs[0]["metadata"]["name"]
+        svc_json = json.dumps({"status": {"latestReadyRevisionName": top, "traffic": traffic
+                               or [{"revisionName": top, "percent": 100}]}})
+        # REAL shape: `secrets versions list --format=value(name)` prints FULL resource paths.
+        gcloud = (
+            'if [ "$1" = "secrets" ] && [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
+            + "".join(f'  echo projects/1/secrets/app-secrets/versions/{v}\n' for v in enabled)
+            + '  exit 0\nfi\n'
+            'if [ "$3" = "services" ] && [ "$4" = "list" ]; then\n'
+            + "".join(f'  echo {n}\n' for n in others) + '  exit 0\nfi\n'
+            'if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+            f"  cat <<'J'\n{svc_json}\nJ\n  exit 0\nfi\n"
+            'if [ "$3" = "revisions" ] && [ "$4" = "list" ]; then\n'
+            + "".join(f"  if [ \"$5\" = \"--service={n}\" ]; then cat <<'J'\n{json.dumps(rv)}\nJ\n"
+                      "  exit 0; fi\n" for n, rv in others.items())
+            + f"  cat <<'J'\n{json.dumps(revs)}\nJ\n  exit 0\nfi")
+        r = run_body(body, {"NEW_VERSION": "8", "KEEP_ENABLED_COUNT": keep,
+                            "SERVICES_CSV": "svc"}, gcloud=gcloud)
+        disabled = sorted(re.findall(r"versions disable (\S+)", r["calls"]))
+        return r, disabled
+
+    # newest-first revisions: r3 -> 8 (just rolled), r2 pins 7, r1 pins 5, r0 pins 4 (3rd newest).
+    revs = [revision("r3", "v", "8"), revision("r2", "v", "7"),
+            revision("r1", "v", "5"), revision("r0", "v", "4")]
+    r, d = go(revs)
+    check("keeps N+1 and the pins of the two newest revisions; disables the rest (6, 4)",
+          r["rc"] == 0 and d == ["4", "6"], f"disabled={d} {r['out']}")
+    check("never destroys", "versions destroy" not in r["calls"], r["calls"])
+    revs2 = [revision("r2", "v", "8"), revision("r1", "v", "7", mounted=True),
+             {"metadata": {"name": "r1b"}, "spec": {"volumes": [
+                 {"name": "orphan", "secret": {"secretName": "app-secrets",
+                                               "items": [{"key": "6", "path": "x"}]}}],
+              "containers": [{"volumeMounts": []}]}}]
+    r, d = go(revs2, enabled=("8", "7", "6"))
+    check("an orphan declared volume (no volumeMount) pins nothing: 6 is disabled",
+          d == ["6"], f"disabled={d} {r['out']}")
+    # M4(a): a revision still taking traffic keeps its pin however old it is (post-rollback state).
+    r, d = go(revs, traffic=[{"revisionName": "r0", "percent": 100}])
+    check("a revision with traffic > 0 keeps its pin even when 4th newest (4 kept)",
+          r["rc"] == 0 and d == ["6"], f"disabled={d} {r['out']}")
+    r, d = go(revs, traffic=[{"revisionName": "r3", "percent": 50}, {"revisionName": "r0", "percent": 0}])
+    check("a 0% traffic entry pins nothing", d == ["4", "6"], f"disabled={d}")
+    # M4(c): consumers are scanned project-wide, not only services_csv.
+    other = [{"metadata": {"name": "o1"}, "spec": {"volumes": [{"name": "v", "secret": {
+        "secretName": "app-secrets", "items": [{"key": "6", "path": "x"}]}}],
+        "containers": [{"volumeMounts": [{"name": "v"}]}]}}]
+    r, d = go(revs, others={"other-svc": other})
+    check("a bundle consumer NOT in services_csv keeps its pin (6 kept)",
+          r["rc"] == 0 and d == ["4"], f"disabled={d} {r['out']}")
+    r, d = go(revs, keep="3")
+    check("keep_enabled_count is a floor: the 3 newest (8,7,6) stay too -> only 4 disabled",
+          d == ["4"], f"disabled={d}")
+
+
+# --- M3: a rotator's rollback never disables a version a live revision pins ----------------------
+
+ROLLBACK_STEP = "Roll back the new SM version on failure"
+
+
+def rollback_cases():
+    print("\nrotators . M3 roll-back-on-failure refuses to disable a pinned version")
+    for wf in (KEYPAIR, WORKER):
+        body = extract_step(wf, "rotate", ROLLBACK_STEP)
+        if body is None:
+            check(f"{wf.name}: rollback step exists", False)
+            continue
+
+        def go(pin):
+            rv = [{"metadata": {"name": "r2"}, "spec": {"volumes": [{"name": "v", "secret": {
+                "secretName": "app-secrets", "items": [{"key": pin, "path": "x"}]}}],
+                "containers": [{"volumeMounts": [{"name": "v"}]}]}}]
+            svc = {"status": {"latestReadyRevisionName": "r2",
+                              "traffic": [{"revisionName": "r2", "percent": 100}]}}
+            gcloud = (
+                'if [ "$2" = "versions" ] && [ "$3" = "access" ]; then echo content; exit 0; fi\n'
+                'if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+                f"  cat <<'J'\n{json.dumps(svc)}\nJ\n  exit 0\nfi\n"
+                'if [ "$3" = "revisions" ] && [ "$4" = "list" ]; then\n'
+                f"  cat <<'J'\n{json.dumps(rv)}\nJ\n  exit 0\nfi")
+            return run_body(body, {"NEW_VERSION": "8", "CUR_VERSION": "7"}, gcloud=gcloud)
+
+        r = go("8")
+        check(f"{wf.name}: N+1 pinned by a live revision -> NOT disabled, loud failure",
+              "versions disable" not in r["calls"] and r["rc"] != 0, r["calls"] + r["out"])
+        r = go("7")
+        check(f"{wf.name}: nothing pins N+1 -> disabled as before",
+              r["rc"] == 0 and "versions disable 8" in r["calls"], r["calls"] + r["out"])
+
+
+# --- critic round 2: template pin, secretKeyRef pins, named traffic revisions, all regions ---------
+
+def env_revision(name, version, secret="app-secrets"):
+    """A revision whose only pin is an env-var secretKeyRef (key == the version)."""
+    return {"metadata": {"name": name}, "spec": {"containers": [{"env": [{"name": "ENVF",
+            "valueFrom": {"secretKeyRef": {"name": secret, "key": version}}}]}]}}
+
+
+def round2_stub(svc, revs=None, named=None, others=None, jobs=None, versions=("8", "7", "6", "5", "4")):
+    """gcloud stub. `svc` = service describe JSON for every service; `revs` = {service: revision
+    list}; `named` = {revision name: describe JSON}; `others` = [(service, region)] the list prints
+    tab-separated beyond services_csv; `jobs` = [(job, region, describe JSON)]."""
+    revs, named, others = revs or {}, named or {}, others or []
+    g = ('if [ "$1" = "secrets" ] && [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
+         + "".join(f"  echo projects/1/secrets/app-secrets/versions/{v}\n" for v in versions)
+         + '  exit 0\nfi\n'
+         'if [ "$2" = "versions" ] && [ "$3" = "access" ]; then echo content; exit 0; fi\n'
+         'if [ "$3" = "services" ] && [ "$4" = "list" ]; then\n'
+         + "".join(f'  printf "%s\\t%s\\n" {n} {rg}\n' for n, rg in others) + '  exit 0\nfi\n'
+         'if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+         f"  cat <<'J'\n{json.dumps(svc)}\nJ\n  exit 0\nfi\n")
+    for rn, doc in named.items():
+        g += (f'if [ "$3" = "revisions" ] && [ "$4" = "describe" ] && [ "$5" = "{rn}" ]; then '
+              f"cat <<'J'\n{json.dumps(doc)}\nJ\n exit 0; fi\n")
+    for s, rv in revs.items():
+        g += (f'if [ "$3" = "revisions" ] && [ "$4" = "list" ] && [ "$5" = "--service={s}" ]; then '
+              f"cat <<'J'\n{json.dumps(rv)}\nJ\n exit 0; fi\n")
+    if revs:
+        first = next(iter(revs.values()))
+        g += (f'if [ "$3" = "revisions" ] && [ "$4" = "list" ]; then cat <<\'J\'\n'
+              f'{json.dumps(first)}\nJ\n exit 0; fi\n')
+    if jobs:
+        g += 'if [ "$3" = "jobs" ] && [ "$4" = "list" ]; then\n' + "".join(
+            f'  printf "%s\\t%s\\n" {n} {rg}\n' for n, rg, _ in jobs) + '  exit 0\nfi\n'
+        for n, rg, doc in jobs:
+            g += (f'if [ "$3" = "jobs" ] && [ "$4" = "describe" ] && [ "$5" = "{n}" ]; then '
+                  f"cat <<'J'\n{json.dumps(doc)}\nJ\n exit 0; fi\n")
+    return g
+
+
+def round2_keep_cases():
+    print("\nrotators + sync . critic round 2 keep-set (secretKeyRef pins, named traffic, regions)")
+    svc = {"status": {"latestReadyRevisionName": "r3", "traffic": [{"revisionName": "r3", "percent": 100}]}}
+    newest = [revision("r3", "v", "8"), revision("r2", "v", "7"), revision("r1", "v", "6")]
+    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")):
+        body = extract_step(wf, job, KEEP_STEP)
+        if body is None:
+            check(f"{wf.name}: keep step exists", False)
+            continue
+        tag = wf.name
+
+        def go(g, keep="1"):
+            r = run_body(body, {"NEW_VERSION": "8", "KEEP_ENABLED_COUNT": keep}, gcloud=g)
+            return r, sorted(re.findall(r"versions disable (\S+)", r["calls"]))
+
+        r, d = go(round2_stub(svc, {"svc": newest, "other": [env_revision("o1", "5")]}, others=[("other", "r")]))
+        check(f"{tag}: a pin held only via env[].valueFrom.secretKeyRef is kept (5 stays, only 4 disabled)",
+              r["rc"] == 0 and d == ["4"], f"disabled={d} {r['out']}")
+        # A traffic-holding revision beyond the newest-50 list is read BY NAME.
+        old = {"status": {"latestReadyRevisionName": "r3", "traffic": [{"revisionName": "ancient", "percent": 100}]}}
+        r, d = go(round2_stub(old, {"svc": newest}, named={"ancient": revision("ancient", "v", "5")}))
+        check(f"{tag}: a traffic-holding revision missing from the newest-50 list is described by name (5 kept)",
+              r["rc"] == 0 and d == ["4"] and "revisions describe ancient" in r["calls"], f"disabled={d} {r['calls']}")
+        # A 0% entry with a tag is served at its tag URL: live.
+        tagged = {"status": {"latestReadyRevisionName": "r3", "traffic": [
+            {"revisionName": "r3", "percent": 100}, {"revisionName": "canary", "percent": 0, "tag": "canary"}]}}
+        r, d = go(round2_stub(tagged, {"svc": newest}, named={"canary": revision("canary", "v", "4")}))
+        check(f"{tag}: a 0% traffic entry with a tag keeps its pin (4 kept, only 5 disabled)",
+              r["rc"] == 0 and d == ["5"], f"disabled={d} {r['out']}")
+        # Consumers in every region the project uses, described in THEIR region.
+        job_doc = {"spec": {"template": {"spec": {"template": {"spec": {
+            "volumes": [{"name": "v", "secret": {"secretName": "app-secrets",
+                                                 "items": [{"key": "4", "path": "x"}]}}],
+            "containers": [{"volumeMounts": [{"name": "v"}]}]}}}}}}
+        r, d = go(round2_stub(svc, {"svc": newest, "eu-svc": [revision("e1", "v", "5")]},
+                              others=[("eu-svc", "europe-west1")], jobs=[("eu-job", "europe-west1", job_doc)]))
+        check(f"{tag}: a service and a job in another region keep their pins (5 and 4 stay)",
+              r["rc"] == 0 and d == [], f"disabled={d} {r['out']}")
+        check(f"{tag}: the other-region service is described with --region=europe-west1",
+              re.search(r"services describe eu-svc .*--region=europe-west1", r["calls"]) is not None, r["calls"])
+        check(f"{tag}: services/jobs are listed across all regions (no --region on the list call)",
+              not re.search(r"(services|jobs) list .*--region", r["calls"]), r["calls"])
+
+
+def unresponsive_cases():
+    print("\nrotators + sync . critic round 3: an all-region list that skipped regions refuses")
+    svc = {"status": {"latestReadyRevisionName": "r3", "traffic": [{"revisionName": "r3", "percent": 100}]}}
+    newest = [revision("r3", "v", "8"), revision("r2", "v", "7"), revision("r1", "v", "6")]
+    warn = ('  echo "WARNING: The following regions did not respond: europe-west9. '
+            'List results may be incomplete." >&2\n')
+    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")):
+        body = extract_step(wf, job, KEEP_STEP)
+        if body is None:
+            check(f"{wf.name}: keep step exists", False)
+            continue
+        for kind in ("services", "jobs"):
+            g = (f'if [ "$3" = "{kind}" ] && [ "$4" = "list" ]; then\n' + warn + '  exit 0\nfi\n'
+                 + round2_stub(svc, {"svc": newest}, jobs=[("j1", "r", {})]))
+            r = run_body(body, {"NEW_VERSION": "8", "KEEP_ENABLED_COUNT": "1"}, gcloud=g)
+            check(f"{wf.name}: a {kind} list that skipped a region refuses and disables nothing",
+                  r["rc"] != 0 and "versions disable" not in r["calls"] and "::error::" in r["out"],
+                  f"rc={r['rc']} {r['out'][-300:]} {r['calls']}")
+
+
+def round2_undo_cases():
+    print("\nrotators . critic round 2 M3 undo (template pin, secretKeyRef, named traffic revisions)")
+    for wf in (KEYPAIR, WORKER):
+        body = extract_step(wf, "rotate", ROLLBACK_STEP)
+        if body is None:
+            check(f"{wf.name}: rollback step exists", False)
+            continue
+        tag = wf.name
+
+        def go(svc, revs, named=None):
+            return run_body(body, {"NEW_VERSION": "8", "CUR_VERSION": "7"},
+                            gcloud=round2_stub(svc, {"svc": revs}, named=named))
+
+        def refused(r):
+            return "versions disable" not in r["calls"] and r["rc"] != 0
+
+        # probe P2: traffic on r1 (pins 7), but the latest ready revision r2 (0% traffic) pins 8.
+        s2 = {"status": {"latestReadyRevisionName": "r2", "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s2, [revision("r2", "v", "8"), revision("r1", "v", "7")])
+        check(f"{tag}: the latest ready revision at 0% traffic still counts as live (8 not disabled)",
+              refused(r), r["calls"] + r["out"])
+        s3 = {"status": {"latestReadyRevisionName": "r1", "latestCreatedRevisionName": "r2",
+                         "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s3, [revision("r2", "v", "8"), revision("r1", "v", "7")])
+        check(f"{tag}: the latest CREATED revision counts as live (8 not disabled)", refused(r),
+              r["calls"] + r["out"])
+        s4 = {"spec": {"template": revision("tpl", "v", "8")},
+              "status": {"latestReadyRevisionName": "r1", "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s4, [revision("r1", "v", "7")])
+        check(f"{tag}: the service TEMPLATE pin counts as live (8 not disabled)", refused(r),
+              r["calls"] + r["out"])
+        s5 = {"status": {"latestReadyRevisionName": "r1", "traffic": [{"revisionName": "r1", "percent": 100}]}}
+        r = go(s5, [env_revision("r1", "8")])
+        check(f"{tag}: a live pin via env[].valueFrom.secretKeyRef is refused too", refused(r),
+              r["calls"] + r["out"])
+        s6 = {"status": {"latestReadyRevisionName": "r2", "traffic": [{"revisionName": "ancient", "percent": 100}]}}
+        r = go(s6, [revision("r2", "v", "7")], named={"ancient": revision("ancient", "v", "8")})
+        check(f"{tag}: a traffic-holding revision outside the newest-50 list is described by name",
+              refused(r) and "revisions describe ancient" in r["calls"], r["calls"] + r["out"])
+        r = go(s5, [revision("r1", "v", "7")])
+        check(f"{tag}: nothing live pins 8 -> still disabled", r["rc"] == 0 and "versions disable 8" in r["calls"],
+              r["calls"] + r["out"])
+        check(f"{tag}: the retained revision list is sorted newest-first",
+              "--sort-by" in r["calls"], r["calls"])
+
+
+# --- three writers identical --------------------------------------------------------------------
+
+def identical_cases():
+    print("\nsync-bundle-key v4 · the three bundle writers share roll + keep-set bodies")
+    for step in (ROLL_STEP, KEEP_STEP):
+        bodies = {wf.name: extract_step(wf, job, step)
+                  for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate"))}
+        missing = [n for n, b in bodies.items() if b is None]
+        check(f"'{step}' exists in all three writers", not missing, f"missing in {missing}")
+        distinct = {b for b in bodies.values() if b is not None}
+        check(f"'{step}' bodies are byte-identical across the three writers",
+              len(distinct) == 1 and not missing, f"{len(distinct)} distinct bodies")
+
+
+# --- P1: payload_source: environment ------------------------------------------------------------
+
+def env_source_cases():
+    # P1-DEPENDENT: encodes the documented design for payload_source: environment, which stays
+    # UNPROVEN until a real dry run shows environment secrets reach a cross-org callee.
+    print("\nsync-bundle-key v4 · payload_source: environment (P1-dependent, UNPROVEN premise)")
+    body = step_or_red("P1 env payload", SYNC, "sync", ENVPAYLOAD_STEP)
+    if body is None:
+        return
+    files = {"deploy/secret-keys.txt": "DB_PASSWORD\nREDIS_PASSWORD\n"}
+    env = {"SECRET_KEYS_FILE": "deploy/secret-keys.txt"}
+    r = run_body(body, {**env, "ALL_SECRETS_JSON": json.dumps(
+        {"DB_PASSWORD": "pw-one-1", "REDIS_PASSWORD": "pw-two-2", "github_token": "x", "OTHER": "y"})},
+        files=files)
+    check("P1: builds a payload of exactly the listed keys (github_token, OTHER excluded)",
+          r["rc"] == 0 and "github_token" not in r["outputs"] and "OTHER" not in r["outputs"]
+          and "DB_PASSWORD" in r["outputs"], r["out"] + r["outputs"])
+    r = run_body(body, {**env, "ALL_SECRETS_JSON": json.dumps({"DB_PASSWORD": "pw-one-1"})},
+                 files=files)
+    check("P1: a listed key with no environment secret is refused, naming the key only",
+          r["rc"] != 0 and "REDIS_PASSWORD" in r["out"] and "pw-one-1" not in r["out"], r["out"])
+
+
+def main():
+    for fn in (input_cases, source_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases, rollback_cases,
+               round2_keep_cases, unresponsive_cases, round2_undo_cases, identical_cases, env_source_cases):
+        fn()
+    print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
+    return 1 if FAILURES else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -4,7 +4,7 @@ Apply configuration to an **existing** Cloud Run service — runtime identity, s
 env vars, mounted secrets, probes — then gate on the service's own health endpoint.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v3.9.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v4.0.0
 ```
 
 ## It never deploys an image
@@ -65,6 +65,28 @@ candidate occurs in some value, the run **fails and says so** rather than guessi
 caller that owns the whole environment. `clear_env_vars` only means something with `update`,
 which otherwise cannot remove anything.
 
+## Env file, labels and manifest (v4.x)
+
+Added in a v4 minor release, as optional inputs: with them empty, nothing below applies and the
+workflow behaves as before.
+
+`env_file` is the path, in the checkout, of a committed YAML env file (for example
+`deploy/env.stage.yaml`). It is rendered and deployed exactly as in
+[deploy-cloud-run](deploy-cloud-run.md#runtime-config-v4): the same merge with `generated_env`,
+the same refusal of secret-looking keys, and the file is passed to gcloud with
+`--env-vars-file`. The update stamps the same revision labels (`jgd_env_version`, `jgd_env_sha`,
+`jgd_run`) and writes the same `config-manifest.json` artifact, so a config-only change is as
+traceable as a deploy.
+
+`env_file` and the older `env_vars` / `env_vars_mode` inputs describe the same variables, so they
+are **mutually exclusive**: a run that gives both (a non-blank `env_vars` together with `env_file`)
+is refused up front, naming both inputs, before anything is applied. `generated_env`,
+`env_secret`, `env_mount_path`, `pin_env` and `manifest_retention_days` behave as in
+deploy-cloud-run. The revision labels and the pinned bundle mount are folded into the caller's own
+`labels` / `secrets` lists, so they are never lost to a second `--update-labels` /
+`--update-secrets` flag. A run with `env_file` checks out the caller's repository at the triggering
+ref to read the file.
+
 ## `extra_args`
 
 The long tail of `gcloud run services update` flags that do not deserve a typed input, one
@@ -123,7 +145,7 @@ permissions:
 
 jobs:
   configure:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cloud-run-update.yml@v4.0.0
     with:
       service: my-api
       gcp_project: my-project

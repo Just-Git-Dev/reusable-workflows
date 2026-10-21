@@ -22,6 +22,18 @@
     "regionName": {"type": "string", "pattern": "^[a-z]+-[a-z]+[0-9]$"},
     "k8sName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"},
     "slashPair": {"type": "string", "pattern": "^[^/\\s-][^/\\s]*/[^/\\s-][^/\\s]*$"},
+    "envName": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"},
+    "environment": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": true,
+      "anyOf": [{"required": ["branches"]}, {"required": ["tags"]}],
+      "properties": {
+        "name": {"$ref": "#/$defs/envName"},
+        "branches": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "tags": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
     "saName": {"type": "string", "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"},
     "settings": {
       "type": "object",
@@ -121,7 +133,8 @@
             }
           }
         },
-        "deploys": {"type": "array", "items": {"$ref": "#/$defs/deploy"}}
+        "deploys": {"type": "array", "items": {"$ref": "#/$defs/deploy"}},
+        "environments": {"type": "array", "items": {"$ref": "#/$defs/environment"}}
       }
     }
   }

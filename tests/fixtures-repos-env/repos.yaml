@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "org": "Example-Org",
+  "defaults": {"mode": "enforce"},
+  "repos": [
+    {"name": "svc-a",
+     "environments": [
+       {"name": "prod", "branches": ["main"]},
+       {"name": "stage", "branches": ["main"], "tags": ["v*"]}
+     ]},
+    {"name": "svc-b",
+     "environments": [
+       {"name": "prod", "branches": ["main"]}
+     ]},
+    {"name": "web"}
+  ]
+}

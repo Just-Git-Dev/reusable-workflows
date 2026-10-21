@@ -2306,7 +2306,7 @@ def check(name, cond, detail=""):
 
 
 SYNC_VALIDATE = "Validate payload"
-SYNC_UPSERT = "Upsert payload keys into bundle"
+SYNC_UPSERT = "Compute new bundle"  # v4: the upsert lives in the compute step (MODE=merge)
 
 
 def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8, strict=False):
@@ -2322,6 +2322,8 @@ def run_sync_body(body: str, payload, *, bundle: str = "", min_len=8, strict=Fal
         env["PAYLOAD_JSON"] = payload if isinstance(payload, str) else json.dumps(payload)
         env["MIN_VALUE_LEN"] = str(min_len)
         env["STRICT_VALUES"] = "true" if strict else "false"
+        env.update(MODE="merge", DRY_RUN="false",  # v4 compute step; merge = the v3 upsert
+                   GITHUB_STEP_SUMMARY=str(tmp / "summary"))
         proc = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
              body.replace("/tmp/", f"{tmp}/")],
@@ -2426,8 +2428,8 @@ def sync_value_safety_cases():
     check("a newline value is refused even without strict_values", r["rc"] != 0, r["out"])
     doc = yaml.safe_load(SYNC.read_text())
     inp = (doc.get("on") or doc[True])["workflow_call"]["inputs"]["strict_values"]
-    check("strict_values is an optional boolean defaulting to false",
-          inp["type"] == "boolean" and inp["required"] is False and inp["default"] is False, inp)
+    check("strict_values is an optional boolean defaulting to true (v4)",
+          inp["type"] == "boolean" and inp["required"] is False and inp["default"] is True, inp)
 
     # 5b. Trailing newlines only: v3.7.0 wrote these correctly (val=$(...) strips them),
     # so they pass and are written as the bare value; an interior newline or a CR is not.

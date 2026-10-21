@@ -10,6 +10,26 @@ artifact move, so mixing the two would corrupt that invariant. This workflow onl
 buys time — **the permanent fix is always `git revert` + a new linear tag through
 `promote-image`.**
 
+## Two modes
+
+| `mode` | What it does | Secrets |
+|---|---|---|
+| `image` (default) | Rolls the service onto an already-built image by tag or digest. The new revision keeps the **current** bundle pin. | Runs **old code with the newest secrets**; the summary says so. |
+| `to_revision` (Cloud Run only) | Shifts 100% of traffic back to an existing revision (`to_revision: <name>`). Image, env and the pinned bundle version come back together. | Refuses first if that revision's pinned `<deployable>-env:<N>` is no longer ENABLED. |
+
+`to_revision` is the rollback the [pin refusal](runtime-config.md) guards. Before any traffic or
+update call it reads the target revision's mounted version of `bundle_secret` and checks that
+version's state. If it is not ENABLED the job fails and changes nothing:
+
+```
+::error::rollback refused: revision <r> pins <d>-env:<N>, which is DISABLED; only the two newest revisions' pins stay enabled.
+```
+
+To roll that far back, re-enable the version by hand
+(`gcloud secrets versions enable N --secret <d>-env`) and re-run. An empty `bundle_secret` skips the
+check with a notice (a service that mounts no bundle). A manual `update-traffic` in the Cloud
+Console cannot be guarded by any workflow.
+
 ## When to use it
 
 - **Incident response.** Prod (or stage) is serving a bad release; get a prior
@@ -51,8 +71,11 @@ on:
 | `gcp_region` | (req) | GAR host region + Cloud Run region default |
 | `image_registry` | `''` | full GAR host; empty ⇒ `<gcp_region>-docker.pkg.dev` |
 | `gar_project` / `gar_repo` / `image_name` | (req) | image path; `image_name` may contain slashes |
-| `rollback_tag` | `''` | tag to roll back TO — **exactly one** of tag/digest |
-| `rollback_digest` | `''` | `sha256:…` to roll back TO (immutable, safest) — **exactly one** of tag/digest |
+| `mode` | `image` | `image` \| `to_revision` (see "Two modes"); `to_revision` needs `deploy_target: cloud-run` |
+| `to_revision` | `''` | revision name to shift traffic back to; required for, and only valid with, `mode: to_revision` |
+| `bundle_secret` | `''` | `<deployable>-env` secret whose pinned version the pin check reads (`to_revision` only); empty ⇒ no check |
+| `rollback_tag` | `''` | `mode: image`: tag to roll back TO — **exactly one** of tag/digest |
+| `rollback_digest` | `''` | `mode: image`: `sha256:…` to roll back TO (immutable, safest) — **exactly one** of tag/digest |
 | `commit_sha` | `''` | source commit of the rolled-to image; stamped + recorded so forward-only stays accurate. Strongly recommended; empty ⇒ no stamp/record |
 | `reason` | `''` | incident ref, shown in summary + Deployment |
 | `environment` | `production` | GitHub Deployment environment name |
@@ -74,7 +97,7 @@ or leave `wif_provider` empty for key-based auth.
 
 | Secret | Format | When required |
 |---|---|---|
-| `registry_credentials` | GCP SA-key JSON | key-based: authenticates `container images describe` (the image-exists check) |
+| `registry_credentials` | GCP SA-key JSON | key-based, `mode: image` only: authenticates `container images describe` (the image-exists check) |
 | `cluster_credentials` | GCP SA-key JSON | key-based: authenticates the GKE/Cloud Run roll (may equal `registry_credentials`) |
 
 ## Live-commit stamping
@@ -82,7 +105,7 @@ or leave `wif_provider` empty for key-based auth.
 On the roll, when `commit_sha` is set, the source commit is stamped onto the service
 so forward-only (in `promote-image`) can read back "what is live" after the rollback:
 
-- **Cloud Run** — a resource label `jgd_commit=<sha>` (label keys are slash-free).
+- **Cloud Run** — (`mode: image` only; a traffic shift creates no revision to label) a resource label `jgd_commit=<sha>` (label keys are slash-free).
 - **GKE** — an annotation `jgd.dev/commit=<sha>` on the workload.
 - **GitHub Deployment** — a `success` deployment on `<commit_sha>` for `environment`
   (the second, git-native record; disable with `record_github_deployment: false`).
@@ -108,7 +131,7 @@ permissions:
 
 jobs:
   rollback:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v4.0.0
     with:
       gcp_region: asia-southeast1
       gar_project: <consumer-C-project-id>
@@ -127,7 +150,7 @@ jobs:
 ## Example — key-based GKE rollback to a prior tag
 
 ```yaml
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rollback-service.yml@v4.0.0
     with:
       gcp_region: ${{ vars.CLUSTER_REGION }}
       image_registry: ${{ vars.IMAGE_REGISTRY }}

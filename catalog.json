@@ -1221,6 +1221,24 @@
           "required": false,
           "type": "boolean"
         },
+        "env_file": {
+          "default": "",
+          "description": "Path, in the checkout, of the YAML env file of plain (non-secret) config, applied with `gcloud --env-vars-file`. Empty means no env file. Mutually exclusive with `env_vars`: giving both is refused.",
+          "required": false,
+          "type": "string"
+        },
+        "env_mount_path": {
+          "default": "",
+          "description": "Path where the service mounts the bundle (required with env_secret).",
+          "required": false,
+          "type": "string"
+        },
+        "env_secret": {
+          "default": "",
+          "description": "Secret Manager bundle secret (a dotenv blob) mounted as a file. Empty means no bundle handling.",
+          "required": false,
+          "type": "string"
+        },
         "env_vars": {
           "default": "",
           "description": "Newline-separated KEY=VALUE pairs. Values may contain commas and spaces \u2014 the delimiter passed to gcloud is chosen at runtime from a character none of the values uses, so a CORS header list or a DSN does not need escaping by hand.",
@@ -1248,6 +1266,12 @@
         "gcp_region": {
           "default": "asia-southeast1",
           "description": "Cloud Run region.",
+          "required": false,
+          "type": "string"
+        },
+        "generated_env": {
+          "default": "",
+          "description": "Newline-separated KEY=VALUE pairs the caller produces, merged into the env file. A key also in the file is refused.",
           "required": false,
           "type": "string"
         },
@@ -1293,6 +1317,12 @@
           "required": false,
           "type": "string"
         },
+        "manifest_retention_days": {
+          "default": 400,
+          "description": "Retention, in days, of the config-manifest artifact.",
+          "required": false,
+          "type": "number"
+        },
         "max_instances": {
           "default": "",
           "description": "Maximum instances. Empty leaves it unchanged.",
@@ -1310,6 +1340,12 @@
           "description": "Minimum instances. Empty leaves it unchanged.",
           "required": false,
           "type": "string"
+        },
+        "pin_env": {
+          "default": true,
+          "description": "Keep the bundle mounted at a numbered version (never latest). false skips pinning and warns.",
+          "required": false,
+          "type": "boolean"
         },
         "port": {
           "default": "",
@@ -1454,6 +1490,24 @@
           "required": false,
           "type": "boolean"
         },
+        "env_file": {
+          "default": "",
+          "description": "Path, in the checkout, of the YAML env file of plain (non-secret) config, deployed with `gcloud --env-vars-file`. Empty \u21d2 v3 behaviour, no env file.",
+          "required": false,
+          "type": "string"
+        },
+        "env_mount_path": {
+          "default": "",
+          "description": "Path where the service mounts the bundle (required with env_secret).",
+          "required": false,
+          "type": "string"
+        },
+        "env_secret": {
+          "default": "",
+          "description": "Secret Manager bundle secret (a dotenv blob, e.g. <deployable>-env) mounted as a file. Empty \u21d2 no bundle handling.",
+          "required": false,
+          "type": "string"
+        },
         "environment": {
           "default": "",
           "description": "Environment name (e.g. staging, production). When set, records a GitHub Deployment marking this env's live commit \u2014 the git-native half of the live-commit record that forward-only reads back. Empty \u21d2 no Deployment record (the service label is still stamped).",
@@ -1484,6 +1538,12 @@
           "required": false,
           "type": "string"
         },
+        "generated_env": {
+          "default": "",
+          "description": "Newline-separated KEY=VALUE pairs the caller produces (e.g. APP_VERSION), merged into the env file. A key also in the file is refused.",
+          "required": false,
+          "type": "string"
+        },
         "image_name": {
           "default": null,
           "description": "Image name within the GAR repo (may differ from the service name).",
@@ -1495,6 +1555,18 @@
           "description": "Image tag to build/deploy. Empty \u21d2 the ref name that triggered the run.",
           "required": false,
           "type": "string"
+        },
+        "manifest_retention_days": {
+          "default": 400,
+          "description": "Retention, in days, of the config-manifest.json artifact (capped by the repository maximum).",
+          "required": false,
+          "type": "number"
+        },
+        "pin_env": {
+          "default": true,
+          "description": "Keep the bundle mounted at a numbered version (never latest). false skips pinning and warns.",
+          "required": false,
+          "type": "boolean"
         },
         "platforms": {
           "default": "linux/amd64",
@@ -2063,6 +2135,29 @@
       },
       "workflow": "deploy-cluster-keyed.yml"
     },
+    "deploy-env-lint": {
+      "inputs": {
+        "deploy_dir": {
+          "default": "deploy",
+          "description": "Directory in the caller repo holding env.<stage>.yaml and secret-keys.txt.",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "lint": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Lint deploy env files (reusable)",
+      "outputs": {
+        "files_examined": "Number of env files the lint examined (the run fails when this is zero)."
+      },
+      "path": ".github/workflows/deploy-env-lint.yml",
+      "secrets": {},
+      "workflow": "deploy-env-lint.yml"
+    },
     "deploy-gke-service": {
       "inputs": {
         "app_version": {
@@ -2270,6 +2365,60 @@
         }
       },
       "workflow": "deploy-gke-service.yml"
+    },
+    "distribute-env-secrets": {
+      "inputs": {
+        "app_id": {
+          "default": null,
+          "description": "Id of the GitHub App that writes the environment secrets.",
+          "required": true,
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "Print what would be written; write nothing.",
+          "required": false,
+          "type": "boolean"
+        },
+        "environment": {
+          "default": "repo-admin",
+          "description": "The calling repo's environment the job runs in (holds the App key); main only.",
+          "required": false,
+          "type": "string"
+        },
+        "mapping_file": {
+          "default": ".github/distribute-env-secrets.yaml",
+          "description": "Path of the names-only mapping file in the calling repo.",
+          "required": false,
+          "type": "string"
+        },
+        "only": {
+          "default": "",
+          "description": "Optional: distribute only this source.",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "distribute": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "distribute-env-secrets",
+      "outputs": {},
+      "path": ".github/workflows/distribute-env-secrets.yml",
+      "secrets": {
+        "app_key": {
+          "description": "The GitHub App private key.",
+          "required": true
+        },
+        "sources_json": {
+          "description": "The source secrets as a JSON object (caller passes toJSON(secrets)).",
+          "required": true
+        }
+      },
+      "workflow": "distribute-env-secrets.yml"
     },
     "manage-config-secrets": {
       "inputs": {
@@ -3239,6 +3388,46 @@
       "secrets": {},
       "workflow": "repos-deploy-scope.yml"
     },
+    "repos-environments": {
+      "inputs": {
+        "app_id": {
+          "default": null,
+          "description": "The GitHub App id (not secret) that creates the environments",
+          "required": true,
+          "type": "string"
+        },
+        "environment": {
+          "default": "repo-admin",
+          "description": "The caller environment holding the App key; must be repo-admin",
+          "required": false,
+          "type": "string"
+        },
+        "register": {
+          "default": "repos.yaml",
+          "description": "Path of the register in the caller repo (a plain relative path)",
+          "required": false,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "repos": {
+          "conditional": false,
+          "declared_permissions": {
+            "contents": "read"
+          }
+        }
+      },
+      "name": "Repos environments (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/repos-environments.yml",
+      "secrets": {
+        "app_key": {
+          "description": "The private key of the App. Pass it BY NAME (inherit is same-org only)",
+          "required": true
+        }
+      },
+      "workflow": "repos-environments.yml"
+    },
     "repos-register-check": {
       "inputs": {
         "register": {
@@ -3577,6 +3766,12 @@
           "required": false,
           "type": "string"
         },
+        "bundle_secret": {
+          "default": "",
+          "description": "mode=to_revision: the `<deployable>-env` secret whose pinned version the pin check reads. Required in to_revision mode (the refusal is not opt-in).",
+          "required": false,
+          "type": "string"
+        },
         "cluster_location": {
           "default": "",
           "description": "GKE cluster region or zone.",
@@ -3679,6 +3874,12 @@
           "required": false,
           "type": "string"
         },
+        "mode": {
+          "default": "image",
+          "description": "`image` (default): roll onto an existing image by tag/digest; the new revision keeps the CURRENT bundle pin. `to_revision` (cloud-run only): shift traffic back to an existing revision (image + env + pinned bundle together); refuses when that revision's pinned bundle version is not ENABLED.",
+          "required": false,
+          "type": "string"
+        },
         "namespace": {
           "default": "",
           "description": "Kubernetes namespace.",
@@ -3705,7 +3906,7 @@
         },
         "rollback_tag": {
           "default": "",
-          "description": "Existing tag to roll the service back TO (e.g. a prior vX.Y.Z). Provide exactly one of rollback_tag / rollback_digest.",
+          "description": "mode=image: existing tag to roll the service back TO (e.g. a prior vX.Y.Z). Provide exactly one of rollback_tag / rollback_digest.",
           "required": false,
           "type": "string"
         },
@@ -3744,6 +3945,12 @@
           "description": "Job timeout.",
           "required": false,
           "type": "number"
+        },
+        "to_revision": {
+          "default": "",
+          "description": "mode=to_revision: the Cloud Run revision name to shift traffic back to.",
+          "required": false,
+          "type": "string"
         },
         "wif_provider": {
           "default": "",
@@ -3877,6 +4084,12 @@
           "description": "Container path the bundle is mounted at \u2014 must match where the service already mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds a mount and never removes one, so a guessed path is silently wrong.",
           "required": true,
           "type": "string"
+        },
+        "pin_versions": {
+          "default": true,
+          "description": "true (DEFAULT since v4.0.0) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. false = the v3 :latest roll.",
+          "required": false,
+          "type": "boolean"
         },
         "private_key_name": {
           "default": "JWT_PRIVATE_KEY_BASE64",
@@ -4016,6 +4229,12 @@
           "description": "Container path the bundle is mounted at \u2014 must match where the service already mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds a mount and never removes one, so a guessed path is silently wrong.",
           "required": true,
           "type": "string"
+        },
+        "pin_versions": {
+          "default": true,
+          "description": "true (DEFAULT since v4.0.0) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. false = the v3 :latest roll.",
+          "required": false,
+          "type": "boolean"
         },
         "secret_bytes": {
           "default": 32,
@@ -4259,11 +4478,23 @@
           "required": false,
           "type": "string"
         },
+        "confirm_removed": {
+          "default": "",
+          "description": "CSV of key names. A live run that would drop keys refuses unless this equals the dropped set exactly.",
+          "required": false,
+          "type": "string"
+        },
         "dry_run": {
           "default": false,
           "description": "true = validate the payload and print the plan; write nothing, roll nothing.",
           "required": false,
           "type": "boolean"
+        },
+        "environment": {
+          "default": "",
+          "description": "GitHub environment the job runs in (the job's environment key is set from this). Empty = no environment, as in v3. When set, step S0 refuses an environment without a deployment branch policy (unless require_branch_policy is false).",
+          "required": false,
+          "type": "string"
         },
         "gcp_project": {
           "default": null,
@@ -4279,7 +4510,7 @@
         },
         "keep_enabled_count": {
           "default": "1",
-          "description": "After a successful roll, keep this many of the most recent ENABLED versions of the bundle secret and DISABLE the rest. 1 (DEFAULT) keeps only the version this run wrote \u2014 the historical behaviour in the steady state these workflows maintain. 2 leaves the previous version ENABLED as a rollback target that needs no re-enable first. Minimum 1: 0 would disable every version and leave `latest` unresolvable. This step only ever DISABLES \u2014 destruction belongs to cleanup-secret-versions, which owns the quarantine clock and the Cloud Run consumer scan.",
+          "description": "A FLOOR under the keep-set. After a successful roll the versions kept ENABLED are the new one, the versions pinned by the two newest previous revisions of every rolled service, and at least this many of the most recent ENABLED versions; the rest are DISABLED. 1 (DEFAULT) adds nothing beyond the new version. 2 leaves the previous version ENABLED as a rollback target that needs no re-enable first. Minimum 1: 0 would disable every version and leave `latest` unresolvable. This step only ever DISABLES \u2014 destruction belongs to cleanup-secret-versions, which owns the quarantine clock and the Cloud Run consumer scan.",
           "required": false,
           "type": "string"
         },
@@ -4289,10 +4520,40 @@
           "required": false,
           "type": "number"
         },
+        "mode": {
+          "default": "replace",
+          "description": "replace (DEFAULT since v4.0.0) = (current bundle limited to the keys listed in secret_keys_file) overlaid with the payload; unlisted keys are dropped and a listed key found in neither the payload nor the bundle is refused. merge = the v3 behaviour: current bundle overlaid with the payload, nothing dropped.",
+          "required": false,
+          "type": "string"
+        },
         "mount_path": {
           "default": null,
           "description": "Container path the bundle is mounted at \u2014 must match where the service already mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds a mount and never removes one, so a guessed path is silently wrong.",
           "required": true,
+          "type": "string"
+        },
+        "payload_source": {
+          "default": "caller",
+          "description": "caller = the payload_json secret. environment = build the payload from the keys named in secret_keys_file, read from the job's environment secrets. UNPROVEN: whether an environment secret reaches a cross-org callee is not yet demonstrated (docs/sync-bundle-key.md).",
+          "required": false,
+          "type": "string"
+        },
+        "pin_versions": {
+          "default": true,
+          "description": "true (DEFAULT since v4.0.0) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. false = the v3 :latest roll.",
+          "required": false,
+          "type": "boolean"
+        },
+        "require_branch_policy": {
+          "default": true,
+          "description": "Step S0: refuse an environment with no deployment branch policy. Only meaningful with environment.",
+          "required": false,
+          "type": "boolean"
+        },
+        "secret_keys_file": {
+          "default": "deploy/secret-keys.txt",
+          "description": "Committed list of bundle key NAMES, one per line (# comments allowed), read from the caller's checkout. Required when mode is replace or payload_source is environment.",
+          "required": false,
           "type": "string"
         },
         "service_account": {
@@ -4308,8 +4569,8 @@
           "type": "string"
         },
         "strict_values": {
-          "default": false,
-          "description": "true = also refuse payload keys that are not env-var names (^[A-Za-z_][A-Za-z0-9_]*$), empty or whitespace-only values (even with min_value_length 0), and values that are wholly a placeholder (\"-\", changeme, todo, xxx..., <...>, ${...}). Recommended. Default false keeps v3.7.0 behaviour for those; a future major will flip the default. A newline, CR or NUL in a key or value is refused regardless, because it corrupts the bundle.",
+          "default": true,
+          "description": "true (DEFAULT since v4.0.0; it was false in v3.x) = also refuse payload keys that are not env-var names (^[A-Za-z_][A-Za-z0-9_]*$), empty or whitespace-only values (even with min_value_length 0), and values that are wholly a placeholder (\"-\", changeme, todo, xxx..., <...>, ${...}). Set false to keep the v3 leniency while the payload is fixed. A newline, CR or NUL in a key or value is refused regardless, because it corrupts the bundle.",
           "required": false,
           "type": "boolean"
         },
@@ -4341,8 +4602,8 @@
       "path": ".github/workflows/sync-bundle-key.yml",
       "secrets": {
         "payload_json": {
-          "description": "JSON object {DEST_BUNDLE_KEY: value, ...} \u2014 keys are destination bundle keys.",
-          "required": true
+          "description": "JSON object {DEST_BUNDLE_KEY: value, ...} \u2014 keys are destination bundle keys. Required unless payload_source is environment.",
+          "required": false
         }
       },
       "workflow": "sync-bundle-key.yml"

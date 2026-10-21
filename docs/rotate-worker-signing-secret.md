@@ -10,6 +10,20 @@ of the form `https://files.example.com/<key>?exp=<unix>&sig=<hmac>`, where
 `sig = HMAC-SHA256(secret, "<key>|<exp>")`. The signer and verifier must agree on
 the secret; rotating it naively would reject every URL already in flight.
 
+## Pinned roll (v4)
+
+Since v4.0.0 the Cloud Run roll in step 2 below puts each service on the **numbered version**
+(`<bundle>:N+1`, never `:latest`) with the `jgd_env_version` and `jgd_run` labels, and the
+old-version disable follows the same keep-set as
+[`sync-bundle-key`](sync-bundle-key.md#version-retention--the-keep-set): the versions pinned by the
+two newest revisions of each rolled service stay ENABLED. The roll and keep-set step bodies are
+tested to be identical across the three bundle writers, so this rotation no longer un-pins the
+services.
+
+**The key it writes (`bundle_key`) must be listed in the caller's `deploy/secret-keys.txt`.**
+Under `sync-bundle-key`'s v4 default `mode: replace`, an unlisted key is dropped by the next sync.
+See [MIGRATION-v4.md](MIGRATION-v4.md).
+
 ## How the grace window works
 
 The Worker is expected to verify against a **primary** slot, then fall back to a
@@ -91,7 +105,8 @@ bundle if that is a real risk.
 | `secret_bytes` | input | `32` | generated secret length (hex, so 2x chars) |
 | `bootstrap` | input | `false` | tolerate a missing secret / missing services on first run; no grace, no disable |
 | `dry_run` | input | `false` | print the plan; generate/write/roll nothing |
-| `keep_enabled_count` | input | `'1'` | keep this many newest ENABLED versions, disable the rest; minimum `1`. See [Version retention](sync-bundle-key.md#version-retention--keep_enabled_count) |
+| `keep_enabled_count` | input | `'1'` | a floor under the keep-set: at least this many newest ENABLED versions stay; minimum `1`. See [Version retention](sync-bundle-key.md#version-retention--the-keep-set) |
+| `pin_versions` | input | **`true`** | roll with `<bundle>:<N+1>` and the `jgd_env_version`/`jgd_run` labels instead of `:latest` |
 | `cloudflare_api_token` | **secret** (req) | — | needs Workers Scripts:Edit on `cf_account_id` |
 
 ## Outputs
@@ -102,7 +117,11 @@ bundle if that is a real risk.
 
 On `service_account`: `roles/secretmanager.secretVersionManager` and
 `roles/secretmanager.secretAccessor` on `bundle_secret`, plus
-`roles/run.developer` on the target services. The Cloudflare token needs
+`roles/run.developer` on the target services. The keep/undo scan lists across the whole project,
+so it also needs PROJECT-level `run.services.list`, `run.jobs.list`, `run.jobs.get`,
+`run.revisions.list` and `run.revisions.get` (for example project-level `roles/run.viewer` in
+addition to the service-level `roles/run.developer`). A caller bound only on its own services gets
+a 403 and the keep step fails, disabling nothing. The Cloudflare token needs
 **Workers Scripts:Edit** on the account.
 
 ## Example caller
@@ -127,7 +146,7 @@ concurrency:
 
 jobs:
   rotate:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rotate-worker-signing-secret.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rotate-worker-signing-secret.yml@v4.0.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

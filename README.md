@@ -30,6 +30,13 @@ lands everywhere.
 > It **follows** the `testing` skill, which is the source of truth for the general rules;
 > this document is their umbrella-repo application.
 
+> **v4 is coming (pending release; not yet tagged).** v4.0.0 flips three defaults (bundle
+> pinning on, `mode: replace`, `strict_values: true`) and adds env-file deploys, revision labels
+> and a loud rollback refusal. Read [runtime-config](docs/runtime-config.md) for the model and
+> [MIGRATION-v4](docs/MIGRATION-v4.md) for the per-caller checklist. The additive new workflows
+> (`repos-environments`, `distribute-env-secrets`, `deploy-env-lint`) ship in the same v4.0.0
+> release (owner ruling 2026-10-21; there is no v3.10.0); until it is cut, pin the current latest tag.
+
 ## Workflows
 
 ### CI
@@ -94,6 +101,9 @@ a pure planner. Contract: [repos-register](docs/repos-register.md).
 | [`repos-service-accounts.yml`](docs/repos-service-accounts.md) | F6: create the registered service accounts that are missing. Never deletes one, never creates a key. Report or enforce |
 | [`repos-deploy-scope.yml`](docs/repos-deploy-scope.md) | F7: each repo may deploy only its own service (resource-level IAM). Report or enforce |
 | [`repos-secrets.yml`](docs/repos-secrets.md) | F8: one `<service>-env` secret per service, its whole IAM policy written here only (runtime reads, own deployer syncs). Report or enforce, prune opt-in |
+| [`repos-environments`](docs/repos-environments.md) | F9 (v4.0.0): GitHub environments per repo declared in `repos.yaml` (branch rules, never deletes) |
+| [`distribute-env-secrets`](docs/distribute-env-secrets.md) | v4.0.0: copy a project-repo secret into the environment of service repos |
+| [`deploy-env-lint`](docs/deploy-env-lint.md) | v4.0.0: lint `deploy/env.<stage>.yaml` and `deploy/secret-keys.txt` before deploy |
 
 ### Backups, alerts & housekeeping
 
@@ -139,7 +149,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v4.0.0
     with:
       go_version_file: go.mod
       coverage_threshold: 50
@@ -157,7 +167,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v3.9.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v4.0.0
     with:
       gcp_project: my-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
