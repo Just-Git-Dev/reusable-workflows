@@ -119,5 +119,5 @@ jobs:
     with:
       app_id: ${{ vars.APP_ID }}
     secrets:
-      app_key: ${{ secrets.REPO_ADMIN_APP_KEY }}
+      app_key: ${{ secrets.RELEASE_APP_KEY }}
 ```

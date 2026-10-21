@@ -2,8 +2,10 @@
 
 ## Index
 
-116 entries total — 106 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+118 entries total — 108 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-21` — [repos-* workflows: one App key, no second REPO_ADMIN key (owner)](#2026-10-21--repos--workflows-one-app-key-no-second-repo_admin-key-owner)
+- `2026-10-21` — [release.yml: tag push carries its own token after the credential-less checkout (v4.0.0 release failure RCA)](#2026-10-21--releaseyml-tag-push-carries-its-own-token-after-the-credential-less-checkout-v400-release-failure-rca)
 - `2026-10-21` — [v4 critic round 2: template pin, secretKeyRef pins, update :latest wiring, fail-closed baseline](#2026-10-21--v4-critic-round-2-template-pin-secretkeyref-pins-update-latest-wiring-fail-closed-baseline)
 - `2026-10-21` — [v4 owner rulings Q1-Q9 applied to docs](#2026-10-21--v4-owner-rulings-q1-q9-applied-to-docs)
 - `2026-10-21` — [v3.8.1 live proof carried over: a consumer's run destroyed 2 versions with a quoted etag](#2026-10-21--v381-live-proof-carried-over-a-consumers-run-destroyed-2-versions-with-a-quoted-etag)
@@ -232,6 +234,54 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-21 — repos-* workflows: one App key, no second REPO_ADMIN key (owner)
+
+**Decision (owner, 2026-10-21).** The `repos-*` workflows use the automation App's existing
+release key. The `repo-admin` environment holds a copy of it as `RELEASE_APP_KEY`, and callers
+pass it into the unchanged `REPO_ADMIN_APP_KEY` input. This reverses the "second key" in the
+2026-10-19 repos-register entry.
+
+**Why.** A GitHub App private key carries no permissions of its own: every key of one App mints
+tokens with the App's full permission set. Once the App holds `Administration: write` (Q1), the
+release key can mint admin tokens whatever the second key does. So the second key bought only
+independent revocation, at the cost of one more secret per org to create, store and rotate. What
+actually bounds admin actions is unchanged: the `repo-admin` + `main`-only refusal before any
+mint, tokens narrowed by `permission-*` and `repositories:`, and the planner's allow-list.
+
+**Considered.** A separate App holding Administration: write, with the release App without it,
+is the only design that isolates admin from release power. It reverses Q1 ("no separate
+repo-admin App"); not taken.
+
+**Contract.** No input changed, so this goes in v4.0.0 with no version bump: the secret input is
+still named `REPO_ADMIN_APP_KEY`. Only the doc copy-paste examples (now
+`${{ secrets.RELEASE_APP_KEY }}`), `repos-register.md` §9 and the three input descriptions
+changed.
+
+## 2026-10-21 — release.yml: tag push carries its own token after the credential-less checkout (v4.0.0 release failure RCA)
+
+**Context.** The first release after #146, v4.0.0 (run 39588229527), failed at "Create and push
+the tag" with `fatal: could not read Username for 'https://github.com'`. No tag and no release
+were created, so nothing is half-published.
+
+**RCA.**
+- *Symptom:* `release.yml` cannot push its tag; every release since #146 fails.
+- *Root cause:* #146 (zizmor in the gate) added `persist-credentials: false` to the release
+  checkout to fix the artipacked finding. The tag push relied on the credential that checkout
+  used to persist, so it lost its auth.
+- *Why it wasn't caught:* nothing exercises `release.yml` before a real release, and no shape
+  test linked "credential-less checkout" to "a later `git push`". The zizmor fix was right on
+  its own terms; its consequence lived three steps further down.
+- *Fix:* the push step takes `GH_TOKEN: ${{ github.token }}` and passes it as a one-command
+  `http.extraheader` (masked), so the credential still never lands in `.git/config`, which keeps
+  the zizmor protection.
+- *Prevention:* `tests/release_flow_workflows/test_push_credentials.py` scans every workflow:
+  a `git push` in a job whose checkout persists no credentials must take a token through its
+  own `env:` and use it. Confirmed red against the #146 file. It fails if it examines zero push
+  steps, so a scan that stops matching cannot pass vacuously.
+
+**Why not drop `persist-credentials: false`.** That would re-open the artipacked finding and
+need a zizmor ignore; scoping the token to the one push is the narrower grant.
 
 ## 2026-10-21 — v4 critic round 2: template pin, secretKeyRef pins, update :latest wiring, fail-closed baseline
 

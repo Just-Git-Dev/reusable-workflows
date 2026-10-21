@@ -50,5 +50,5 @@ jobs:
       register: repos.yaml
       app-id: ${{ vars.RELEASE_APP_ID }}
     secrets:
-      REPO_ADMIN_APP_KEY: ${{ secrets.REPO_ADMIN_APP_KEY }}
+      REPO_ADMIN_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
 ```
