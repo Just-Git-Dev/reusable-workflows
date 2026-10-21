@@ -102,8 +102,27 @@ def main():
             for k in sorted(set(envs[y]) - set(envs[x])):
                 findings.append("%s: %s: key present in %s but missing here" % (x, k, y))
     sk = d / "secret-keys.txt"
+    sk_keys = set()
     if sk.is_file():
-        n = len([ln for ln in sk.read_text().splitlines() if ln.strip() and not ln.startswith("#")])
+        sk_keys = {ln.strip() for ln in sk.read_text().splitlines() if ln.strip() and not ln.startswith("#")}
+    dotenv = Path(a.root) / "configs" / ".env"
+    dot_keys = set()
+    if dotenv.is_file():
+        for ln in dotenv.read_text().splitlines():
+            ln = ln.strip()
+            if ln and not ln.startswith("#") and "=" in ln:
+                dot_keys.add(ln.split("=", 1)[0].replace("export ", "").strip())
+    # MIGRATION-v4 item 3: a key lives in exactly one of configs/.env, env.<stage>.yaml,
+    # secret-keys.txt. Names only, never values.
+    for n_, env in envs.items():
+        for k in sorted(set(env) & sk_keys):
+            findings.append("%s: %s: also listed in secret-keys.txt (a key lives in one place)" % (n_, k))
+        for k in sorted(set(env) & dot_keys):
+            findings.append("%s: %s: also set in configs/.env (a key lives in one place)" % (n_, k))
+    for k in sorted(dot_keys & sk_keys):
+        findings.append("configs/.env: %s: also listed in secret-keys.txt (a key lives in one place)" % k)
+    if sk.is_file():
+        n = len(sk_keys)
         print("deploy-env-lint: secret-keys.txt lists %d bundle key(s)" % n)
     for line in findings:
         print("FINDING " + line)

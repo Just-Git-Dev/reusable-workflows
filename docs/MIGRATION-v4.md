@@ -33,7 +33,7 @@ Do these in order, one service at a time. Every step is safe to re-run.
 3. **Commit `deploy/env.<stage>.yaml`** with the non-secret settings that differ per stage, and
    make sure no key appears in two of `configs/.env`, `deploy/env.*.yaml` and
    `deploy/secret-keys.txt` ([runtime-config.md](runtime-config.md)). [`deploy-env-lint`](deploy-env-lint.md)
-   checks this.
+   checks this (names only, never values).
 4. **Fix empty and placeholder secrets.** `strict_values` is now `true`, so an empty value or one
    that is wholly `changeme`, `todo`, `<...>` and similar refuses the run, naming the key. Set a real
    value, or take the key out of the payload and the list.
@@ -63,6 +63,11 @@ whose pinned bundle version has been disabled must fail before changing anything
 ```
 ::error::rollback refused: revision <r> pins <d>-env:<N>, which is DISABLED; only the two newest revisions' pins stay enabled.
 ```
+
+After `rollback-service` `to_revision`, traffic stays pinned to that revision until you run
+`gcloud run services update-traffic <svc> --to-latest`. The keep-set keeps the pin of any revision
+with traffic > 0, so the rolled-back revision stays startable in the meantime. `bundle_secret` is
+required in `to_revision` mode (the refusal is not opt-in).
 
 A manual traffic shift in the Cloud Console cannot be guarded by any workflow; the refusal only
 covers rollbacks run through `rollback-service`.

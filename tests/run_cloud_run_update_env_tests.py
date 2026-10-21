@@ -113,7 +113,7 @@ def pin_cases():
     env = {"ENV_SECRET": "svc-env", "ENV_MOUNT_PATH": "/secrets/app.env", "PIN_ENV": "true"}
     gcloud = ('if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
               f"  cat <<'J'\n{D.svc_json('latest')}\nJ\n  exit 0\nfi\n"
-              'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n  echo 9; echo 8; exit 0\nfi')
+              'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n  echo projects/1/secrets/svc-env/versions/9; echo projects/1/secrets/svc-env/versions/8; exit 0\nfi')
     r = D.run_body(body, env, gcloud=gcloud)
     check("a mounted :latest resolves to the newest ENABLED version",
           r["rc"] == 0 and r["outputs"].get("env_version") == "9"
@@ -122,6 +122,13 @@ def pin_cases():
           "gcloud --project=p run services describe" in r["calls"], r["calls"])
     r = D.run_body(body, {**env, "PIN_ENV": "false"}, gcloud=gcloud)
     check("pin_env: false warns", "::warning::" in r["out"], r["out"])
+    r = D.run_body(body, {**env, "SECRETS": "/secrets/app.env=svc-env:latest"}, gcloud=gcloud)
+    check("M5: a caller-supplied *-env:latest mount in `secrets` is refused",
+          r["rc"] != 0 and ":latest" in r["out"], r["out"])
+    r = D.run_body(body, {**env, "PIN_ENV": "false", "SECRETS": "/secrets/app.env=svc-env:latest"}, gcloud=gcloud)
+    check("M5: pin_env: false lets it through", r["rc"] == 0, r["out"])
+    r = D.run_body(body, {**env, "SECRETS": "/secrets/app.env=svc-env:3"}, gcloud=gcloud)
+    check("M5: a numeric mount is not refused", r["rc"] == 0, r["out"])
 
 
 def apply_cases():

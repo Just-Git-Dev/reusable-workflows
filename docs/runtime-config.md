@@ -149,5 +149,5 @@ It holds `Administration: write` (for `repos-environments` enforce) and `Environ
 Per the owner's rulings (2026-10-21): the per-stage deploy targets (GCP project id, WIF provider,
 deployer service account) live in a committed `deploy/target.<stage>.yaml` in the service repo,
 read by the caller; they are not GitHub environment variables and not inline literals. The `stage`
-environment is deployable from `main` and from `v*` tags; `stage-bootstrap` (the seed-only
+environment is deployable from `main` and from `v*` tags; `stage-seed` (the seed-only
 database credential) and `prod` are `main` only.

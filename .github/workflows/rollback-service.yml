@@ -66,7 +66,7 @@ on:
       bundle_secret:
         description: >-
           mode=to_revision: the `<deployable>-env` secret whose pinned version
-          the pin check reads. Empty skips the check (a service with no bundle).
+          the pin check reads. Required in to_revision mode (the refusal is not opt-in).
         type: string
         required: false
         default: ''
@@ -479,8 +479,8 @@ jobs:
           echo "image=$(printf '%s' "$REV_JSON" | jq -r '.spec.containers[0].image // empty')" >> "$GITHUB_OUTPUT"
 
           if [ -z "$BUNDLE_SECRET" ]; then
-            echo "::notice::bundle_secret is empty; the pinned-version check is skipped."
-            exit 0
+            echo "::error::mode=to_revision requires bundle_secret (the <deployable>-env secret): the pinned-version refusal is not opt-in. Nothing was changed." >&2
+            exit 2
           fi
           # A secret volume item (or env secretKeyRef) carries the mounted version.
           PIN="$(printf '%s' "$REV_JSON" | jq -r --arg s "$BUNDLE_SECRET" '

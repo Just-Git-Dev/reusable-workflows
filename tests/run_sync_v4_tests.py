@@ -132,6 +132,19 @@ def input_cases():
           f"got {secrets.get('payload_json')}")
 
 
+# --- m11: an unknown payload_source fails instead of falling back to caller ---------------------
+
+def source_cases():
+    print("\nsync-bundle-key v4 . payload_source validation")
+    body = step_or_red("source check", SYNC, "sync", "Validate payload_source")
+    if body is None:
+        return
+    for v, ok in (("caller", True), ("environment", True), ("enviroment", False), ("", False)):
+        r = run_body(body, {"PAYLOAD_SOURCE": v})
+        check(f"payload_source {v!r} -> {'accepted' if ok else 'refused'}",
+              (r["rc"] == 0) == ok, r["out"])
+
+
 # --- S0 -----------------------------------------------------------------------------------------
 
 def s0_cases():
@@ -266,7 +279,7 @@ def revision(name, volume, version, mounted=True):
     mounts = [{"name": volume}] if mounted else []
     return {"metadata": {"name": name},
             "spec": {"volumes": [{"name": volume, "secret": {
-                "secretName": "app-secrets", "items": [{"version": version, "path": "app.env"}]}}],
+                "secretName": "app-secrets", "items": [{"key": version, "path": "app.env"}]}}],
                 "containers": [{"volumeMounts": mounts}]}}
 
 
@@ -276,17 +289,26 @@ def keep_cases():
     if body is None:
         return
 
-    def go(revs, enabled=("8", "7", "6", "5", "4"), keep="1"):
-        rj = json.dumps(revs)
+    def go(revs, enabled=("8", "7", "6", "5", "4"), keep="1", traffic=None, others=None):
+        """`traffic`: the service's status.traffic (default 100% on the newest revision).
+        `others`: {service: [revisions]} the project holds beyond services_csv."""
+        others = others or {}
+        top = revs[0]["metadata"]["name"]
+        svc_json = json.dumps({"status": {"latestReadyRevisionName": top, "traffic": traffic
+                               or [{"revisionName": top, "percent": 100}]}})
+        # REAL shape: `secrets versions list --format=value(name)` prints FULL resource paths.
         gcloud = (
-            'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
-            + "".join(f'  echo {v}\n' for v in enabled) + '  exit 0\nfi\n'
-            'if [ "$2" = "revisions" ] && [ "$3" = "list" ]; then\n'
-            f"  cat <<'J'\n{rj}\nJ\n  exit 0\nfi")
-        # older gcloud arg layout is `gcloud secrets versions ...` ($2=versions);
-        # `gcloud run revisions list` has revisions at $3: cover both.
-        gcloud = gcloud.replace('[ "$2" = "revisions" ] && [ "$3" = "list" ]',
-                                '[ "$3" = "revisions" ] && [ "$4" = "list" ]')
+            'if [ "$1" = "secrets" ] && [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
+            + "".join(f'  echo projects/1/secrets/app-secrets/versions/{v}\n' for v in enabled)
+            + '  exit 0\nfi\n'
+            'if [ "$3" = "services" ] && [ "$4" = "list" ]; then\n'
+            + "".join(f'  echo {n}\n' for n in others) + '  exit 0\nfi\n'
+            'if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+            f"  cat <<'J'\n{svc_json}\nJ\n  exit 0\nfi\n"
+            'if [ "$3" = "revisions" ] && [ "$4" = "list" ]; then\n'
+            + "".join(f"  if [ \"$5\" = \"--service={n}\" ]; then cat <<'J'\n{json.dumps(rv)}\nJ\n"
+                      "  exit 0; fi\n" for n, rv in others.items())
+            + f"  cat <<'J'\n{json.dumps(revs)}\nJ\n  exit 0\nfi")
         r = run_body(body, {"NEW_VERSION": "8", "KEEP_ENABLED_COUNT": keep,
                             "SERVICES_CSV": "svc"}, gcloud=gcloud)
         disabled = sorted(re.findall(r"versions disable (\S+)", r["calls"]))
@@ -302,14 +324,62 @@ def keep_cases():
     revs2 = [revision("r2", "v", "8"), revision("r1", "v", "7", mounted=True),
              {"metadata": {"name": "r1b"}, "spec": {"volumes": [
                  {"name": "orphan", "secret": {"secretName": "app-secrets",
-                                               "items": [{"version": "6", "path": "x"}]}}],
+                                               "items": [{"key": "6", "path": "x"}]}}],
               "containers": [{"volumeMounts": []}]}}]
     r, d = go(revs2, enabled=("8", "7", "6"))
     check("an orphan declared volume (no volumeMount) pins nothing: 6 is disabled",
           d == ["6"], f"disabled={d} {r['out']}")
+    # M4(a): a revision still taking traffic keeps its pin however old it is (post-rollback state).
+    r, d = go(revs, traffic=[{"revisionName": "r0", "percent": 100}])
+    check("a revision with traffic > 0 keeps its pin even when 4th newest (4 kept)",
+          r["rc"] == 0 and d == ["6"], f"disabled={d} {r['out']}")
+    r, d = go(revs, traffic=[{"revisionName": "r3", "percent": 50}, {"revisionName": "r0", "percent": 0}])
+    check("a 0% traffic entry pins nothing", d == ["4", "6"], f"disabled={d}")
+    # M4(c): consumers are scanned project-wide, not only services_csv.
+    other = [{"metadata": {"name": "o1"}, "spec": {"volumes": [{"name": "v", "secret": {
+        "secretName": "app-secrets", "items": [{"key": "6", "path": "x"}]}}],
+        "containers": [{"volumeMounts": [{"name": "v"}]}]}}]
+    r, d = go(revs, others={"other-svc": other})
+    check("a bundle consumer NOT in services_csv keeps its pin (6 kept)",
+          r["rc"] == 0 and d == ["4"], f"disabled={d} {r['out']}")
     r, d = go(revs, keep="3")
     check("keep_enabled_count is a floor: the 3 newest (8,7,6) stay too -> only 4 disabled",
           d == ["4"], f"disabled={d}")
+
+
+# --- M3: a rotator's rollback never disables a version a live revision pins ----------------------
+
+ROLLBACK_STEP = "Roll back the new SM version on failure"
+
+
+def rollback_cases():
+    print("\nrotators . M3 roll-back-on-failure refuses to disable a pinned version")
+    for wf in (KEYPAIR, WORKER):
+        body = extract_step(wf, "rotate", ROLLBACK_STEP)
+        if body is None:
+            check(f"{wf.name}: rollback step exists", False)
+            continue
+
+        def go(pin):
+            rv = [{"metadata": {"name": "r2"}, "spec": {"volumes": [{"name": "v", "secret": {
+                "secretName": "app-secrets", "items": [{"key": pin, "path": "x"}]}}],
+                "containers": [{"volumeMounts": [{"name": "v"}]}]}}]
+            svc = {"status": {"latestReadyRevisionName": "r2",
+                              "traffic": [{"revisionName": "r2", "percent": 100}]}}
+            gcloud = (
+                'if [ "$2" = "versions" ] && [ "$3" = "access" ]; then echo content; exit 0; fi\n'
+                'if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
+                f"  cat <<'J'\n{json.dumps(svc)}\nJ\n  exit 0\nfi\n"
+                'if [ "$3" = "revisions" ] && [ "$4" = "list" ]; then\n'
+                f"  cat <<'J'\n{json.dumps(rv)}\nJ\n  exit 0\nfi")
+            return run_body(body, {"NEW_VERSION": "8", "CUR_VERSION": "7"}, gcloud=gcloud)
+
+        r = go("8")
+        check(f"{wf.name}: N+1 pinned by a live revision -> NOT disabled, loud failure",
+              "versions disable" not in r["calls"] and r["rc"] != 0, r["calls"] + r["out"])
+        r = go("7")
+        check(f"{wf.name}: nothing pins N+1 -> disabled as before",
+              r["rc"] == 0 and "versions disable 8" in r["calls"], r["calls"] + r["out"])
 
 
 # --- three writers identical --------------------------------------------------------------------
@@ -350,7 +420,7 @@ def env_source_cases():
 
 
 def main():
-    for fn in (input_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases,
+    for fn in (input_cases, source_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases, rollback_cases,
                identical_cases, env_source_cases):
         fn()
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")

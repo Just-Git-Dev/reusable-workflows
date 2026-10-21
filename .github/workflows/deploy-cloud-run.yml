@@ -325,11 +325,23 @@ jobs:
           # Live baseline = sha of the most recent SUCCESSFUL deployment for the env
           # (deployment ids are monotonic, so sort desc for newest-first).
           BASE=""
-          for id in $(gh api "repos/${REPO}/deployments?environment=${ENVIRONMENT}&per_page=30" \
-                        --jq 'sort_by(.id) | reverse | .[].id' 2>/dev/null); do
-            state="$(gh api "repos/${REPO}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // ""' 2>/dev/null || echo '')"
+          # An API ERROR is not "no deployment": a guard must fail closed, so any failed
+          # call refuses (an empty-but-successful list is the only "no baseline" case).
+          if ! IDS="$(gh api "repos/${REPO}/deployments?environment=${ENVIRONMENT}&per_page=30" \
+                        --jq 'sort_by(.id) | reverse | .[].id' 2>/dev/null)"; then
+            echo "::error::forward-only: could not list Deployments for '${ENVIRONMENT}' (API error). Refusing; re-run, or set enforce_forward_only:false to override." >&2
+            exit 1
+          fi
+          for id in $IDS; do
+            if ! state="$(gh api "repos/${REPO}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // ""' 2>/dev/null)"; then
+              echo "::error::forward-only: could not read the status of Deployment ${id} (API error). Refusing." >&2
+              exit 1
+            fi
             if [ "$state" = "success" ]; then
-              BASE="$(gh api "repos/${REPO}/deployments/${id}" --jq '.sha' 2>/dev/null || echo '')"
+              if ! BASE="$(gh api "repos/${REPO}/deployments/${id}" --jq '.sha' 2>/dev/null)"; then
+                echo "::error::forward-only: could not read Deployment ${id} (API error). Refusing." >&2
+                exit 1
+              fi
               break
             fi
           done
@@ -445,6 +457,8 @@ jobs:
           ENV_SECRET: ${{ inputs.env_secret }}
           ENV_MOUNT_PATH: ${{ inputs.env_mount_path }}
           PIN_ENV: ${{ inputs.pin_env }}
+          DEPLOY_FLAGS: ${{ inputs.deploy_flags }}
+          EXTRA: ${{ inputs.extra_deploy_flags }}
           SERVICE: ${{ inputs.service }}
           PROJECT: ${{ inputs.gcp_project }}
           REGION: ${{ inputs.gcp_region }}
@@ -457,17 +471,25 @@ jobs:
             echo "::error::env_mount_path is required with env_secret" >&2
             exit 1
           fi
+          # A caller-supplied `<bundle>:latest` mount would undo the pin (and the v4 promise
+          # that nothing mounts a bundle at :latest): refuse, unless pin_env: false (above).
+          for m in "${ENV_SECRET}:latest" "-env:latest"; do
+            if printf '%s\n%s\n%s\n' "${DEPLOY_FLAGS:-}" "${EXTRA:-}" "${SECRETS:-}" | grep -qF -- "$m"; then
+              echo "::error::a caller-supplied mount '${m}' is refused: bundles are pinned to a version number. Remove it (env_secret/env_mount_path mount it pinned) or set pin_env: false." >&2
+              exit 1
+            fi
+          done
           # The version the live service mounts the bundle at (empty if no service yet).
           CUR="$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" --format=json 2>/dev/null \
                   | jq -r --arg s "$ENV_SECRET" \
-                    '[.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]?.version][0] // ""' \
+                    '[.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]? | (.key // .version)][0] // ""' \
                   || echo '')"
           if [[ "$CUR" =~ ^[0-9]+$ ]]; then
             N="$CUR"          # a numeric pin: a deploy never moves it
           else
             # latest (a v3 service) or not mounted yet: resolve the newest ENABLED version.
             N="$(gcloud secrets versions list "$ENV_SECRET" --project="$PROJECT" \
-                   --filter='state=ENABLED' --format='value(name)' | sort -n | tail -n 1)"
+                   --filter='state=ENABLED' --format='value(name)' | sed 's|.*/||' | sort -n | tail -n 1)"
             if ! [[ "$N" =~ ^[0-9]+$ ]]; then
               echo "::error::no ENABLED version of secret ${ENV_SECRET}" >&2
               exit 1

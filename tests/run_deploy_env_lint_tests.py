@@ -41,7 +41,7 @@ CLEAN = {
 }
 
 
-def lint(files, secret_keys="DB_PASSWORD_BUNDLE\n"):
+def lint(files, secret_keys="DB_PASSWORD_BUNDLE\n", dotenv=None):
     """files: {stage: {KEY: value}}. Returns (rc, combined output)."""
     assert LINT.is_file(), "lint script %s does not exist" % LINT.name
     with tempfile.TemporaryDirectory(dir=str(ROOT / ".scratch") if (ROOT / ".scratch").is_dir() else None) as d:
@@ -50,6 +50,9 @@ def lint(files, secret_keys="DB_PASSWORD_BUNDLE\n"):
         for stage, kv in files.items():
             (dd / ("env.%s.yaml" % stage)).write_text(yaml.safe_dump(kv))
         (dd / "secret-keys.txt").write_text(secret_keys)
+        if dotenv is not None:
+            (Path(d) / "configs").mkdir()
+            (Path(d) / "configs" / ".env").write_text(dotenv)
         p = subprocess.run([sys.executable, str(LINT), "--root", d], capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
@@ -172,6 +175,30 @@ def findings_never_print_a_password_value():
 def several_findings_are_all_reported_in_one_run():
     rc, out = lint(variant(both={"REDIS_URL": "x", "DB_PASSWORD": "p", "REDIS_DB": "3"}))
     assert rc == 1 and all(k in out for k in ("REDIS_URL", "DB_PASSWORD", "REDIS_DB")), out[-400:]
+
+
+@case
+def m8_key_in_env_yaml_and_secret_keys_is_a_finding():
+    rc, out = lint(variant(both={"LOG_LEVEL": "info"}), secret_keys="DB_PASSWORD_BUNDLE\nLOG_LEVEL\n")
+    assert rc == 1 and "LOG_LEVEL" in out and "secret-keys.txt" in out, out[-300:]
+
+
+@case
+def m8_key_in_dotenv_and_env_yaml_is_a_finding():
+    rc, out = lint(variant(both={"LOG_LEVEL": "info"}), dotenv="LOG_LEVEL=debug\n")
+    assert rc == 1 and "LOG_LEVEL" in out and "configs/.env" in out, out[-300:]
+
+
+@case
+def m8_key_in_dotenv_and_secret_keys_is_a_finding():
+    rc, out = lint(variant(), secret_keys="DB_PASSWORD_BUNDLE\n", dotenv="DB_PASSWORD_BUNDLE=x\n")
+    assert rc == 1 and "DB_PASSWORD_BUNDLE" in out and "x\n" not in out.split("DB_PASSWORD_BUNDLE")[-1][:3], out[-300:]
+
+
+@case
+def m8_disjoint_keys_pass():
+    rc, out = lint(variant(), dotenv="ONLY_LOCAL=1\n")
+    assert rc == 0, out[-300:]
 
 
 def main():

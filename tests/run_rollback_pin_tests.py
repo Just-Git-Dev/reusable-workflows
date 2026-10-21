@@ -67,7 +67,7 @@ def revision_json(version, secret="app-env"):
     return json.dumps({"spec": {
         "containers": [{"image": "gar/app@sha256:old"}],
         "volumes": [{"name": "env", "secret": {"secretName": secret,
-                     "items": [{"version": version, "path": "app.env"}]}}]}})
+                     "items": [{"key": version, "path": "app.env"}]}}]}})
 
 
 def run_body(body, env, *, state="ENABLED", rev=None, rev_rc=0):
@@ -144,8 +144,9 @@ def guard_cases():
     check("revision mounting a different secret: no refusal for the bundle", r["rc"] == 0, r["out"])
 
     r = run_body(body, {"BUNDLE_SECRET": ""}, state="DISABLED")
-    check("empty bundle_secret: check skipped with a notice, rc 0",
-          r["rc"] == 0 and "versions describe" not in r["calls"], r["out"] + r["calls"])
+    check("m7: empty bundle_secret in to_revision mode is REFUSED (Q4 is not opt-in), nothing changed",
+          r["rc"] != 0 and "bundle_secret" in r["out"]
+          and not mutating(r["calls"]) and "versions describe" not in r["calls"], r["out"] + r["calls"])
 
     r = run_body(body, {}, rev_rc=1)
     check("unknown revision: fails, no mutation", r["rc"] != 0 and not mutating(r["calls"]), r["out"])

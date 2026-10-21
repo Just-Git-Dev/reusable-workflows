@@ -234,7 +234,7 @@
 
 ## 2026-10-21 — v4 owner rulings Q1-Q9 applied to docs
 
-Owner rulings Q1-Q9 (2026-10-21) replace every pending-decision block in the v4 docs. Q1/Q2: one credential, the org automation App (<org>-automation, formerly the release App), holding Administration: write and Environments: write. Q4: rollback-service to_revision (doc owned elsewhere). Q5: delete old production environments after a per-environment provenance check. Q6: committed deploy/target.<stage>.yaml. Q7: stage = main + v* tags, stage-bootstrap = main only. Q8: pin_env: false ships, warned. Q9: all in v4.0.0, no v3.10.0, so docs pin @v4.0.0 and callers create environments before their first v4 sync.
+Owner rulings Q1-Q9 (2026-10-21) replace every pending-decision block in the v4 docs. Q1/Q2: one credential, the org automation App (<org>-automation, formerly the release App), holding Administration: write and Environments: write. Q4: rollback-service to_revision (doc owned elsewhere). Q5: delete old production environments after a per-environment provenance check. Q6: committed deploy/target.<stage>.yaml. Q7: stage = main + v* tags, stage-seed = main only. Q8: pin_env: false ships, warned. Q9: all in v4.0.0, no v3.10.0, so docs pin @v4.0.0 and callers create environments before their first v4 sync.
 
 ## 2026-10-21 — v3.8.1 live proof carried over: a consumer's run destroyed 2 versions with a quoted etag
 

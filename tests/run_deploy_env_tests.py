@@ -166,7 +166,7 @@ def render_cases():
 
 def svc_json(version):
     return json.dumps({"spec": {"template": {"spec": {"volumes": [{"name": "env", "secret": {
-        "secretName": "svc-env", "items": [{"version": version, "path": "app.env"}]}}]}}}})
+        "secretName": "svc-env", "items": [{"key": version, "path": "app.env"}]}}]}}}})
 
 
 def pin_cases():
@@ -180,7 +180,7 @@ def pin_cases():
         return ('if [ "$3" = "services" ] && [ "$4" = "describe" ]; then\n'
                 f"  cat <<'J'\n{svc_json(current)}\nJ\n  exit 0\nfi\n"
                 'if [ "$2" = "versions" ] && [ "$3" = "list" ]; then\n'
-                '  echo 9; echo 8; exit 0\nfi')
+                '  echo projects/1/secrets/svc-env/versions/9; echo projects/1/secrets/svc-env/versions/8; exit 0\nfi')
 
     r = run_body(body, env, gcloud=gcloud("latest"))
     check("a mounted :latest resolves to the newest ENABLED version number (9)",
@@ -192,6 +192,19 @@ def pin_cases():
     r = run_body(body, {**env, "PIN_ENV": "false"}, gcloud=gcloud("latest"))
     check("pin_env: false warns (Q8 open: nothing else asserted)",
           "::warning::" in r["out"], r["out"])
+    # M5: a caller-supplied `<bundle>:latest` mount is refused (MIGRATION-v4 promise) ...
+    for label, extra in (("deploy_flags", {"DEPLOY_FLAGS": "--set-secrets=/secrets/app.env=svc-env:latest"}),
+                         ("extra_deploy_flags", {"EXTRA": "--update-secrets /x=other-env:latest"})):
+        r = run_body(body, {**env, **extra}, gcloud=gcloud("5"))
+        check(f"M5: a *-env:latest mount in {label} is refused", r["rc"] != 0
+              and ":latest" in r["out"], r["out"])
+    # ... unless the caller opts out of pinning (which warns).
+    r = run_body(body, {**env, "PIN_ENV": "false",
+                        "DEPLOY_FLAGS": "--set-secrets=/secrets/app.env=svc-env:latest"}, gcloud=gcloud("5"))
+    check("M5: pin_env: false lets the :latest mount through (with the warning)",
+          r["rc"] == 0 and "::warning::" in r["out"], r["out"])
+    r = run_body(body, {**env, "DEPLOY_FLAGS": "--set-secrets=/secrets/app.env=svc-env:7"}, gcloud=gcloud("5"))
+    check("M5: a numeric mount in deploy_flags is not refused", r["rc"] == 0, r["out"])
 
 
 def label_cases():
@@ -268,6 +281,11 @@ def forward_cases():
           r["rc"] != 0 and "behind" in r["out"].lower(), r["out"])
     check("the fallback reads the service's jgd_commit label",
           "jgd_commit" in r["calls"] or "services describe" in r["calls"], r["calls"])
+    # M11: a Deployments API ERROR is not "no deployment": fail closed, never fall through.
+    gh_err = ('case "$*" in *deployments*) echo "HTTP 502" >&2; exit 1;; esac')
+    r = run_body(body, env, gh=gh_err, gcloud=gcloud(""))
+    check("a Deployments API error refuses (fail closed) instead of reading as 'no deployment'",
+          r["rc"] != 0 and "::error::" in r["out"], r["out"])
     r = run_body(body, env, gh=gh, gcloud=gcloud(""))
     check("no Deployment and no label (first deploy ever): allowed with a notice",
           r["rc"] == 0 and "::notice::" in r["out"], r["out"])

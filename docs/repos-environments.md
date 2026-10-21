@@ -26,11 +26,11 @@ Per repo, additive; every other feature ignores it:
 
 ```yaml
 repos:
-  - name: issuer
+  - name: svc-a
     environments:
       - {name: prod,            branches: [main]}
       - {name: stage,           branches: [main], tags: ['v*']}
-      - {name: stage-bootstrap, branches: [main]}
+      - {name: stage-seed, branches: [main]}
 ```
 
 `name` is required and unique within the repo. At least one of `branches` and `tags` is required;
@@ -55,6 +55,14 @@ lists the actions and writes nothing; `enforce` applies them. Run `report` first
 The apply uses `PUT /repos/{owner}/{repo}/environments/{name}` with custom branch policies on and
 protected-branches off, then `POST .../deployment-branch-policies` for each pattern (`type`
 `branch` or `tag`). Both are idempotent: a second run is all `in-sync`.
+
+The write token carries `administration: write` plus `actions: read` (the same read the planning token
+has): removing a stale branch policy first LISTs the environment's policies, and that read needs it.
+The `PUT` body holds only `deployment_branch_policy` (the one thing this feature manages); it sends no
+`wait_timer`, `reviewers` or `prevent_self_review`. GitHub's documented contract for a `PUT` on an
+existing environment is an update, but whether an omitted `wait_timer` or reviewer list is preserved or
+reset has not been demonstrated against a live environment (unverified); until it is, run `report`
+mode on any environment that already has reviewers or a wait timer and check them after the first apply.
 
 ## The NEVER list
 

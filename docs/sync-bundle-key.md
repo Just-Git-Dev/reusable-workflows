@@ -64,8 +64,15 @@ The disable step never destroys; see [cleanup-secret-versions](cleanup-secret-ve
 that. In v4 the versions kept ENABLED are the union of:
 
 - the new version N+1;
-- the version pinned by each of the **two newest revisions** of every rolled service (read only
-  from volumes that a `volumeMount` actually uses; an orphan declared volume is ignored);
+- the version pinned by each of the **two newest revisions before the one just rolled**, per
+  service (read only from volumes that a `volumeMount` actually uses; an orphan declared volume is
+  ignored);
+- the version pinned by **every revision that still takes traffic** (`status.traffic` percent > 0),
+  however old: after `rollback-service` `to_revision`, traffic stays pinned to the old revision
+  until `gcloud run services update-traffic <svc> --to-latest`, so that revision's pin is live;
+- the pin of every **Cloud Run Job** that mounts the bundle;
+- all of the above are scanned across **every Service and Job in the project and region** that
+  mounts the bundle secret, not only the ones in `services_csv` (which is scanned as well);
 - the `keep_enabled_count` newest ENABLED versions, which is now a **floor**.
 
 Everything else is disabled. Two revisions are kept so the previous revision stays a valid
@@ -209,8 +216,11 @@ On `service_account`: `roles/secretmanager.secretVersionManager` and
 `gcloud secrets describe`, which needs `secretmanager.secrets.get` on `bundle_secret`;
 the two roles above are not documented to carry it, so grant a role that does (for
 example `roles/secretmanager.viewer`; verify with `gcloud iam roles describe`).
-The v4 keep-set also lists each service's revisions (`gcloud run revisions list`), which
-`roles/run.developer` already covers.
+The v4 keep-set also lists the project's services and jobs, each service's traffic and its revisions
+(`gcloud run services list|describe`, `run revisions list`, `run jobs list|describe`), which
+`roles/run.developer` already covers. A listing failure stops the step before anything is disabled.
+The rotators' "roll back the new SM version on failure" step refuses to disable N+1 while any
+revision with traffic still pins it (a partial roll): it leaves N+1 ENABLED and fails the job.
 
 ## Example caller
 

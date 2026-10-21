@@ -3768,7 +3768,7 @@
         },
         "bundle_secret": {
           "default": "",
-          "description": "mode=to_revision: the `<deployable>-env` secret whose pinned version the pin check reads. Empty skips the check (a service with no bundle).",
+          "description": "mode=to_revision: the `<deployable>-env` secret whose pinned version the pin check reads. Required in to_revision mode (the refusal is not opt-in).",
           "required": false,
           "type": "string"
         },

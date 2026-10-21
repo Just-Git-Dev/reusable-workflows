@@ -112,7 +112,7 @@ def case(fn):
 @case
 def everything_as_listed_is_in_sync_and_unlisted_repo_is_not_examined():
     acts = plan(load_register(), load_state())
-    for name in ("issuer", "api"):
+    for name in ("svc-a", "svc-b"):
         mine = of(acts, name)
         assert mine and all(a["action"] == "in-sync" for a in mine), shape(mine)
     assert of(acts, "web") == [], "a repo with no environments: key must yield no action"
@@ -121,8 +121,8 @@ def everything_as_listed_is_in_sync_and_unlisted_repo_is_not_examined():
 @case
 def missing_environment_is_created_then_each_pattern_added():
     st = load_state()
-    del st["repos"]["issuer"]["environments"]["stage"]
-    mine = of(plan(load_register(), st), "issuer")
+    del st["repos"]["svc-a"]["environments"]["stage"]
+    mine = of(plan(load_register(), st), "svc-a")
     s = shape([a for a in mine if a["action"] != "in-sync"])
     assert s[0] == ("create-environment", {"environment": "stage"}), s
     assert sorted(map(json.dumps, s[1:])) == sorted(map(json.dumps, [
@@ -134,18 +134,18 @@ def missing_environment_is_created_then_each_pattern_added():
 @case
 def missing_pattern_on_existing_environment_is_added():
     st = load_state()
-    st["repos"]["api"]["environments"]["prod"]["policies"] = []
-    mine = of(plan(load_register(), st), "api")
+    st["repos"]["svc-b"]["environments"]["prod"]["policies"] = []
+    mine = of(plan(load_register(), st), "svc-b")
     assert shape(mine) == [("add-branch-policy", pol("prod", "main"))], shape(mine)
 
 
 @case
 def custom_policies_off_still_adds_the_missing_pattern_with_no_extra_verb():
     st = load_state()
-    e = st["repos"]["api"]["environments"]["prod"]
+    e = st["repos"]["svc-b"]["environments"]["prod"]
     e["custom_branch_policies"] = False
     e["policies"] = []
-    mine = of(plan(load_register(), st), "api")
+    mine = of(plan(load_register(), st), "svc-b")
     assert ("add-branch-policy", pol("prod", "main")) in shape(mine), shape(mine)
     assert not any(a["action"] == "in-sync" for a in mine), shape(mine)
 
@@ -153,8 +153,8 @@ def custom_policies_off_still_adds_the_missing_pattern_with_no_extra_verb():
 @case
 def tag_policy_is_added_with_type_tag():
     reg = load_register()
-    repo(reg, "api")["environments"] = [{"name": "rel", "tags": ["v*"]}]
-    mine = of(plan(reg, load_state()), "api")
+    repo(reg, "svc-b")["environments"] = [{"name": "rel", "tags": ["v*"]}]
+    mine = of(plan(reg, load_state()), "svc-b")
     s = shape(mine)
     assert s[0] == ("create-environment", {"environment": "rel"}), s
     assert ("add-branch-policy", pol("rel", "v*", "tag")) in s, s
@@ -164,16 +164,16 @@ def tag_policy_is_added_with_type_tag():
 @case
 def extra_policy_on_a_listed_environment_is_removed():
     st = load_state()
-    st["repos"]["api"]["environments"]["prod"]["policies"].append({"name": "dev", "type": "branch"})
-    mine = of(plan(load_register(), st), "api")
+    st["repos"]["svc-b"]["environments"]["prod"]["policies"].append({"name": "dev", "type": "branch"})
+    mine = of(plan(load_register(), st), "svc-b")
     assert shape(mine) == [("remove-branch-policy", pol("prod", "dev"))], shape(mine)
 
 
 @case
 def right_name_wrong_type_is_one_remove_and_one_add():
     st = load_state()
-    st["repos"]["api"]["environments"]["prod"]["policies"] = [{"name": "main", "type": "tag"}]
-    s = shape(of(plan(load_register(), st), "api"))
+    st["repos"]["svc-b"]["environments"]["prod"]["policies"] = [{"name": "main", "type": "tag"}]
+    s = shape(of(plan(load_register(), st), "svc-b"))
     assert sorted(map(json.dumps, s)) == sorted(map(json.dumps, [
         ("remove-branch-policy", pol("prod", "main", "tag")),
         ("add-branch-policy", pol("prod", "main", "branch"))])), s
@@ -182,8 +182,8 @@ def right_name_wrong_type_is_one_remove_and_one_add():
 @case
 def unmanaged_environment_is_reported_and_left_alone():
     st = load_state()
-    st["repos"]["api"]["environments"]["scratch"] = {"custom_branch_policies": False, "policies": []}
-    mine = of(plan(load_register(), st), "api")
+    st["repos"]["svc-b"]["environments"]["scratch"] = {"custom_branch_policies": False, "policies": []}
+    mine = of(plan(load_register(), st), "svc-b")
     un = [a for a in mine if a["action"] == "unmanaged-environment"]
     assert len(un) == 1 and un[0]["details"] == {"environment": "scratch"}, shape(mine)
     assert not [a for a in mine if a["details"].get("environment") == "scratch"
@@ -193,21 +193,21 @@ def unmanaged_environment_is_reported_and_left_alone():
 @case
 def unmanaged_environment_is_reported_in_report_mode_too():
     reg = load_register()
-    repo(reg, "api")["mode"] = "report"
+    repo(reg, "svc-b")["mode"] = "report"
     st = load_state()
-    st["repos"]["api"]["environments"]["scratch"] = {"custom_branch_policies": False, "policies": []}
-    mine = of(plan(reg, st), "api")
+    st["repos"]["svc-b"]["environments"]["scratch"] = {"custom_branch_policies": False, "policies": []}
+    mine = of(plan(reg, st), "svc-b")
     assert ("unmanaged-environment", {"environment": "scratch"}) in shape(mine), shape(mine)
 
 
 @case
 def report_mode_yields_only_non_write_verbs_with_drift():
     reg = load_register()
-    repo(reg, "issuer")["mode"] = "report"
+    repo(reg, "svc-a")["mode"] = "report"
     st = load_state()
-    del st["repos"]["issuer"]["environments"]["stage"]
-    st["repos"]["issuer"]["environments"]["prod"]["policies"].append({"name": "dev", "type": "branch"})
-    mine = of(plan(reg, st), "issuer")
+    del st["repos"]["svc-a"]["environments"]["stage"]
+    st["repos"]["svc-a"]["environments"]["prod"]["policies"].append({"name": "dev", "type": "branch"})
+    mine = of(plan(reg, st), "svc-a")
     assert not [a for a in mine if a["action"] in WRITE], "write verb in report mode: %s" % shape(mine)
     drifts = [a["details"] for a in mine if a["action"] == "drift"]
     assert {"would": "create-environment", "environment": "stage"} in drifts, drifts
@@ -220,8 +220,8 @@ def mode_falls_back_to_defaults_then_report():
     reg = load_register()
     del reg["defaults"]
     st = load_state()
-    del st["repos"]["api"]["environments"]["prod"]
-    mine = of(plan(reg, st), "api")
+    del st["repos"]["svc-b"]["environments"]["prod"]
+    mine = of(plan(reg, st), "svc-b")
     assert mine and not [a for a in mine if a["action"] in WRITE], shape(mine)
     assert any(a["action"] == "drift" for a in mine), shape(mine)
 
@@ -230,8 +230,8 @@ def mode_falls_back_to_defaults_then_report():
 def no_delete_verb_ever_even_when_register_drops_every_environment():
     reg = load_register()
     for r in reg["repos"]:
-        r["environments"] = [{"name": "keep-one", "branches": ["main"]}] if r["name"] == "api" else r.get("environments", [])
-    repo(reg, "issuer")["environments"] = [{"name": "only", "branches": ["main"]}]
+        r["environments"] = [{"name": "keep-one", "branches": ["main"]}] if r["name"] == "svc-b" else r.get("environments", [])
+    repo(reg, "svc-a")["environments"] = [{"name": "only", "branches": ["main"]}]
     for mode in ("enforce", "report"):
         for r in reg["repos"]:
             r["mode"] = mode
@@ -241,14 +241,14 @@ def no_delete_verb_ever_even_when_register_drops_every_environment():
             for bad in ("delete", "secret", "variable", "reviewer", "wait"):
                 assert bad not in a["action"].lower(), "forbidden verb %s" % a["action"]
         un = {(a["repo"], a["details"]["environment"]) for a in acts if a["action"] == "unmanaged-environment"}
-        assert ("issuer", "prod") in un and ("issuer", "stage") in un, un
+        assert ("svc-a", "prod") in un and ("svc-a", "stage") in un, un
 
 
 @case
 def repo_that_does_not_exist_refuses_the_whole_run():
     st = load_state()
-    st["repos"]["api"] = {"exists": False}
-    refused(load_register(), st, "api")
+    st["repos"]["svc-b"] = {"exists": False}
+    refused(load_register(), st, "svc-b")
 
 
 @case
@@ -263,55 +263,55 @@ def repo_not_in_the_register_yields_no_action():
 @case
 def malformed_register_environment_with_neither_branches_nor_tags_is_refused():
     reg = load_register()
-    repo(reg, "api")["environments"] = [{"name": "prod"}]
-    refused(reg, load_state(), "api")
+    repo(reg, "svc-b")["environments"] = [{"name": "prod"}]
+    refused(reg, load_state(), "svc-b")
 
 
 @case
 def malformed_register_duplicate_environment_name_in_a_repo_is_refused():
     reg = load_register()
-    repo(reg, "api")["environments"] = [{"name": "prod", "branches": ["main"]},
+    repo(reg, "svc-b")["environments"] = [{"name": "prod", "branches": ["main"]},
                                         {"name": "prod", "branches": ["dev"]}]
-    refused(reg, load_state(), "api")
+    refused(reg, load_state(), "svc-b")
 
 
 @case
 def malformed_register_environment_without_name_is_refused():
     reg = load_register()
-    repo(reg, "api")["environments"] = [{"branches": ["main"]}]
-    refused(reg, load_state(), "api")
+    repo(reg, "svc-b")["environments"] = [{"branches": ["main"]}]
+    refused(reg, load_state(), "svc-b")
 
 
 @case
 def malformed_register_empty_pattern_is_refused():
     reg = load_register()
-    repo(reg, "api")["environments"] = [{"name": "prod", "branches": [""]}]
-    refused(reg, load_state(), "api")
+    repo(reg, "svc-b")["environments"] = [{"name": "prod", "branches": [""]}]
+    refused(reg, load_state(), "svc-b")
 
 
 @case
 def malformed_register_bad_environment_name_is_refused():
     reg = load_register()
-    repo(reg, "api")["environments"] = [{"name": "-rf prod", "branches": ["main"]}]
-    refused(reg, load_state(), "api")
+    repo(reg, "svc-b")["environments"] = [{"name": "-rf prod", "branches": ["main"]}]
+    refused(reg, load_state(), "svc-b")
 
 
 @case
 def one_bad_repo_means_no_partial_plan():
     reg = load_register()
-    repo(reg, "api")["environments"] = [{"name": "prod"}]
+    repo(reg, "svc-b")["environments"] = [{"name": "prod"}]
     st = load_state()
-    del st["repos"]["issuer"]["environments"]["stage"]      # issuer alone would plan writes
-    refused(reg, st, "api")
+    del st["repos"]["svc-a"]["environments"]["stage"]      # svc-a alone would plan writes
+    refused(reg, st, "svc-b")
 
 
 @case
 def required_reviewers_and_secrets_are_not_register_keys():
     reg = load_register()
-    repo(reg, "api")["environments"][0].update(
+    repo(reg, "svc-b")["environments"][0].update(
         {"reviewers": ["someone"], "wait_timer": 30, "secrets": {"X": "y"}})
     acts = plan(reg, load_state())
-    assert shape(of(acts, "api")) == [("in-sync", {})], shape(of(acts, "api"))
+    assert shape(of(acts, "svc-b")) == [("in-sync", {})], shape(of(acts, "svc-b"))
 
 
 @case
@@ -323,7 +323,7 @@ def unknown_feature_exits_nonzero_with_nothing_on_stdout():
 @case
 def same_input_same_output():
     st = load_state()
-    del st["repos"]["issuer"]["environments"]["stage"]
+    del st["repos"]["svc-a"]["environments"]["stage"]
     a = run(load_register(), copy.deepcopy(st))
     b = run(load_register(), copy.deepcopy(st))
     assert a[0] == 0 and a == b, (a[0], b[0])

@@ -346,6 +346,7 @@ jobs:
           ENV_SECRET: ${{ inputs.env_secret }}
           ENV_MOUNT_PATH: ${{ inputs.env_mount_path }}
           PIN_ENV: ${{ inputs.pin_env }}
+          SECRETS: ${{ inputs.secrets }}
           SERVICE: ${{ inputs.service }}
           PROJECT: ${{ inputs.gcp_project }}
           REGION: ${{ inputs.gcp_region }}
@@ -358,17 +359,25 @@ jobs:
             echo "::error::env_mount_path is required with env_secret" >&2
             exit 1
           fi
+          # A caller-supplied `<bundle>:latest` mount would undo the pin (and the v4 promise
+          # that nothing mounts a bundle at :latest): refuse, unless pin_env: false (above).
+          for m in "${ENV_SECRET}:latest" "-env:latest"; do
+            if printf '%s\n%s\n%s\n' "${DEPLOY_FLAGS:-}" "${EXTRA:-}" "${SECRETS:-}" | grep -qF -- "$m"; then
+              echo "::error::a caller-supplied mount '${m}' is refused: bundles are pinned to a version number. Remove it (env_secret/env_mount_path mount it pinned) or set pin_env: false." >&2
+              exit 1
+            fi
+          done
           # The version the live service mounts the bundle at (empty if no service yet).
           CUR="$(gcloud --project="$PROJECT" run services describe "$SERVICE" --region="$REGION" --format=json 2>/dev/null \
                   | jq -r --arg s "$ENV_SECRET" \
-                    '[.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]?.version][0] // ""' \
+                    '[.spec.template.spec.volumes[]? | select(.secret.secretName == $s) | .secret.items[]? | (.key // .version)][0] // ""' \
                   || echo '')"
           if [[ "$CUR" =~ ^[0-9]+$ ]]; then
             N="$CUR"          # a numeric pin: an update never moves it
           else
             # latest (a v3 service) or not mounted yet: resolve the newest ENABLED version.
             N="$(gcloud secrets versions list "$ENV_SECRET" --project="$PROJECT" \
-                   --filter='state=ENABLED' --format='value(name)' | sort -n | tail -n 1)"
+                   --filter='state=ENABLED' --format='value(name)' | sed 's|.*/||' | sort -n | tail -n 1)"
             if ! [[ "$N" =~ ^[0-9]+$ ]]; then
               echo "::error::no ENABLED version of secret ${ENV_SECRET}" >&2
               exit 1

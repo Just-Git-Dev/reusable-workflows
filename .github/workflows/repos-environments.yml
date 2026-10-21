@@ -208,6 +208,7 @@ jobs:
           repositories: ${{ steps.targets.outputs.targets }}
           permission-metadata: read
           permission-administration: write
+          permission-actions: read
 
       - name: Apply the write actions in order
         if: ${{ steps.targets.outputs.targets != '' }}

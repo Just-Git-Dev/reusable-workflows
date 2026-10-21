@@ -49,6 +49,7 @@ GH_STUB = r"""#!/usr/bin/env bash
 # from existing-envs.txt ("<repo>/<env>" per line), otherwise HTTP 404.
 echo "$*" >> "$STUB_DIR/calls.log"
 if [ "$1" = "secret" ] && [ "$2" = "set" ]; then
+  if [ -n "$FAIL_ON" ] && [ "$3" = "$FAIL_ON" ]; then cat > /dev/null; echo "gh: HTTP 500" >&2; exit 1; fi
   cat >> "$STUB_DIR/stdin.log"; echo >> "$STUB_DIR/stdin.log"
   exit 0
 fi
@@ -77,7 +78,7 @@ def step_body(name):
     raise AssertionError("step %r not found in %s:%s" % (name, WORKFLOW.name, JOB))
 
 
-def run_steps(mapping=MAPPING, sources=SOURCES, existing=("api/prod",), dry_run="false", only=""):
+def run_steps(mapping=MAPPING, sources=SOURCES, existing=("api/prod",), dry_run="false", only="", fail_on=""):
     """Run the steps in order in one temp dir; return (rc, output, calls, stdin_log)."""
     bodies = [step_body(n) for n in STEPS]
     with tempfile.TemporaryDirectory(dir=str(ROOT / ".scratch") if (ROOT / ".scratch").is_dir() else None) as d:
@@ -95,7 +96,7 @@ def run_steps(mapping=MAPPING, sources=SOURCES, existing=("api/prod",), dry_run=
         env = dict(os.environ)
         env.update({
             "PATH": "%s:%s" % (stub, env["PATH"]), "STUB_DIR": str(stub),
-            "MAPPING_FILE": "mapping.yaml", "DRY_RUN": dry_run, "ONLY": only,
+            "FAIL_ON": fail_on, "MAPPING_FILE": "mapping.yaml", "DRY_RUN": dry_run, "ONLY": only,
             "SOURCES_JSON": json.dumps(sources), "ORG": ORG, "GH_TOKEN": "tok-not-a-real-token",
             "GITHUB_REPOSITORY_OWNER": ORG, "GITHUB_OUTPUT": str(d / "out"), "GITHUB_STEP_SUMMARY": str(d / "summary"),
         })
@@ -175,6 +176,24 @@ def empty_source_value_is_refused_and_nothing_is_written():
     assert rc != 0, "an empty source must fail the run"
     assert secret_sets(calls) == [], "secrets written despite an empty source: %s" % secret_sets(calls)
     assert "R2_SECRET_ACCESS_KEY" in out, "the empty source is not named: %s" % out[-300:]
+
+
+@case
+def m9_placeholder_source_values_are_refused_and_nothing_is_written():
+    for bad in ("changeme", "-", "TODO", "xxxx", "<your-key>", "${KEY}", "  Change_Me "):
+        src = dict(SOURCES, R2_SECRET_ACCESS_KEY=bad)
+        rc, out, calls, _ = run_steps(sources=src)
+        assert rc != 0 and secret_sets(calls) == [], "placeholder %r accepted: %s" % (bad, out[-200:])
+        assert "R2_SECRET_ACCESS_KEY" in out and (len(bad.strip()) < 4 or bad.strip() not in out.replace("R2_SECRET_ACCESS_KEY", "")), \
+            "source not named / value echoed for %r: %s" % (bad, out[-300:])
+
+
+@case
+def m9_a_failed_write_reports_which_targets_were_already_written():
+    rc, out, calls, _ = run_steps(sources=SOURCES, existing=("api/prod",), dry_run="false",
+                                  fail_on="R2_SECRET_ACCESS_KEY")
+    assert rc != 0, "a failing second write must fail the run"
+    assert "R2_ACCESS_KEY_ID" in out and "already written" in out, out[-400:]
 
 
 @case

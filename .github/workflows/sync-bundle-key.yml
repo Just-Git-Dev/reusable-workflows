@@ -218,6 +218,17 @@ jobs:
       services_rolled: ${{ steps.roll.outputs.rolled }}
 
     steps:
+      - name: Validate payload_source
+        # An unknown value must not silently fall back to `caller` (a typo would then read
+        # a different secret than the caller meant).
+        env:
+          PAYLOAD_SOURCE: ${{ inputs.payload_source }}
+        run: |
+          case "$PAYLOAD_SOURCE" in
+            caller|environment) ;;
+            *) echo "::error::payload_source must be 'caller' or 'environment' (got '${PAYLOAD_SOURCE}')." >&2; exit 1 ;;
+          esac
+
       - name: Guard environment branch policy
         # S0. A job that names a missing environment makes GitHub CREATE it with no
         # deployment branch policy; refuse to run in one. No-op without an environment.
@@ -603,29 +614,60 @@ jobs:
           : > /tmp/keep.txt
           [ -z "$NEW_VERSION" ] || echo "$NEW_VERSION" >> /tmp/keep.txt
           head -n "$KEEP_ENABLED_COUNT" /tmp/enabled.txt >> /tmp/keep.txt
-          # Versions pinned by the two newest revisions before the one just rolled, per
-          # service. A listing failure fails the step BEFORE anything is disabled.
-          IFS=',' read -ra SERVICES <<< "$SERVICES_CSV"
-          for svc in "${SERVICES[@]}"; do
+          # Keep-set = every pin a LIVE or recent revision holds, across EVERY consumer of the
+          # bundle secret in the project (not only services_csv):
+          #   (a) each revision with traffic > 0 on a Service (after a `rollback to_revision`
+          #       traffic stays pinned to an old revision until `--to-latest`),
+          #   (b) the two newest revisions before the one just rolled, per Service,
+          #   (c) every Cloud Run Job's pin (a Job has no traffic; its pin is live).
+          # A listing/describe failure fails the step BEFORE anything is disabled.
+          # shellcheck disable=SC2016
+          # (jq program: the $vars are jq's, not the shell's)
+          PINS_JQ='def pins($s): . as $r
+                    | [$r.spec.containers[]?.volumeMounts[]?.name] as $mounted
+                    | [$r.spec.volumes[]?
+                       | select(.secret.secretName == $s and (.name as $v | $mounted | index($v) != null))
+                       | .secret.items[]? | (.key // .version) | tostring | sub("^.*/"; "")];'
+          gcloud --project="$GCP_PROJECT" run services list --region="$GCP_REGION" \
+            --format='value(metadata.name)' </dev/null > /tmp/consumers.raw
+          IFS=',' read -ra LISTED <<< "$SERVICES_CSV"
+          for svc in "${LISTED[@]}"; do
             svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
             svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
-            [ -z "$svc" ] && continue
+            [ -z "$svc" ] || echo "$svc" >> /tmp/consumers.raw
+          done
+          sort -u /tmp/consumers.raw | grep -v '^$' > /tmp/consumers.txt || true
+          while read -r svc; do
+            [ -n "$svc" ] || continue
+            gcloud --project="$GCP_PROJECT" run services describe "$svc" \
+              --region="$GCP_REGION" --format=json </dev/null > /tmp/service.json
+            [ -s /tmp/service.json ] || echo '{}' > /tmp/service.json
             gcloud --project="$GCP_PROJECT" run revisions list --service="$svc" \
               --region="$GCP_REGION" \
-              --sort-by=~metadata.creationTimestamp --limit=3 --format=json \
+              --sort-by=~metadata.creationTimestamp --limit=50 --format=json \
               </dev/null > /tmp/revisions.json
             [ -s /tmp/revisions.json ] || echo '[]' > /tmp/revisions.json
-            jq -r --arg s "$BUNDLE_SECRET" --arg n "$NEW_VERSION" '
-              .[0:3]
-              | map(. as $r
-                    | [$r.spec.containers[]?.volumeMounts[]?.name] as $mounted
-                    | {pins: [$r.spec.volumes[]?
-                              | select(.secret.secretName == $s and (.name as $v | $mounted | index($v) != null))
-                              | .secret.items[]?.version | tostring | sub("^.*/"; "")]})
-              | map(select((.pins | index($n)) == null))
-              | .[0:2][].pins[]
-              | select(test("^[0-9]+$"))' /tmp/revisions.json >> /tmp/keep.txt
-          done
+            jq -r --arg s "$BUNDLE_SECRET" --arg n "$NEW_VERSION" --slurpfile svc /tmp/service.json "
+              $PINS_JQ
+              (\$svc[0].status.latestReadyRevisionName // \"\") as \$latest
+              | ([\$svc[0].status.traffic[]? | select((.percent // 0) > 0) | (.revisionName // \$latest)]) as \$live
+              | ( [.[] | select(.metadata.name as \$nm | \$live | index(\$nm)) | pins(\$s)[]]
+                + [.[0:3] | map({pins: pins(\$s)}) | map(select((.pins | index(\$n)) == null))
+                   | .[0:2][].pins[]] )
+              | .[] | select(test(\"^[0-9]+\$\"))" /tmp/revisions.json >> /tmp/keep.txt
+          done < /tmp/consumers.txt
+          gcloud --project="$GCP_PROJECT" run jobs list --region="$GCP_REGION" \
+            --format='value(metadata.name)' </dev/null > /tmp/jobs.txt
+          while read -r job; do
+            [ -n "$job" ] || continue
+            gcloud --project="$GCP_PROJECT" run jobs describe "$job" \
+              --region="$GCP_REGION" --format=json </dev/null > /tmp/job.json
+            [ -s /tmp/job.json ] || echo '{}' > /tmp/job.json
+            jq -r --arg s "$BUNDLE_SECRET" "
+              $PINS_JQ
+              (.spec.template.spec.template // {}) | pins(\$s)[] | select(test(\"^[0-9]+\$\"))" \
+              /tmp/job.json >> /tmp/keep.txt
+          done < /tmp/jobs.txt
           grep -vxFf /tmp/keep.txt /tmp/enabled.txt > /tmp/to-disable.txt || true
           COUNT=$(wc -l < /tmp/to-disable.txt | tr -d ' ')
           echo "ENABLED versions: $TOTAL; keeping $(sort -u /tmp/keep.txt | wc -l | tr -d ' ') in the keep-set; disabling $COUNT."
@@ -642,7 +684,7 @@ jobs:
 
       - name: Shred local bundle copy
         if: always()
-        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/enabled.raw /tmp/enabled.txt /tmp/keep.txt /tmp/to-disable.txt /tmp/revisions.json /tmp/keys.*
+        run: rm -f /tmp/bundle.env /tmp/bundle.env.new /tmp/enabled.raw /tmp/enabled.txt /tmp/keep.txt /tmp/to-disable.txt /tmp/revisions.json /tmp/service.json /tmp/job.json /tmp/consumers.raw /tmp/consumers.txt /tmp/jobs.txt /tmp/keys.*
 
       - name: Summary
         if: always()

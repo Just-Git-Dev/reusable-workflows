@@ -99,6 +99,6 @@ jobs:
       app_id: ${{ vars.APP_ID }}
       dry_run: ${{ inputs.dry_run }}
     secrets:
-      app_key: ${{ secrets.REPO_ADMIN_APP_KEY }}
+      app_key: ${{ secrets.AUTOMATION_APP_KEY }}
       sources_json: ${{ toJSON(secrets) }}
 ```
