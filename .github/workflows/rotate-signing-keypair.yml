@@ -93,6 +93,13 @@ on:
         type: boolean
         required: false
         default: false
+      pin_versions:
+        description: >-
+          true (DEFAULT since v4.0.0) = roll with <bundle>:<N+1> and the jgd_env_version /
+          jgd_run labels. false = the v3 :latest roll.
+        type: boolean
+        required: false
+        default: true
       keep_enabled_count:
         description: >-
           After a successful roll, keep this many of the most recent ENABLED
@@ -254,28 +261,55 @@ jobs:
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Force new Cloud Run revision(s)
-        id: deploy_run
+        id: roll
         if: inputs.dry_run == false
+        env:
+          NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
+          PIN_VERSIONS: ${{ inputs.pin_versions }}
         run: |
+          # `value(name)` may return a full resource path; the mount wants the number.
+          NEW_VERSION="${NEW_VERSION##*/}"
+          if [ "$PIN_VERSIONS" = "true" ]; then
+            if [ -z "$NEW_VERSION" ]; then
+              echo "::error::pin_versions needs the new bundle version, which is empty."
+              exit 1
+            fi
+            SECRET_REF="${BUNDLE_SECRET}:${NEW_VERSION}"
+            LABELS="jgd_env_version=${NEW_VERSION},jgd_run=${GITHUB_RUN_ID}"
+          else
+            SECRET_REF="${BUNDLE_SECRET}:latest"
+            LABELS=""
+          fi
           IFS=',' read -ra SERVICES <<< "$SERVICES_CSV"
+          ROLLED=0
           FAILED=()
           for svc in "${SERVICES[@]}"; do
             svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
             svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
             [ -z "$svc" ] && continue
             if gcloud run services update "$svc" \
-                --region="$GCP_REGION" --project="$GCP_PROJECT" \
-                --update-secrets="${MOUNT_PATH}=${BUNDLE_SECRET}:latest"; then
+                 --region="$GCP_REGION" \
+                 --project="$GCP_PROJECT" \
+                 --update-secrets="${MOUNT_PATH}=${SECRET_REF}" \
+                 ${LABELS:+--update-labels="$LABELS"}; then
               echo "rolled: $svc"
-            elif [ "$BOOTSTRAP" = "true" ]; then
-              echo "::warning::Failed to update $svc during bootstrap (may not exist yet) — continuing."
+              ROLLED=$((ROLLED + 1))
             else
-              echo "::error::Failed to roll $svc — the signer did not adopt the new key."
+              echo "::error::Failed to roll $svc onto ${SECRET_REF}"
               FAILED+=("$svc")
             fi
           done
+          echo "rolled=$ROLLED" >> "$GITHUB_OUTPUT"
+
+          # Fail loud and leave the old version ENABLED. Disabling it now would
+          # strand any service still reading it.
           if [ "${#FAILED[@]}" -gt 0 ]; then
             echo "::error::${#FAILED[@]} service(s) failed to roll: ${FAILED[*]}"
+            echo "::error::The previous bundle version is still enabled. Fix and re-run."
+            exit 1
+          fi
+          if [ "$ROLLED" -eq 0 ]; then
+            echo "::error::services_csv resolved to zero service names."
             exit 1
           fi
 
@@ -291,7 +325,7 @@ jobs:
           && inputs.dry_run == false
           && steps.new_version.outputs.new_version != ''
           && steps.cur.outputs.current_version != ''
-          && steps.deploy_run.outcome != 'success'
+          && steps.roll.outcome != 'success'
         run: |
           echo "::warning::Rotation failed before the signer moved over — restoring ${BUNDLE_SECRET} latest to version ${{ steps.cur.outputs.current_version }}."
           gcloud secrets versions access "${{ steps.cur.outputs.current_version }}" \
@@ -308,22 +342,28 @@ jobs:
             || echo "::warning::Could not disable failed version ${{ steps.new_version.outputs.new_version }} (non-fatal — latest already restored)."
 
       - name: Disable superseded bundle version(s)
-        # No grace: asymmetric JWTs carry a kid and short-lived tokens churn onto the
-        # new key naturally once the signer rolls, so the old key can go immediately.
+        # Reached only when every service rolled: a failed roll fails the step
+        # above, and `if: success()` is the implicit default for later steps.
         #
-        # KEEP-SET, not "disable the one we replaced". The newest
-        # `keep_enabled_count` ENABLED versions survive and everything older is
-        # disabled, so a pre-existing ENABLED tail is mopped up rather than
-        # accumulating retrievable plaintext forever. At the default of 1 that is
-        # identical to the old single-version disable whenever no such tail exists.
+        # KEEP-SET (v4). ENABLED versions kept = the union of
+        #   - the new version N+1,
+        #   - the version pinned by each of the two newest PREVIOUS revisions of every
+        #     rolled service (read only from volumes a volumeMount actually uses; an
+        #     orphan declared volume pins nothing), so the previous revision stays a
+        #     valid rollback target, and
+        #   - the `keep_enabled_count` newest ENABLED versions (a floor, minimum 1).
+        # Everything else is disabled. A pre-existing ENABLED tail (a hand-added
+        # version, or one from manage-config-secrets) is therefore mopped up too.
         #
         # DISABLE ONLY, never destroy. Destruction needs a quarantine clock (GSM
-        # stores no disabled-at timestamp) and the Cloud Run consumer scan; both
-        # live in cleanup-secret-versions, and this workflow holds neither
+        # stores no disabled-at timestamp, so it comes from Admin Activity audit
+        # logs) and the Cloud Run consumer scan; both live in
+        # cleanup-secret-versions, and this workflow deliberately holds neither
         # roles/logging.viewer nor roles/run.viewer. See DECISIONS.md 2026-08-17.
         if: inputs.dry_run == false && steps.cur.outputs.empty == 'false' && steps.cur.outputs.current_version != ''
         env:
           KEEP_ENABLED_COUNT: ${{ inputs.keep_enabled_count }}
+          NEW_VERSION: ${{ steps.new_version.outputs.new_version }}
         run: |
           case "$KEEP_ENABLED_COUNT" in
             ''|*[!0-9]*)
@@ -334,16 +374,46 @@ jobs:
             echo "::error::keep_enabled_count must be >= 1: 0 disables every version and leaves 'latest' unresolvable."
             exit 1
           fi
+          NEW_VERSION="${NEW_VERSION##*/}"
           # `latest` resolves SERVER-SIDE to the newest ENABLED version, so keeping
           # at least one guarantees this step can never silently repoint it.
+          # Written to a file rather than piped: a heredoc consumer downstream of a
+          # pipe claims stdin and kills the producer (shellcheck SC2259).
           gcloud secrets versions list "$BUNDLE_SECRET" \
             --project="$GCP_PROJECT" --filter='state=ENABLED' \
-            --sort-by=~createTime --format='value(name)' > /tmp/enabled.txt
+            --sort-by=~createTime --format='value(name)' > /tmp/enabled.raw
+          sed 's|.*/||' /tmp/enabled.raw | grep -v '^$' > /tmp/enabled.txt || true
           TOTAL=$(wc -l < /tmp/enabled.txt | tr -d ' ')
-          # tail -n +N is 1-based, so +2 with KEEP=1 skips the newest and keeps the rest.
-          tail -n +"$((KEEP_ENABLED_COUNT + 1))" /tmp/enabled.txt > /tmp/to-disable.txt
+          # Keep-set, one version per line.
+          : > /tmp/keep.txt
+          [ -z "$NEW_VERSION" ] || echo "$NEW_VERSION" >> /tmp/keep.txt
+          head -n "$KEEP_ENABLED_COUNT" /tmp/enabled.txt >> /tmp/keep.txt
+          # Versions pinned by the two newest revisions before the one just rolled, per
+          # service. A listing failure fails the step BEFORE anything is disabled.
+          IFS=',' read -ra SERVICES <<< "$SERVICES_CSV"
+          for svc in "${SERVICES[@]}"; do
+            svc="${svc#"${svc%%[![:space:]]*}"}"   # ltrim
+            svc="${svc%"${svc##*[![:space:]]}"}"   # rtrim
+            [ -z "$svc" ] && continue
+            gcloud --project="$GCP_PROJECT" run revisions list --service="$svc" \
+              --region="$GCP_REGION" \
+              --sort-by=~metadata.creationTimestamp --limit=3 --format=json \
+              </dev/null > /tmp/revisions.json
+            [ -s /tmp/revisions.json ] || echo '[]' > /tmp/revisions.json
+            jq -r --arg s "$BUNDLE_SECRET" --arg n "$NEW_VERSION" '
+              .[0:3]
+              | map(. as $r
+                    | [$r.spec.containers[]?.volumeMounts[]?.name] as $mounted
+                    | {pins: [$r.spec.volumes[]?
+                              | select(.secret.secretName == $s and (.name as $v | $mounted | index($v) != null))
+                              | .secret.items[]?.version | tostring | sub("^.*/"; "")]})
+              | map(select((.pins | index($n)) == null))
+              | .[0:2][].pins[]
+              | select(test("^[0-9]+$"))' /tmp/revisions.json >> /tmp/keep.txt
+          done
+          grep -vxFf /tmp/keep.txt /tmp/enabled.txt > /tmp/to-disable.txt || true
           COUNT=$(wc -l < /tmp/to-disable.txt | tr -d ' ')
-          echo "ENABLED versions: $TOTAL; keeping newest $KEEP_ENABLED_COUNT; disabling $COUNT."
+          echo "ENABLED versions: $TOTAL; keeping $(sort -u /tmp/keep.txt | wc -l | tr -d ' ') in the keep-set; disabling $COUNT."
           if [ "$COUNT" -gt 1 ]; then
             echo "::warning::Disabling $COUNT versions, more than the one this run superseded — a pre-existing ENABLED tail was present. Every one is reversible with 'gcloud secrets versions enable'."
           fi
@@ -351,7 +421,8 @@ jobs:
             [ -n "$v" ] || continue
             echo "Disabling version $v"
             gcloud secrets versions disable "$v" \
-              --secret="$BUNDLE_SECRET" --project="$GCP_PROJECT" || true
+              --secret="$BUNDLE_SECRET" \
+              --project="$GCP_PROJECT" </dev/null
           done < /tmp/to-disable.txt
 
       - name: Shred local bundle copies
