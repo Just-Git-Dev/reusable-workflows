@@ -115,6 +115,12 @@ inputs:
       enabled after the roll. Minimum 1.
     required: false
     default: '1'
+  concurrency_declared:
+    description: >-
+      Set by the wrapper workflow, which declares the concurrency group itself; direct callers
+      leave it unset.
+    required: false
+    default: 'false'
 
 outputs:
   old_version:
@@ -135,6 +141,7 @@ runs:
       env:
         GCP_PROJECT: ${{ inputs.gcp_project }}
         BUNDLE_SECRET: ${{ inputs.bundle_secret }}
+        CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
       run: '"$GITHUB_ACTION_PATH/warn-concurrency.sh"'
 
     - name: Validate payload_source

@@ -245,3 +245,5 @@ jobs:
           confirm_removed: ${{ inputs.confirm_removed }}
           pin_versions: ${{ inputs.pin_versions }}
           keep_enabled_count: ${{ inputs.keep_enabled_count }}
+          # This workflow declares the concurrency group above, so the action only needs a notice.
+          concurrency_declared: 'true'

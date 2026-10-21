@@ -627,6 +627,19 @@ def action_cases():
               r["rc"] == 0 and "::warning::" in r["out"]
               and "group: bundle-write-proj-x-app-secrets" in r["out"], r["out"])
         check("the warning says cancel-in-progress: false", "cancel-in-progress: false" in r["out"], r["out"])
+        r = run_body(body, {"GCP_PROJECT": "proj-x", "BUNDLE_SECRET": "app-secrets", "CONCURRENCY_DECLARED": "false"})
+        check("a direct caller (concurrency_declared false) still gets the ::warning::",
+              "::warning::" in r["out"] and "::notice::" not in r["out"], r["out"])
+        r = run_body(body, {"GCP_PROJECT": "proj-x", "BUNDLE_SECRET": "app-secrets", "CONCURRENCY_DECLARED": "true"})
+        check("the wrapper (concurrency_declared true) gets a ::notice::, not a ::warning::",
+              r["rc"] == 0 and "::notice::" in r["out"] and "::warning::" not in r["out"]
+              and "group: bundle-write-proj-x-app-secrets" in r["out"], r["out"])
+    cd = inp.get("concurrency_declared", {})
+    check("concurrency_declared is an optional action input defaulting to 'false'",
+          cd.get("default") == "false" and cd.get("required") is not True, cd)
+    warn = next((s for s in steps if s.get("name") == WARN_STEP), {})
+    check("the warn step reads concurrency_declared through env:",
+          "inputs.concurrency_declared" in str(warn.get("env", {}).get("CONCURRENCY_DECLARED", "")), warn.get("env"))
     # Hygiene: no `${{ }}` inside a run body; every step that runs shell declares shell: bash.
     runs = [s for s in steps if "run" in s]
     check("every run step names shell: bash", runs and all(s.get("shell") == "bash" for s in runs))
@@ -655,6 +668,8 @@ def wrapper_cases():
     check("every with: key is an input of the action", not unknown, f"unknown {unknown}")
     same = [k for k in inputs if k in with_ and with_[k] != "${{ inputs.%s }}" % k]
     check("each input is passed through unchanged (${{ inputs.<name> }})", not same, same)
+    check("the wrapper sets concurrency_declared: 'true' (it declares the group itself)",
+          str(with_.get("concurrency_declared")).lower() == "true", with_.get("concurrency_declared"))
     check("secrets_json is the caller's toJSON(secrets)",
           with_.get("secrets_json") == "${{ toJSON(secrets) }}", with_.get("secrets_json"))
     check("the wrapper keeps the payload_json secret", "payload_json" in secrets)

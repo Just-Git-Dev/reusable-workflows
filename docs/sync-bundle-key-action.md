@@ -32,8 +32,11 @@ A composite action cannot declare `environment:`, `permissions:`, `concurrency:`
 new version. Two at once both read version N and the second write silently drops the first one's
 keys. The group string must match the one the workflows use
 (`tests/run_concurrency_tests.py` pins it). No GitHub context exposes the running job's
-concurrency group, so the action cannot detect a missing one: **every run prints a `::warning::`
-naming the exact block**. Treat that warning as the reminder, not as a sign something failed.
+concurrency group, so the action cannot detect a missing one: **every direct call prints a
+`::warning::` naming the exact block**. Treat that warning as the reminder, not as a sign something
+failed. The reusable workflow wrapper declares the group itself and sets the input
+`concurrency_declared: 'true'`, which turns the message into a `::notice::`; direct callers leave
+it unset.
 GitHub scopes the group to the caller's repo, so two caller repos writing one bundle are still
 not serialised.
 

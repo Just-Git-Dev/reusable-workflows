@@ -96,6 +96,11 @@
           "description": "Secret Manager bundle secret name.",
           "required": false
         },
+        "concurrency_declared": {
+          "default": "false",
+          "description": "Set by the wrapper workflow, which declares the concurrency group itself; direct callers leave it unset.",
+          "required": false
+        },
         "confirm_removed": {
           "default": "",
           "description": "CSV of key names. A live run that would drop keys refuses unless this equals the dropped set.",
