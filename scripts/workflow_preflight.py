@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# VENDORED from claude-config skills/workflow-preflight @ ba53dfbbdb2b — edit canonical, not this copy
+# VENDORED from claude-config skills/workflow-preflight @ 02f6022fd009 — edit canonical, not this copy
 """workflow-preflight: stop GitHub Actions failures before push (`lint`, `parity`, `refs`, `calls`, `dispatch-check`).
 
 Canonical copy lives in claude-config `skills/workflow-preflight/scripts/`; repos carry a stamped
@@ -722,7 +722,8 @@ def evaluate_refs(scan, rcfg, cfg, names, repo, static):
 
     def add(code, where, msg, graded=False):
         line = f"{code} {where}: {msg}"
-        bucket = warns if graded and grace else findings
+        # UNPROVEN always warns (owner ruling 2026-10-21): no deadline escalation
+        bucket = warns if code == "UNPROVEN" or (graded and grace) else findings
         bucket[("WARN " if bucket is warns else "") + line] = 1
 
     seen_env = set()
