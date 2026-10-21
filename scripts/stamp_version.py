@@ -42,7 +42,8 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # Composite actions (`actions/<name>@`) are pinned the same way and swept with the
 # workflows. They carry no WORKFLOW_VERSION stamp: the stamp exists so a called
 # workflow can tell its caller it is stale, and no action here reports that. Their
-# doc pins are the only version they have, so they are part of `--check`.
+# pins — in docs AND in the wrapper workflows that call them remotely — are the only
+# version they have, so all of them are swept and part of `--check` (`pin_files`).
 PIN_RE = re.compile(
     r"(Just-Git-Dev/reusable-workflows/"
     r"(?:\.github/workflows/[A-Za-z0-9._-]+\.yml|actions/[A-Za-z0-9._-]+)@)"
@@ -178,6 +179,14 @@ def doc_files(root: Path) -> list[Path]:
     return docs
 
 
+def pin_files(root: Path) -> list[Path]:
+    """Everything whose `reusable-workflows/...@vX.Y.Z` pins move with a release: the docs, AND
+    the published workflows — a wrapper calls its composite action remotely at a tag, and a
+    workflow left at the previous tag would call an action that may not exist there."""
+    workflows = sorted((root / ".github" / "workflows").glob("*.yml"))
+    return doc_files(root) + [p for p in workflows if "workflow_call:" in p.read_text()]
+
+
 @dataclass
 class Report:
     stamps: dict[str, str | None] = field(default_factory=dict)
@@ -226,7 +235,7 @@ def scan(root: Path) -> Report:
         tree = find_tree(text)
         if tree is not None:
             report.trees[_rel(path, root)] = tree
-    for path in doc_files(root):
+    for path in pin_files(root):
         found = find_pins(path.read_text())
         if found:
             report.pins[_rel(path, root)] = found
@@ -268,7 +277,7 @@ def sweep(version: str) -> int:
             trees += 1
             print(f"  tree    {_rel(path, ROOT)} -> {tree}")
     pins = 0
-    for path in doc_files(ROOT):
+    for path in pin_files(ROOT):
         text = path.read_text()
         new, n = bump_pins(text, version)
         if n:

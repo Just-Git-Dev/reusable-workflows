@@ -156,6 +156,25 @@ def test_action_pins_are_swept_and_reconciled():
           problems, ["docs/a.md: example pinned to v1.22.0, expected v1.24.0"])
 
 
+def test_workflow_action_pins_are_swept_and_checked():
+    # A wrapper workflow calls its composite action REMOTELY at a release tag
+    # (`uses: Just-Git-Dev/reusable-workflows/actions/<name>@vX.Y.Z`). That pin lives in
+    # the workflow, not a doc: if the sweep skipped workflows, workflow vX.Y.Z would
+    # call the action at the PREVIOUS tag (where it may not exist) and `--check` would
+    # still pass. Found stamping v4.1.0, before release.
+    files = {_rel(p) for p in S.pin_files(ROOT)}
+    for wrapper in (".github/workflows/sync-bundle-key.yml",
+                    ".github/workflows/rotate-worker-signing-secret.yml"):
+        check(f"workflow pins: {wrapper} is swept", wrapper in files, True)
+    report = S.scan(ROOT)
+    check("workflow pins: wrapper pin collected by scan",
+          ".github/workflows/sync-bundle-key.yml" in report.pins, True)
+
+
+def _rel(p):
+    return str(Path(p).resolve().relative_to(ROOT))
+
+
 def test_find_pins_ignores_v1_alias():
     # `v1` is a frozen legacy alias (CLAUDE.md); the sweep must not drag it forward,
     # or a doc that deliberately documents the alias would be rewritten every release.
@@ -280,6 +299,7 @@ def main():
         test_bump_pins_rewrites_only_our_pins,
         test_bump_pins_idempotent,
         test_action_pins_are_swept_and_reconciled,
+        test_workflow_action_pins_are_swept_and_checked,
         test_find_pins_ignores_v1_alias,
         test_version_must_be_a_release_tag,
         test_repo_is_internally_consistent,
