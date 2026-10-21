@@ -95,6 +95,7 @@ Two things this depends on, both worth confirming per repo before converting:
 | `extra_deploy_flags` | input | `''` | legacy: flags as one space-separated string — word-split, so a space inside any value breaks argv. Prefer `deploy_flags` |
 | `build_only` | input | `false` | build **and push**, then stop — no Cloud Run mutation, no Deployment record. See below |
 | `dry_run` | input | `false` | build only — **no push**, no Cloud Run mutation |
+| `env_file`, `generated_env`, `env_secret`, `env_mount_path`, `pin_env`, `manifest_retention_days` | input | see [Runtime config (v4)](#runtime-config-v4) | env file, bundle pin, labels and manifest |
 
 No secrets: WIF is keyless. `id-token: write` is set by the reusable.
 
@@ -191,6 +192,87 @@ from the env's latest successful GitHub Deployment, and blocks only when the
 candidate is `behind` (`ahead`/`identical`/`diverged` pass, so a stage lineage switch
 is allowed). It fails closed on a compare-API error. Same guard as
 [`promote-image`](promote-image.md#forward-only-opt-in).
+
+## Runtime config (v4)
+
+From v4 the deploy carries the service's non-secret configuration and keeps the bundle secret
+pinned. Four things are involved: a committed env file (plain config), the bundle secret
+`<d>-env` (secret values, mounted as a file), the revision labels, and a manifest. See
+[runtime-config](runtime-config.md) for the model and [MIGRATION-v4](MIGRATION-v4.md) for what a
+v3 caller must change.
+
+| Input | Default | Notes |
+|---|---|---|
+| `env_file` | `''` | path, in the checkout, of the YAML env file (e.g. `deploy/env.stage.yaml`). Empty = v3 behaviour, no env file |
+| `generated_env` | `''` | newline `KEY=VALUE` pairs the workflow produces (e.g. `APP_VERSION`), merged into the file |
+| `env_secret` | `''` | the bundle secret name, `<d>-env` |
+| `env_mount_path` | — | path where the service mounts the bundle |
+| `pin_env` | `true` | see [Pinning the bundle](#pinning-the-bundle) |
+| `manifest_retention_days` | `400` | retention of the `config-manifest.json` artifact |
+
+### Render
+
+A pure step merges `env_file` and `generated_env` into `$RUNNER_TEMP/env.rendered.yaml`. It
+**refuses**: a key present in both inputs, and any key whose name matches `PASSWORD`, `SECRET`,
+`TOKEN` or ends in `_URL` (secrets belong in the bundle, never in the plain file; this repeats the
+[deploy-env-lint](deploy-env-lint.md) rule as defence in depth). `jgd_env_sha` is the first 8
+hex characters of the sha256 of the rendered file.
+
+### Deploy step
+
+The deploy keeps the existing `gcloud run` step and passes the rendered file with
+`--env-vars-file=<rendered>`. Both `deploy_mode`s accept it. There is no converter and the deploy
+does not move to another action (owner ruling: the env file is deployed with `--env-vars-file`).
+The file is the complete set of plain environment variables for the new revision; a variable not
+in the file is not set by this deploy.
+
+### Pinning the bundle
+
+The bundle is mounted at a **version number**, not `latest`, so a revision always starts with the
+secret version it was deployed with. The pin step reads the service's currently mounted
+`env_secret` version:
+
+- `latest` (a v3 service): resolve the newest ENABLED version number `N` and pass
+  `--update-secrets=<mount>=<env_secret>:<N>`;
+- a number: **keep it**. A deploy never moves the pin; only the bundle writers
+  ([sync-bundle-key](sync-bundle-key.md) and the two rotators) do.
+
+> **Pending owner decision Q8 — ship `pin_env: false`?** As written above `pin_env` defaults to
+> `true`. Whether the input exists at all is undecided. Options: (a) ship it as an opt-out,
+> warned in every run summary, so a caller can adopt v4 service by service; (b) ship no escape:
+> the deploy refuses until the caller has migrated. This page documents the pinning behaviour
+> only.
+
+### Labels
+
+Each revision gets `jgd_commit` (already stamped today, see below), `jgd_env_version` (the pinned
+`N`), `jgd_env_sha` (the rendered file's hash) and `jgd_run` (the workflow run). From a revision
+you can therefore read back the commit, the bundle version and the env file it started with.
+
+### Manifest
+
+The deploy writes `config-manifest.json`: the commit, the image digest, the revision, the
+`env_secret` version `N`, and the keys with their source (file, generated or bundle) and, for
+non-secret keys, their value. It is shown as a table in the run summary and uploaded as an
+artifact for `manifest_retention_days`. Secret values never appear. The repository's own maximum
+artifact retention must be at least that many days, or the upload is capped by it; raising it is a
+repository setting.
+
+### Forward-only fallback
+
+The [forward-only](#live-commit-stamping) guard reads "what is live" from the environment's latest
+successful GitHub Deployment. When the environment has **no** successful Deployment (for example
+after renaming `production` to `prod`, a new environment name), v3 allowed any deploy. v4 instead
+reads the service's `jgd_commit` label as the baseline and compares against it. If neither exists
+(the first deploy ever) the deploy is allowed, with a notice.
+
+### Why the deploy job has no `environment:`
+
+Deploy jobs deliberately declare no job-level `environment:`. They need no environment secrets
+(WIF is keyless; the bundle is pinned in Secret Manager), and an environment restricted to
+`main` is expected to reject a tag-triggered job (unverified at the time of writing). The
+`environment` **input** keeps its meaning: the name of the GitHub Deployment record and the
+forward-only lineage.
 
 ## Concurrency
 

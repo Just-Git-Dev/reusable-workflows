@@ -65,6 +65,22 @@ candidate occurs in some value, the run **fails and says so** rather than guessi
 caller that owns the whole environment. `clear_env_vars` only means something with `update`,
 which otherwise cannot remove anything.
 
+## Env file, labels and manifest (v4.x)
+
+Added in a v4 minor release, as optional inputs: with them empty, nothing below applies and the
+workflow behaves as before.
+
+`env_file` is the path, in the checkout, of a committed YAML env file (for example
+`deploy/env.stage.yaml`). It is rendered and deployed exactly as in
+[deploy-cloud-run](deploy-cloud-run.md#runtime-config-v4): the same merge with `generated_env`,
+the same refusal of secret-looking keys, and the file is passed to gcloud with
+`--env-vars-file`. The update stamps the same revision labels (`jgd_env_version`, `jgd_env_sha`,
+`jgd_run`) and writes the same `config-manifest.json` artifact, so a config-only change is as
+traceable as a deploy.
+
+`env_file` and the older `env_vars` / `env_vars_mode` inputs describe the same variables. Use one
+per service; which wins when both are given is not part of this contract.
+
 ## `extra_args`
 
 The long tail of `gcloud run services update` flags that do not deserve a typed input, one

@@ -18,7 +18,7 @@ here. Nothing on this page is implemented until that page exists.
 3. [Schema `schemas/repos.v1.json`, in words](#3-schema-schemasreposv1json-in-words)
 4. [Report vs enforce](#4-report-vs-enforce)
 5. [The NEVER list](#5-the-never-list)
-6. [Features F1-F8 (adopt any one alone)](#6-features-f1-f8-adopt-any-one-alone)
+6. [Features F1-F9 (adopt any one alone)](#6-features-f1-f9-adopt-any-one-alone)
 7. [Planner / workflow split](#7-planner--workflow-split)
 8. [The planner action list — the contract](#8-the-planner-action-list--the-contract)
 9. [The `repo-admin` environment](#9-the-repo-admin-environment)
@@ -80,7 +80,7 @@ repos:
 | `version`, `org` | every feature | `version` must be `1`; `org` is the owner of every repo listed |
 | `defaults.*` | the feature that reads the defaulted key | a repo's own key wins over the default |
 | `repos[].name` | every feature | the repo's identity; unique in the file |
-| `repos[].mode` | F2-F7 | `report` or `enforce` ([§4](#4-report-vs-enforce)) |
+| `repos[].mode` | F2-F7, F9 | `report` or `enforce` ([§4](#4-report-vs-enforce)) |
 | `repos[].status`, `repos[].rename_from` | F2 create | `status: new` = create if missing |
 | `repos[].description`, `visibility`, `default_branch`, `settings` | F3 settings | |
 | `repos[].variables` | F4 variables | NON-secret values only |
@@ -88,6 +88,7 @@ repos:
 | top-level `service_accounts:` | F6 service accounts | create-if-missing only |
 | `repos[].deploys` | F7 deploy scope | Cloud Run entries; a GKE entry is reported `unsupported` |
 | `repos[].deploys[].env_secret` | F8 secrets | `true` = this Cloud Run entry gets the secret `<cloud_run>-env`; any other value is an error (the name is derived, never chosen) |
+| `repos[].environments` | F9 environments | GitHub deployment environments of this repo and their branch/tag policy ([§6](#6-features-f1-f9-adopt-any-one-alone)); no secrets, no reviewers |
 | `repos[].kind` | nobody yet | inventory only |
 
 **Unknown keys are ignored by every feature** — at any level, including inside a repo entry. A
@@ -131,11 +132,18 @@ F1 validates against it; every planner validates the parts it reads before plann
       `<cloud_run>-run`; a value that is present must equal it, or F7 exits `1`.
       `env_secret` is optional and must be the boolean `true` when present (F8; the secret name
       `<cloud_run>-env` is derived, so a string such as `web-env` is refused). A `cloud_run` name
-      may appear under only one repo (a deployable belongs to exactly one repo; F1-F8 refuse a
+      may appear under only one repo (a deployable belongs to exactly one repo; F1-F9 refuse a
       register that lists it twice);
+    - `environments` (array, optional; F9). Each entry is an object with required `name`
+      (string, `^[A-Za-z0-9._-]{1,100}$`, unique within the repo) and at least one of `branches`
+      (array of non-empty branch-name patterns) or `tags` (array of non-empty tag-name patterns);
+      anything else on the entry is ignored. An entry with neither is an error. Required reviewers,
+      wait timers and secrets are deliberately not keys (reviewers return HTTP 422 on a free
+      private repo; secrets belong to `distribute-env-secrets` and the owner). The same `name` may
+      appear under different repos;
     - `gke` (object, all required: `cluster` as `<location>/<name>`, `namespace`, `workload`). The
       schema accepts it so a register can record intent, but F7 does not act on it
-      ([§6](#6-features-f1-f8-adopt-any-one-alone)).
+      ([§6](#6-features-f1-f9-adopt-any-one-alone)).
   - **Names that reach a command line** (`cloud_run`, `region`, `image_repository`, every repo
     name and `rename_from`, `default_branch`, SA names, the `gke` fields) are checked against
     patterns and may never start with `-`, so no register value can turn into a flag: Cloud Run
@@ -197,6 +205,9 @@ No feature, in any mode, ever:
     difference and never writes it, in `report` and `enforce` mode alike; a human flips it in
     GitHub). Making a public repository private cannot be undone: stars and watchers are lost.
     Visibility is only ever set when F2 creates a repo.
+11. **deletes an environment** (F9 plans no delete verb; deleting an environment deletes the
+    secrets stored in it, which nothing here can restore). An environment the register does not
+    list is reported (`unmanaged-environment`), never touched.
 
 **Removing a repo (or SA, variable, link, deploy entry) from the register = stop managing it.**
 
@@ -206,7 +217,7 @@ register that would need one (a `public` visibility, a `rename_from` that collid
 existing repo) is refused with an error, not planned around. The workflow checks every action
 name against the same allow-list before applying it — defence in depth, not the primary control.
 
-## 6. Features F1-F8 (adopt any one alone)
+## 6. Features F1-F9 (adopt any one alone)
 
 No feature requires another. Each row lists what you must have to adopt that feature by itself.
 
@@ -220,8 +231,9 @@ No feature requires another. Each row lists what you must have to adopt that fea
 | F6 | `repos-service-accounts.yml` | top-level `service_accounts` | GCP: `repo-admin` via WIF | service accounts |
 | F7 | `repos-deploy-scope.yml` | `deploys` | GCP: `repo-admin` via WIF | Cloud Run service (create once) + resource-level IAM |
 | F8 | `repos-secrets.yml` | `deploys[].env_secret` | GCP: `repo-admin` via WIF | Secret Manager secret `<d>-env` (create once, never its versions) + that secret's IAM policy |
+| F9 | `repos-environments.yml` | `environments` | report: `actions:read`; enforce: `administration:write` on the repos it writes to. Which App holds it: pending owner decision Q1 ([§9](#9-the-repo-admin-environment)) | GitHub environments + their deployment branch/tag policies (never deletes one) |
 
-GitHub-side features (F2-F4) mint a GitHub App installation token narrowed with `permission-*`
+GitHub-side features (F2-F4, F9) mint a GitHub App installation token narrowed with `permission-*`
 inputs to exactly the row above, and run only in the `repo-admin` environment
 ([§9](#9-the-repo-admin-environment)). GCP-side features (F5-F7) hold no GitHub write.
 
@@ -329,6 +341,17 @@ policy line is `add-secret-binding`; a line that is not wanted is `drift{would:
 adds/reads/disables/destroys a version, touches a secret that is not `<d>-env` for a registered `d`,
 or binds any other role. `env_secret` must be boolean `true`: a name is derived, never chosen.
 
+**F9 — environments** (page [repos-environments.md](repos-environments.md)). Same schema check as
+F1 first. For each repo with an `environments:` list, F9 makes the repo's GitHub environments
+match it: a missing environment is `create-environment` (custom branch policies on, protected
+branches off), a missing branch or tag policy is `add-branch-policy`, a policy on a listed
+environment that the register does not list is `remove-branch-policy` (in `report`, a `drift`), an
+environment that matches is `in-sync`, and an environment on the repo that the register does not
+list is `unmanaged-environment` (report only, in both modes). **F9 never** deletes an environment
+([§5](#5-the-never-list) item 11), writes a secret or variable into one, sets required reviewers
+or wait timers, or touches a repo that is not in the register. It runs from the project repo
+against the project's service repos; a service repo never calls it.
+
 ## 7. Planner / workflow split
 
 Every feature is a **thin workflow over a pure planner**:
@@ -341,7 +364,7 @@ workflow: fetch live state (gh api / gcloud) ───────────�
 
 - Planners: `scripts/repos_plan.py` (F1-F4), `scripts/repos_wif_plan.py` (F5),
   `scripts/repos_sa_plan.py` (F6), `scripts/repos_deploy_plan.py` (F7),
-  `scripts/repos_secrets_plan.py` (F8).
+  `scripts/repos_secrets_plan.py` (F8), `scripts/repos_env_plan.py` (F9).
 - Invocation: `python3 scripts/<planner>.py --feature <name> --register repos.yaml --state
   state.json` — stdout is the action list ([§8](#8-the-planner-action-list--the-contract)).
 - Same input → same output, always. The planner reads only its two files; the workflow does every
@@ -371,6 +394,7 @@ Which accounts a planner may manage is decided by the `-deployer` name suffix
 | `scripts/repos_sa_plan.py` (F6) | `service-accounts` | none |
 | `scripts/repos_deploy_plan.py` (F7) | `deploy-scope` | required `--repo-admin-sa-email <email>` |
 | `scripts/repos_secrets_plan.py` (F8) | `secrets` | optional `--prune` (allow `remove-secret-binding` in enforce) |
+| `scripts/repos_env_plan.py` (F9) | `environments` | none |
 
 **F1-F4 live state** — one entry per repo the workflow looked up. A repo with `exists: false`, or
 absent from `repos`, does not exist. Live repos the register does not list produce no action.
@@ -417,6 +441,15 @@ A Cloud Run service whose key is absent from `cloud_run_services` does not exist
 of `{"role", "members"}` policy entries. `service_accounts` is keyed by runtime SA name and holds
 that SA's own policy. F7 reads no project-level IAM and no cluster. A deployer name longer than 30
 characters is an error (`error: <repo>: ...`).
+
+**F9 live state** — one entry per repo the workflow looked up, keyed by repo name. A repo with
+`exists: false` is an error (F9 never creates a repo). Otherwise `environments` maps each
+environment that exists on the repo to `{"custom_branch_policies": boolean, "policies": [{"name":
+string, "type": "branch"|"tag"}]}`; an environment absent from the map does not exist. The workflow
+builds it from `GET /repos/{o}/{r}/environments` and, per environment,
+`GET .../deployment-branch-policies`. For an existing environment whose `custom_branch_policies`
+is `false`, the apply step switches custom policies on (the same idempotent `PUT` that creates an
+environment) before the first `add-branch-policy`; no extra verb is needed.
 
 **F8 live state:**
 
@@ -486,7 +519,7 @@ partial plan:** one error refuses the whole run.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `feature` | string enum | `register`, `create`, `settings`, `variables`, `wif-link`, `service-accounts`, `deploy-scope`, `secrets` |
+| `feature` | string enum | `register`, `create`, `settings`, `variables`, `wif-link`, `service-accounts`, `deploy-scope`, `secrets`, `environments` |
 | `repo` | string or `null` | the register's repo `name`; `null` only for F6 actions (an SA has no repo) |
 | `action` | string enum | one verb from the table below |
 | `details` | object | the verb's fields below; always present, `{}` when it has none |
@@ -505,6 +538,7 @@ partial plan:** one error refuses the whole run.
 | `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `key: "gke"`, a `deploys` entry the feature does not act on |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
 | `needs-jgd` | `{"resource_type": "iam.serviceAccount", "resource": string, "role": "roles/iam.serviceAccountUser", "member": string, "needs": string}` — F7: a line on the runtime SA `<d>-run`'s policy that the access-provisioning side must declare (`deployed_by: <d>-deployer`, or `act_as: repo-admin` while a service is still to be created); reported in both modes, never written. F8 uses the same verb for a missing runtime SA, with `{"resource_type": "iam.serviceAccount", "resource": "<d>-run@<project>...", "needs": "service account <d>-run"}` (no `role`/`member`) |
+| `unmanaged-environment` | `{"environment": string}` — F9: an environment exists on a registered repo and the register does not list it; reported in both modes, never changed or deleted |
 | `adopt` | `{"secret": string}` — F8: the secret `<d>-env` already exists and lacks a wanted policy line; it is never recreated and its versions are never read. Emitted in both modes |
 
 **Write verbs** (emitted only for a repo or SA in `enforce` mode; one feature each; `update-repo` never carries `visibility`):
@@ -522,6 +556,9 @@ partial plan:** one error refuses the whole run.
 | `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}`; a `run.service` binding adds `"region": string` (from the register) |
 | `secrets` | `create-secret` | `{"secret": string (`<d>-env`), "labels": {"managed-by": "repos-secrets", "deployable": string}}` |
 | `secrets` | `add-secret-binding` | `{"secret": string, "role": one of the four F8 roles, "member": "serviceAccount:<d>-run@..." or "serviceAccount:<d>-deployer@..."}` |
+| `environments` | `create-environment` | `{"environment": string}` — created with custom deployment policies on; its policies follow as `add-branch-policy` actions |
+| `environments` | `add-branch-policy` | `{"environment": string, "name": string, "type": "branch"\|"tag"}` |
+| `environments` | `remove-branch-policy` | same fields; a policy on a listed environment that the register does not list. In `report` a `drift` with `would: "remove-branch-policy"` |
 | `secrets` | `remove-secret-binding` | same fields; emitted only in `enforce` with `--prune`, otherwise a `drift` with `would: "remove-secret-binding"` |
 
 **Invariants every planner test may assert:**
@@ -532,7 +569,8 @@ partial plan:** one error refuses the whole run.
 - `update-repo` never has `field: "visibility"` (a visibility difference is `drift`, in every mode);
 - `add-wif-binding.role` is always `roles/iam.workloadIdentityUser`;
 - `add-resource-binding.resource_type` is never a project;
-- a repo absent from the register yields no action at all.
+- a repo absent from the register yields no action at all;
+- the `environments` feature never emits a delete verb, nor a verb that writes a secret, a variable or a reviewer rule.
 
 Example (F3, one repo enforced, one reported):
 
@@ -556,11 +594,11 @@ key** held only in a protected environment, so it can be revoked without touchin
   **`REPO_ADMIN_APP_KEY`** (the second key). The App id is the existing repo variable
   **`RELEASE_APP_ID`**.
 - The reusable job declares `environment: ${{ inputs.environment }}` (default `repo-admin`), the
-  same shape `release-drafts.yml` uses for its key, and F2-F4 fail before minting a token unless
+  same shape `release-drafts.yml` uses for its key, and F2-F4 and F9 enforce fail before minting a token unless
   the environment is `repo-admin` and `github.ref` is `refs/heads/main`.
 - Pass the key **by name** (`secrets: REPO_ADMIN_APP_KEY: ...`); `secrets: inherit` is same-org
   only.
-- **The write token is narrowed to the repos it writes to.** F3 and F4 mint the write token with
+- **The write token is narrowed to the repos it writes to.** F3, F4 and F9 mint the write token with
   the action's `repositories:` input set to exactly the repos the plan has write actions for
   (unique, plan order, comma separated; every one exists, because the planner only plans writes
   for live repos). When that list is empty no write token is minted and nothing is applied: an
@@ -568,6 +606,24 @@ key** held only in a protected environment, so it can be revoked without touchin
   fetches live state is not narrowed (it is read-only).
 - App settings (permissions, installation scope, keys) are UI-only: the owner sets them; no
   workflow can.
+
+### F9 (environments) credential
+
+F9 takes the App id (`app_id`, an input) and the private key (`app_key`, a secret passed by name)
+as inputs, so the workflow does not depend on which App the project uses. It follows this
+section's shape: the job runs in the `repo-admin` environment on `main` only; `report` mints a
+read token (`actions: read`, `metadata: read`); `enforce` mints `administration: write` narrowed
+to exactly the repos the plan has write actions for, and mints nothing when that list is empty.
+
+> **Pending owner decision Q1 — which GitHub App holds `Administration: write` for F9.**
+> The bullets above describe the register's design of record: the release App, extended. A
+> project may refuse that permission on its release App. Options: (a) a new per-org App
+> (`<org>-repo-admin`: Administration RW, Environments RW, Actions R; installed on the service
+> repos only; key in the project repo's `repo-admin` environment), with its own key and audit
+> trail, revocable alone; (b) the owner creates each environment and its branch rule by hand in
+> the GitHub UI once, and F9 runs in `report` mode only and flags drift; (c) the release App
+> keeps the extension above. This page does not pick one. Until it is decided, F9 enforce runs
+> are not documented as adoptable; `report` runs need only the read token.
 
 ## 10. Minimal caller
 
