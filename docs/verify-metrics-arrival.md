@@ -125,7 +125,7 @@ permissions:
 jobs:
   verify:
     if: github.event.workflow_run.conclusion == 'success'
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/verify-metrics-arrival.yml@v4.1.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/verify-metrics-arrival.yml@v5.0.0
     with:
       gcp_project: <consumer-A-project-id>
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
