@@ -2,8 +2,9 @@
 
 ## Index
 
-127 entries total — 117 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+128 entries total — 118 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-22` — [sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)](#2026-10-22--sync-bundle-key-is-merge-only-remove_keys-replaces-mode-and-confirm_removed-v500)
 - `2026-10-22` — [bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)](#2026-10-22--bootstrap-cf-service-environment-input--environment-scoped-wif-trust-rca)
 - `2026-10-21` — [RCA: release stamp skipped action pins inside workflows](#2026-10-21--rca-release-stamp-skipped-action-pins-inside-workflows)
 - `2026-10-21` — [v4.1.0 review fixes — composite-action inputs and the remap fail closed](#2026-10-21--v410-review-fixes--composite-action-inputs-and-the-remap-fail-closed)
@@ -243,6 +244,38 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-22 — sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)
+
+Decision (owner ruling 2026-10-22: "the secret update script should just take the bundle and replace
+the secrets being updated without changing/deleting other keys"): `sync-bundle-key` (composite action
+and wrapper workflow) is merge-only in v5.0.0 (breaking, input contract). The `mode` and
+`confirm_removed` inputs are removed. The new bundle is always the current bundle overlaid with the
+payload; every other key is kept byte-for-byte. A new input `remove_keys` (CSV, default empty) is the
+only way a key leaves the bundle: names trimmed, case-sensitive, env-name pattern; a name also in the
+payload is refused, a name not in the bundle warns. This REVERSES the v4.0.0 decision (entry "RW v4:
+pinning, replace mode, ...") that made `mode: replace` the default and made `secret_keys_file` the
+desired state of the bundle. The `carry_keys` proposal in TODO.md is dropped as superseded.
+
+Why: with `payload_source: environment`, a rotator-owned key (written by the rotators, held only in
+the bundle) could be neither listed (the sync refused: no environment secret) nor left unlisted
+(replace dropped it), so such callers fell back to `mode: merge` and lost removal. The rotators
+(`replace-key.sh`) already patch one key and leave the rest; the owner wants the sync to behave the
+same way. Reported by a consumer, 2026-10-22.
+
+What is lost: implicit removal by deleting a line from the key list, and the whole-bundle desired-state
+check (a listed key in neither the payload nor the bundle was refused). The P1 refusal of a listed key
+missing from the job's secrets stays (it protects the payload, not the bundle).
+
+What replaces it: `remove_keys`. Naming the key IS the confirmation, so `confirm_removed` is
+redundant: the v4 guard existed to stop an accidental edit of the list from dropping keys, and under
+merge-only nothing can be dropped by omission. Safety property checked, not weakened: a removal now
+needs a positive, named, same-run act instead of an absence. A dry run still prints the removed names.
+
+`secret_keys_file` now only names the keys to read from the job's secrets (environment source) and is
+not read at all for the caller source (it was already unused in merge mode). An identical payload still
+adds a version and rolls, as before. Migration note: docs/sync-bundle-key.md "Migrating from v4".
+Not released here; version stamping is the release flow's job.
 
 ## 2026-10-22 — bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)
 
@@ -563,6 +596,8 @@ setting are blocked; report mode and the build are not. Q2 (who writes environme
 Status: design of record; supersedes nothing. Revisit this entry when Q1 is answered.
 
 ## 2026-10-21 — RW v4: pinning, replace mode, strict values, env files; rotators also pin; S0 and forward-only fallback
+
+Superseded 2026-10-22 (for `mode: replace` and `confirm_removed` only) by "sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)".
 
 Context: the platform strategy wants every revision to record exactly which secret-bundle version and
 which env file it ran, and a removed key to actually disappear. At v3.9.0 none of that exists:

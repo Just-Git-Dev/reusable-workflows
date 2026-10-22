@@ -1,8 +1,8 @@
 # deploy-env-lint
 
 Lint a service repo's committed env files before they are deployed. The plain (non-secret)
-configuration of a service lives in `deploy/env.<stage>.yaml`; the names of the secret keys its
-bundle holds live in `deploy/secret-keys.txt`. This workflow reads only those files, calls no
+configuration of a service lives in `deploy/env.<stage>.yaml`; the names of the secret keys the sync
+reads live in `deploy/secret-keys.txt`. This workflow reads only those files, calls no
 cloud and needs no credential, and refuses the mistakes that otherwise surface as an outage on
 the first deploy of a stage.
 
@@ -20,7 +20,7 @@ deploy workflows repeat the secret-looking-key refusal as defence in depth; see
 | File | Content |
 |---|---|
 | `deploy/env.<stage>.yaml` (every stage the repo has) | flat map of plain environment variables |
-| `deploy/secret-keys.txt` | the key NAMES of the bundle secret, one per line; the only authoritative list of what the bundle holds |
+| `deploy/secret-keys.txt` | the key NAMES of the bundle secret, one per line; the keys the sync reads from the environment; keys a rotator writes are deliberately not listed |
 
 Input names for the two paths, and their defaults, are fixed by the workflow and listed in its
 `inputs:` block; the table above is the contract for what is read.

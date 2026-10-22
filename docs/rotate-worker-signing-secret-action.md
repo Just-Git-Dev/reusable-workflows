@@ -77,8 +77,8 @@ jobs:
           dry_run: ${{ inputs.dry_run }}
 ```
 
-The key it writes (`bundle_key`) must be listed in the caller's `deploy/secret-keys.txt`, as for
-the workflow.
+The key it writes (`bundle_key`) survives `sync-bundle-key`, which is merge-only since v5.0.0 and
+drops a key only when it is named in `remove_keys`.
 
 ## Inputs, secrets and outputs
 

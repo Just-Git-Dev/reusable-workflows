@@ -38,7 +38,7 @@ WORKER = WF / "rotate-worker-signing-secret.yml"
 
 # CONTRACT (invented names; docs describe behaviour only).
 S0_STEP = "Guard environment branch policy"      # env: ENVIRONMENT REQUIRE_BRANCH_POLICY GH_TOKEN REPO
-COMPUTE_STEP = "Compute new bundle"              # env: MODE SECRET_KEYS_FILE CONFIRM_REMOVED DRY_RUN
+COMPUTE_STEP = "Compute new bundle"              # env: REMOVE_KEYS DRY_RUN
                                                  #      PAYLOAD_JSON STRICT_VALUES MIN_VALUE_LEN; /tmp/bundle.env
 VALIDATE_STEP = "Validate payload"
 ROLL_STEP = "Force new Cloud Run revision(s)"    # env: NEW_VERSION PIN_VERSIONS GITHUB_RUN_ID
@@ -123,12 +123,14 @@ def step_or_red(name, workflow, job, step):
 def input_cases():
     print("\nsync-bundle-key v4 · input contract")
     inputs, secrets, doc = workflow_inputs()
-    want = {"mode": "replace", "strict_values": True, "pin_versions": True,
-            "secret_keys_file": "deploy/secret-keys.txt", "confirm_removed": "",
+    want = {"strict_values": True, "pin_versions": True,
+            "secret_keys_file": "deploy/secret-keys.txt", "remove_keys": "",
             "require_branch_policy": True, "environment": "", "payload_source": "caller"}
     for k, v in want.items():
         check(f"input {k} exists with default {v!r}",
               k in inputs and inputs[k].get("default") == v, f"got {inputs.get(k)}")
+    for gone in ("mode", "confirm_removed"):
+        check(f"v5: input {gone} no longer exists on the wrapper workflow", gone not in inputs)
     check("pin_versions default is the boolean true", inputs.get("pin_versions", {}).get("type") == "boolean")
     check("job sets environment from the input",
           doc["jobs"]["sync"].get("environment") == "${{ inputs.environment }}",
@@ -179,49 +181,66 @@ def s0_cases():
 # --- replace / merge ----------------------------------------------------------------------------
 
 def mode_cases():
-    print("\nsync-bundle-key v4 · mode: replace")
-    body = step_or_red("replace", SYNC, "sync", COMPUTE_STEP)
+    # v5.0.0: the sync is merge-only. The v4 replace-mode cases (limit to the listed keys, refuse an
+    # unconfirmed drop, confirm_removed must equal the dropped set) are DELETED: the behaviour and
+    # both inputs are gone. The merge case is kept and extended.
+    print("\nsync-bundle-key v5 · merge-only, explicit remove_keys")
+    body = step_or_red("merge", SYNC, "sync", COMPUTE_STEP)
     if body is None:
         return
-    base = {"MODE": "replace", "SECRET_KEYS_FILE": "deploy/secret-keys.txt", "DRY_RUN": "false",
-            "STRICT_VALUES": "true", "MIN_VALUE_LEN": "8", "CONFIRM_REMOVED": ""}
-    keys = {"deploy/secret-keys.txt": "A\nB\n"}
-    bundle = "A=old-a\nSTALE=gone-soon\n"
-    payload = json.dumps({"B": "value-b-1"})
+    base = {"DRY_RUN": "false", "REMOVE_KEYS": ""}
+    bundle = "A=old-a\nSTALE=gone-soon\nB=old-b\n"
+    payload = json.dumps({"B": "value-b-1", "C": "value-c-1"})
 
     def go(**kw):
-        files = {**keys, **kw.pop("files", {})}
         env = {**base, "PAYLOAD_JSON": kw.pop("payload", payload), **kw}
-        return run_body(body, env, files=files | {"bundle.env": bundle})
+        return run_body(body, env, files={"bundle.env": kw.pop("bundle", bundle)})
 
-    r = go(CONFIRM_REMOVED="STALE")
-    check("replace keeps listed current keys, overlays payload, drops unlisted",
-          r["rc"] == 0 and r["bundle"].splitlines() == ["A=old-a", "B=value-b-1"],
-          f"rc={r['rc']} bundle={r['bundle']!r} {r['out']}")
-    r = go(payload=json.dumps({"A": "value-a-2"}))
-    check("replace refuses a listed key absent from payload and bundle (B)",
-          r["rc"] != 0 and "B" in r["out"], r["out"])
     r = go()
-    check("replace refuses a live run that drops STALE without confirm_removed",
-          r["rc"] != 0 and "STALE" in r["out"], r["out"])
-    r = go(CONFIRM_REMOVED="STALE,A")
-    check("confirm_removed must equal the dropped set EXACTLY (superset refused)",
-          r["rc"] != 0, r["out"])
-    r = go(CONFIRM_REMOVED="STALE")
-    check("exact confirm_removed lets the drop through", r["rc"] == 0, r["out"])
-    r = go(DRY_RUN="true", payload=json.dumps({"B": "SECRETVALUE99"}))
-    check("dry run prints +added -removed =kept by NAME only",
-          r["rc"] == 0 and "SECRETVALUE99" not in r["out"] and "old-a" not in r["out"]
-          and re.search(r"\+\s*B", r["out"]) and re.search(r"-\s*STALE", r["out"])
-          and re.search(r"=\s*A", r["out"]), r["out"])
-    r = go(DRY_RUN="true")
-    check("dry run needs no confirm_removed (it only reports)", r["rc"] == 0, r["out"])
-
-    print("\nsync-bundle-key v4 · mode: merge (v3 behaviour)")
-    r = go(MODE="merge")
-    check("merge keeps unlisted keys and needs no list or confirm",
-          r["rc"] == 0 and "STALE=gone-soon" in r["bundle"] and "B=value-b-1" in r["bundle"],
+    check("an unlisted key in the current bundle survives byte-for-byte; payload updates/adds",
+          r["rc"] == 0 and r["bundle"].splitlines() == ["A=old-a", "STALE=gone-soon", "B=value-b-1", "C=value-c-1"],
+          f"rc={r['rc']} bundle={r['bundle']!r} {r['out']}")
+    r = go(REMOVE_KEYS="STALE")
+    check("remove_keys removes exactly that key",
+          r["rc"] == 0 and r["bundle"].splitlines() == ["A=old-a", "B=value-b-1", "C=value-c-1"],
+          f"rc={r['rc']} bundle={r['bundle']!r} {r['out']}")
+    r = go(REMOVE_KEYS=" STALE , ,A ")
+    check("remove_keys: names trimmed, empties ignored, several allowed",
+          r["rc"] == 0 and r["bundle"].splitlines() == ["B=value-b-1", "C=value-c-1"], r["bundle"] + r["out"])
+    r = go(REMOVE_KEYS="stale")
+    check("remove_keys is case-sensitive (stale does not remove STALE; warns it is absent)",
+          r["rc"] == 0 and "STALE=gone-soon" in r["bundle"] and "::warning::" in r["out"] and "stale" in r["out"],
           r["out"])
+    r = go(REMOVE_KEYS="B")
+    check("remove_keys naming a payload key is refused, nothing written",
+          r["rc"] != 0 and "B" in r["out"] and r["bundle"] == bundle, r["out"])
+    r = go(REMOVE_KEYS="GONE_ALREADY")
+    check("an absent remove key warns naming it and is a no-op",
+          r["rc"] == 0 and "::warning::" in r["out"] and "GONE_ALREADY" in r["out"]
+          and r["bundle"].startswith("A=old-a\nSTALE=gone-soon\n"), r["out"])
+    for bad in ("A.*", "A B", "$(id)", "A;B"):
+        r = go(REMOVE_KEYS=bad)
+        check(f"injection-shaped remove_keys {bad!r} is refused by the pattern check, bundle untouched",
+              r["rc"] != 0 and r["bundle"] == bundle, r["out"])
+    r = go(REMOVE_KEYS="A\nSTALE")
+    check("remove_keys also accepts newline separators",
+          r["rc"] == 0 and r["bundle"].splitlines() == ["B=value-b-1", "C=value-c-1"], r["bundle"] + r["out"])
+    r = go(bundle="  A=indented\nexport STALE=x\n", REMOVE_KEYS="A,STALE")
+    check("a key only matching after spaces/export gets an accurate warning, matching not widened",
+          r["rc"] == 0 and "no line starting" in r["out"] and "A=indented" in r["bundle"], r["out"] + r["bundle"])
+    r = go(REMOVE_KEYS="BAD-KEY")
+    check("an invalid remove key name is refused", r["rc"] != 0 and "BAD-KEY" in r["out"], r["out"])
+    r = go(bundle="# note\nA=old-a\n\nSTALE=x=y\n")
+    check("comments, blank lines and values holding = are kept as they were",
+          r["rc"] == 0 and r["bundle"].startswith("# note\nA=old-a\n\nSTALE=x=y\n"), r["bundle"])
+    r = go(DRY_RUN="true", payload=json.dumps({"B": "SECRETVALUE99", "NEW": "SECRETVALUE98"}), REMOVE_KEYS="STALE")
+    check("dry run prints +added ~updated -removed by NAME only, kept as a count",
+          r["rc"] == 0 and "SECRETVALUE9" not in r["out"] and "old-a" not in r["out"]
+          and re.search(r"\+\s*NEW", r["out"]) and re.search(r"~\s*B", r["out"])
+          and re.search(r"-\s*STALE", r["out"]) and re.search(r"kept.*\b1\b|\b1\b.*kept", r["out"]), r["out"])
+    r = go(payload=json.dumps({"A": "old-a"}))
+    check("an identical payload with no removals leaves the bundle unchanged",
+          r["rc"] == 0 and r["bundle"] == bundle, r["bundle"])
 
 
 def strict_cases():
@@ -676,6 +695,31 @@ def boolean_cases():
             check(f"{b}={bad!r} is refused and named", r["rc"] != 0 and b.lower() in r["out"].lower(), r["out"])
 
 
+TOMB_STEP = "Refuse removed v4 inputs"
+
+
+def tombstone_cases():
+    print("\nv5 · mode / confirm_removed survive on the ACTION only as refusing tombstones")
+    ad = action_doc() or {"inputs": {}}
+    for k in ("mode", "confirm_removed"):
+        i = ad["inputs"].get(k, {})
+        check(f"action input {k} is declared with default '' and a REMOVED description",
+              i.get("default") == "" and "REMOVED in v5" in str(i.get("description")), i)
+    body = extract_action_step(ACTION, TOMB_STEP)
+    check(f"step '{TOMB_STEP}' exists", body is not None)
+    if body is None:
+        return
+    names = [st.get("name") for st in action_steps(ACTION)]
+    check("it runs right after the boolean validation, before any other step", names[:2] == [BOOL_STEP, TOMB_STEP], names[:3])
+    check("empty tombstones pass", run_body(body, {"MODE": "", "CONFIRM_REMOVED": ""})["rc"] == 0)
+    for env in ({"MODE": "replace", "CONFIRM_REMOVED": ""}, {"MODE": "", "CONFIRM_REMOVED": "OLD_API_KEY"}):
+        r = run_body(body, env)
+        check(f"{env} is refused, telling the caller to use remove_keys",
+              r["rc"] != 0 and "remove_keys" in r["out"] and "mode" in r["out"], r["out"])
+    wf_inputs, _, _ = workflow_inputs()
+    check("the wrapper workflow_call does NOT carry the tombstones", "mode" not in wf_inputs and "confirm_removed" not in wf_inputs)
+
+
 def checkout_cases():
     print("\nF6 · the key-list checkout must not touch the caller's workspace root")
     steps = action_steps(ACTION)
@@ -686,8 +730,10 @@ def checkout_cases():
     path = str(co[0].get("with", {}).get("path", ""))
     check("the checkout has a non-empty relative path: (a clean checkout in the root wipes the caller's tree)",
           path not in ("", ".") and not path.startswith("/") and ".." not in path.split("/"), path)
+    check("the checkout runs only for payload_source: environment",
+          str(co[0].get("if", "")).strip() == "inputs.payload_source == 'environment'", co[0].get("if"))
     readers = [s for s in steps if "SECRET_KEYS_FILE" in s.get("env", {})]
-    check("steps read the key list", len(readers) >= 2, [s.get("name") for s in readers])
+    check("the env-payload step reads the key list", len(readers) >= 1, [s.get("name") for s in readers])
     check("every reader points SECRET_KEYS_FILE into the checkout path",
           all(path in str(s["env"]["SECRET_KEYS_FILE"]) and "github.workspace" in str(s["env"]["SECRET_KEYS_FILE"])
               for s in readers), [s["env"]["SECRET_KEYS_FILE"] for s in readers])
@@ -712,6 +758,11 @@ def wrapper_cases():
     check("every with: key is an input of the action", not unknown, f"unknown {unknown}")
     same = [k for k in inputs if k in with_ and with_[k] != "${{ inputs.%s }}" % k]
     check("each input is passed through unchanged (${{ inputs.<name> }})", not same, same)
+    check("remove_keys is passed through by the wrapper", with_.get("remove_keys") == "${{ inputs.remove_keys }}",
+          with_.get("remove_keys"))
+    for gone in ("mode", "confirm_removed"):
+        check(f"v5: {gone} is not forwarded by the wrapper", gone not in with_)
+    check("v5: remove_keys is an action input defaulting to ''", ad.get("inputs", {}).get("remove_keys", {}).get("default") == "")
     check("the wrapper sets concurrency_declared: 'true' (it declares the group itself)",
           str(with_.get("concurrency_declared")).lower() == "true", with_.get("concurrency_declared"))
     check("secrets_json is the caller's toJSON(secrets)",
@@ -734,7 +785,7 @@ def wrapper_cases():
 def main():
     for fn in (input_cases, source_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases, rollback_cases,
                round2_keep_cases, unresponsive_cases, round2_undo_cases, identical_cases, env_source_cases,
-               action_cases, boolean_cases, checkout_cases, wrapper_cases):
+               action_cases, boolean_cases, checkout_cases, wrapper_cases, tombstone_cases):
         fn()
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0

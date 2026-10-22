@@ -98,7 +98,7 @@ Every revision carries these labels:
    digest, the revision, the bundle version, and the keys with their sources. Retention follows
    the `manifest_retention_days` input (default 400); the repository's own maximum artifact
    retention must be at least that, or GitHub caps it.
-4. The key list is also committed: `deploy/secret-keys.txt` (bundle key names) and
+4. The key list is also committed: `deploy/secret-keys.txt` (names of the keys the sync reads; rotator-written keys are not listed) and
    `deploy/env.<stage>.yaml` at the labelled commit. `jgd_env_sha` proves the file the revision ran
    is the one rendered from that commit plus its generated values.
 5. `gcloud secrets versions describe <N> --secret <deployable>-env` gives the time the bundle
@@ -106,15 +106,14 @@ Every revision carries these labels:
 
 ## Removing a key
 
-The committed, non-secret list `deploy/secret-keys.txt` is the **desired state** of the bundle's
-keys. `sync-bundle-key` runs with `mode: replace` by default:
+`sync-bundle-key` is merge-only (v5.0.0; v4 limited the bundle to the keys listed in
+`deploy/secret-keys.txt`):
 
-- the new bundle is (current bundle limited to the listed keys) plus the payload;
-- a key not in the list is dropped, so removing a key is deleting its line;
-- a live run that would drop keys refuses unless `confirm_removed` equals the dropped set exactly;
-- the dry run prints `+added -removed =kept` by name only;
-- a listed key that is in neither the payload nor the bundle is refused, so a typo cannot silently
-  produce a bundle without a key the service needs.
+- the new bundle is the current bundle overlaid with the payload; every other key is kept;
+- a key leaves only when the caller names it in `remove_keys`, which is the confirmation;
+- the dry run prints `+added ~updated -removed` by name only;
+- `deploy/secret-keys.txt` names the keys to read from the environment (environment source), so a
+  key that only a rotator writes is never listed and never dropped.
 
 Because the previous revision stays pinned to the previous bundle version (the two-revision
 keep-set), a removal that turns out to be wrong is undone by rolling back to that revision.
