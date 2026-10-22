@@ -213,11 +213,6 @@
           "description": "Set by the wrapper workflow, which declares the concurrency group itself; direct callers leave it unset.",
           "required": false
         },
-        "confirm_removed": {
-          "default": "",
-          "description": "CSV of key names. A live run that would drop keys refuses unless this equals the dropped set.",
-          "required": false
-        },
         "dry_run": {
           "default": "false",
           "description": "'true' = validate the payload and print the plan; write nothing, roll nothing.",
@@ -248,11 +243,6 @@
           "description": "Reject the run if any payload value is shorter than this many characters. 0 disables.",
           "required": false
         },
-        "mode": {
-          "default": "replace",
-          "description": "replace (default) = current bundle limited to the keys in secret_keys_file, overlaid with the payload. merge = current bundle overlaid with the payload, nothing dropped.",
-          "required": false
-        },
         "mount_path": {
           "default": null,
           "description": "Container path the bundle is mounted at, e.g. /secrets/app.env. Must match where the service already mounts it: --update-secrets adds a mount and never removes one.",
@@ -268,6 +258,11 @@
           "description": "'true' (default) = roll with <bundle>:<N+1> and the jgd_env_version / jgd_run labels. 'false' = :latest.",
           "required": false
         },
+        "remove_keys": {
+          "default": "",
+          "description": "CSV of key names to remove from the bundle. The only way a key leaves it; every other key is kept. A name also in the payload is refused; a name not in the bundle only warns.",
+          "required": false
+        },
         "require_branch_policy": {
           "default": "true",
           "description": "'true' = S0 refuses an environment with no deployment branch policy. Only meaningful with environment.",
@@ -275,7 +270,7 @@
         },
         "secret_keys_file": {
           "default": "deploy/secret-keys.txt",
-          "description": "Committed list of bundle key NAMES, one per line (# comments allowed), read from the caller's checkout. Required when mode is replace or payload_source is environment.",
+          "description": "Committed list of key NAMES to read from secrets_json, one per line (# comments allowed), read from the caller's checkout. Used only when payload_source is environment; it does not describe the bundle's desired state.",
           "required": false
         },
         "secrets_json": {
@@ -4720,12 +4715,6 @@
           "required": false,
           "type": "string"
         },
-        "confirm_removed": {
-          "default": "",
-          "description": "CSV of key names. A live run that would drop keys refuses unless this equals the dropped set exactly.",
-          "required": false,
-          "type": "string"
-        },
         "dry_run": {
           "default": false,
           "description": "true = validate the payload and print the plan; write nothing, roll nothing.",
@@ -4762,12 +4751,6 @@
           "required": false,
           "type": "number"
         },
-        "mode": {
-          "default": "replace",
-          "description": "replace (DEFAULT since v4.0.0) = (current bundle limited to the keys listed in secret_keys_file) overlaid with the payload; unlisted keys are dropped and a listed key found in neither the payload nor the bundle is refused. merge = the v3 behaviour: current bundle overlaid with the payload, nothing dropped.",
-          "required": false,
-          "type": "string"
-        },
         "mount_path": {
           "default": null,
           "description": "Container path the bundle is mounted at \u2014 must match where the service already mounts it (e.g. /secrets/app.env). No default since v3.0.0: --update-secrets adds a mount and never removes one, so a guessed path is silently wrong.",
@@ -4786,6 +4769,12 @@
           "required": false,
           "type": "boolean"
         },
+        "remove_keys": {
+          "default": "",
+          "description": "CSV of key names to remove from the bundle. The only way a key leaves it (the sync is merge-only: every other key is kept). A name also in the payload is refused; a name not in the bundle only warns.",
+          "required": false,
+          "type": "string"
+        },
         "require_branch_policy": {
           "default": true,
           "description": "Step S0: refuse an environment with no deployment branch policy. Only meaningful with environment.",
@@ -4794,7 +4783,7 @@
         },
         "secret_keys_file": {
           "default": "deploy/secret-keys.txt",
-          "description": "Committed list of bundle key NAMES, one per line (# comments allowed), read from the caller's checkout. Required when mode is replace or payload_source is environment.",
+          "description": "Committed list of key NAMES to read from the job's environment secrets, one per line (# comments allowed), read from the caller's checkout. Used only when payload_source is environment; it does not describe the bundle's desired state.",
           "required": false,
           "type": "string"
         },

@@ -88,21 +88,17 @@ inputs:
       keys named in secret_keys_file, read from secrets_json.
     required: false
     default: caller
-  mode:
-    description: >-
-      replace (default) = current bundle limited to the keys in secret_keys_file, overlaid with the
-      payload. merge = current bundle overlaid with the payload, nothing dropped.
-    required: false
-    default: replace
   secret_keys_file:
     description: >-
-      Committed list of bundle key NAMES, one per line (# comments allowed), read from the caller's
-      checkout. Required when mode is replace or payload_source is environment.
+      Committed list of key NAMES to read from secrets_json, one per line (# comments allowed), read
+      from the caller's checkout. Used only when payload_source is environment; it does not describe
+      the bundle's desired state.
     required: false
     default: deploy/secret-keys.txt
-  confirm_removed:
+  remove_keys:
     description: >-
-      CSV of key names. A live run that would drop keys refuses unless this equals the dropped set.
+      CSV of key names to remove from the bundle. The only way a key leaves it; every other key is
+      kept. A name also in the payload is refused; a name not in the bundle only warns.
     required: false
     default: ''
   pin_versions:
@@ -172,7 +168,7 @@ runs:
 
     - name: Check out the key list
       # Only the one committed key-list path is fetched, from the caller's repo (the job's default).
-      if: inputs.mode == 'replace' || inputs.payload_source == 'environment'
+      if: inputs.payload_source == 'environment'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
@@ -232,9 +228,7 @@ runs:
       shell: bash
       env:
         PAYLOAD_JSON: ${{ inputs.payload_source == 'environment' && steps.envpayload.outputs.payload_json || steps.callerpayload.outputs.payload_json }}
-        MODE: ${{ inputs.mode }}
-        SECRET_KEYS_FILE: ${{ github.workspace }}/.rw-sync-bundle-key/${{ inputs.secret_keys_file }}
-        CONFIRM_REMOVED: ${{ inputs.confirm_removed }}
+        REMOVE_KEYS: ${{ inputs.remove_keys }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: '"$GITHUB_ACTION_PATH/compute-bundle.sh"'
 

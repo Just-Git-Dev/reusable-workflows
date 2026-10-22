@@ -9,13 +9,13 @@ superseded versions per the keep-set. Since v4.0.0 this is the same pinned roll 
 [`sync-bundle-key`](sync-bundle-key.md#version-retention--the-keep-set) (the roll and keep-set step
 bodies are tested to be identical), so a key rotation no longer un-pins the services.
 
-## Keys it writes must be in `deploy/secret-keys.txt`
+## Keys it writes survive `sync-bundle-key`
 
 This workflow writes three keys into the bundle (`private_key_name`, `public_key_name`,
-`key_id_name`; defaults `JWT_PRIVATE_KEY_BASE64`, `JWT_PUBLIC_KEY_BASE64`, `JWT_KEY_ID`). Under
-`sync-bundle-key`'s v4 default `mode: replace`, a key that is **not** listed in the caller's
-`deploy/secret-keys.txt` is dropped by the next sync. List those three names there. See
-[MIGRATION-v4.md](MIGRATION-v4.md).
+`key_id_name`; defaults `JWT_PRIVATE_KEY_BASE64`, `JWT_PUBLIC_KEY_BASE64`, `JWT_KEY_ID`). Since v5.0.0
+`sync-bundle-key` is merge-only: it keeps every key it was not given and drops one only when it
+is named in `remove_keys`, so these names need not be listed anywhere. See
+[Merge and explicit removal](sync-bundle-key.md#merge-and-explicit-removal).
 
 ## No grace window — and when NOT to use this
 

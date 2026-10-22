@@ -7,7 +7,7 @@ version N+1, rolls the named Cloud Run service(s) onto that **numbered version**
 [keep-set](#version-retention--the-keep-set).
 
 > **v4.0.0 changes the defaults of this workflow** (pinning on, `mode: replace`,
-> `strict_values: true`). See [MIGRATION-v4.md](MIGRATION-v4.md) for what a v3.x caller must
+> `strict_values: true`; `mode` was removed again in v5.0.0, see [Merge and explicit removal](#merge-and-explicit-removal)). See [MIGRATION-v4.md](MIGRATION-v4.md) for what a v3.x caller must
 > do first, and [runtime-config.md](runtime-config.md) for where this bundle sits among the
 > four config homes. Sections below describe v4; where v3 differed it says so.
 
@@ -25,12 +25,12 @@ so one workflow covers every rotation without branching. Build it with
    environment. Failing here leaves an empty environment, which
    [`repos-environments`](repos-environments.md) converges on its next run. Needs `actions: read`.
 2. Validate the payload (strict by default, see [Value safety](#value-safety)).
-3. Read the current bundle, then compute the new bundle per [`mode`](#mode-replace-and-removal-by-list).
+3. Read the current bundle, then compute the new bundle as a [merge with explicit removal](#merge-and-explicit-removal).
 4. `ping_datastores` gate (opt-in), then add version N+1.
 5. **Roll, pinned:** for each service,
    `services update --update-secrets=<mount>=<bundle>:<N+1> --update-labels=jgd_env_version=<N+1>,jgd_run=<run id>`.
 6. **Disable per the keep-set**; never destroy.
-7. Summary: key NAMES and their source, bundle `:N+1`, the `+added -removed =kept` diff, revisions rolled.
+7. Summary: key NAMES and their source, bundle `:N+1`, the `+added ~updated -removed` diff, revisions rolled.
 
 ## Ordering contract
 
@@ -39,30 +39,49 @@ successfully**. If any roll fails, the job fails with the old version still
 enabled, so no running service is left pointing at a disabled secret version.
 Re-run after fixing the cause; the disable happens on the next green run.
 
-## Mode: `replace` and removal by list
+## Merge and explicit removal
 
-| `mode` | Resulting bundle |
-|---|---|
-| `replace` (**v4 default**) | (current bundle ∩ keys listed in `secret_keys_file`) overlaid with the payload. A key **not** in the list is dropped. A listed key that is in neither the payload nor the current bundle is **refused** (nothing is written). |
-| `merge` (v3 behaviour) | current bundle overlaid with the payload; nothing is dropped. |
+The sync is **merge-only** (v5.0.0). The new bundle is the current bundle overlaid with the
+payload: every payload key is added or updated, and every other key already in the bundle is kept
+byte-for-byte. A key leaves the bundle only when you name it in `remove_keys`. There is no `mode`
+input and no `confirm_removed` input.
 
-`secret_keys_file` (default `deploy/secret-keys.txt`) is a committed, non-secret list of key
-**names**, one per line. It is the desired state of the bundle and is read from the caller's
-checkout. It must also list every key that [`rotate-signing-keypair`](rotate-signing-keypair.md)
-and [`rotate-worker-signing-secret`](rotate-worker-signing-secret.md) write, or the next sync
-drops them.
+`remove_keys` (CSV, default empty) is the only way a key is removed. Names are trimmed, empty
+entries are ignored, names are case-sensitive and each must match `^[A-Za-z_][A-Za-z0-9_]*$`.
+Naming a key is the explicit confirmation, so no second input repeats it.
 
-**Not yet with `payload_source: environment`.** That source refuses every listed key that the
-job's secrets do not hold (it will not build a partial payload). A key that only a rotator writes
-lives in the bundle and nowhere else, so it can be neither listed (the sync refuses) nor left
-off the list (`replace` drops it). Until a carry-over input exists (`TODO.md:"carry_keys"`), such a caller uses `mode: merge` and lists only the keys held in the
-environment: the rotator-owned key is kept, and removal by list is unavailable.
+- A name that is also in the payload (or, with `payload_source: environment`, also listed in
+  `secret_keys_file`) is **refused** as a contradiction: the same run cannot both write and remove
+  a key. Nothing is written.
+- A name that is not in the current bundle logs a `::warning::` naming it and is otherwise a no-op.
+- An invalid name is refused and nothing is written.
 
-Removing a key is therefore a one-line edit to the list. A live run that would drop keys
-refuses unless `confirm_removed` (CSV) equals the dropped set **exactly**. The dry run prints
-`+added -removed =kept` by **name only**, never a value. Because every revision pins its own
-bundle version, a wrong removal is undone by rolling back to a revision that pins the earlier
-version.
+The dry run prints `+added ~updated -removed` by **name only**, never a value, plus a count of
+the kept keys that are unchanged. Because every revision pins its own bundle version, a wrong
+removal is undone by rolling back to a revision that pins the earlier version.
+
+`secret_keys_file` (default `deploy/secret-keys.txt`) has one job here, and only with
+`payload_source: environment`: it names the keys to **read** from the job's environment secrets.
+A listed key the job's secrets do not hold is still refused (the sync will not build a partial
+payload). It does not describe the bundle's desired state and need not list keys that
+[`rotate-signing-keypair`](rotate-signing-keypair.md) or
+[`rotate-worker-signing-secret`](rotate-worker-signing-secret.md) write: those stay in the bundle
+because the sync never drops what it was not told to. With `payload_source: caller` the file is
+not read by the sync.
+
+An identical payload (every value equal to the current one, no removals) still adds a new
+bundle version and rolls, exactly as before; the sync has no skip-if-unchanged step.
+
+### Migrating from v4
+
+- Drop `mode:` and `confirm_removed:` from every caller; both inputs are gone and a caller that
+  still passes one fails the call contract.
+- A key you used to remove by deleting it from `secret_keys_file` must now be named in
+  `remove_keys` (for example `remove_keys: OLD_API_KEY`). Deleting it from the file alone no longer
+  removes it from the bundle.
+- A caller on `mode: merge` only needs to drop that line: the behaviour is the same.
+- A caller on the v4 default `replace` that never removed a key needs no `remove_keys`; the
+  bundle simply stops being trimmed to the list.
 
 ## Version retention — the keep-set
 
@@ -197,9 +216,8 @@ Values still come only from the owning repo's workflow, never by hand.
 | `keep_enabled_count` | input | `'1'` | a **floor** under the [keep-set](#version-retention--the-keep-set): at least this many newest ENABLED versions stay; minimum `1` |
 | `environment` | input | `''` | GitHub environment the job runs in (`environment: ${{ inputs.environment }}`). Empty = no environment, as in v3. When set, step S0 refuses an environment without a deployment branch policy |
 | `payload_source` | input | `caller` | `caller` = the `payload_json` secret below. `environment` = read the keys named in `secret_keys_file` from the job's environment secrets. Does not work cross-org through this workflow; use the [action](sync-bundle-key-action.md) |
-| `mode` | input | **`replace`** (was implicit merge) | `replace` or `merge`; see [Mode](#mode-replace-and-removal-by-list) |
-| `secret_keys_file` | input | `deploy/secret-keys.txt` | committed key-name list in the caller's checkout; required when `mode: replace` |
-| `confirm_removed` | input | `''` | CSV; a live run that drops keys refuses unless this equals the dropped set exactly |
+| `remove_keys` | input | `''` | CSV of key names to remove from the bundle; the only way a key leaves it. See [Merge and explicit removal](#merge-and-explicit-removal) |
+| `secret_keys_file` | input | `deploy/secret-keys.txt` | committed key-name list in the caller's checkout; with `payload_source: environment` only, the names of keys to read from the job's secrets |
 | `pin_versions` | input | **`true`** | roll with `<bundle>:<N+1>` and the `jgd_env_version`/`jgd_run` labels instead of `:latest` |
 | `require_branch_policy` | input | `true` | step S0; only meaningful with `environment` |
 | `ping_datastores` / `datastore_env_file` / `ping_timeout_seconds` | input | `''` / `''` / `10` | opt-in datastore reachability gate before the new version is added. May ship in v4.0 or v4.1; either way it is not a breaking input |

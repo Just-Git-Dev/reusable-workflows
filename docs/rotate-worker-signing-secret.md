@@ -20,9 +20,9 @@ two newest revisions of each rolled service stay ENABLED. The roll and keep-set 
 tested to be identical across the three bundle writers, so this rotation no longer un-pins the
 services.
 
-**The key it writes (`bundle_key`) must be listed in the caller's `deploy/secret-keys.txt`.**
-Under `sync-bundle-key`'s v4 default `mode: replace`, an unlisted key is dropped by the next sync.
-See [MIGRATION-v4.md](MIGRATION-v4.md).
+**The key it writes (`bundle_key`) survives `sync-bundle-key`.** Since v5.0.0 the sync is
+merge-only and drops a key only when it is named in `remove_keys`, so the key need not be listed
+anywhere. See [Merge and explicit removal](sync-bundle-key.md#merge-and-explicit-removal).
 
 ## How the grace window works
 

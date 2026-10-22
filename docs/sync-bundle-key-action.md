@@ -77,9 +77,12 @@ jobs:
           dry_run: ${{ inputs.dry_run }}
 ```
 
-`deploy/secret-keys.txt` in the same repo lists the bundle's keys by name, as for the workflow.
-With `payload_source: caller` (the default) the action reads one secret named `payload_json` out
-of `secrets_json` instead.
+`deploy/secret-keys.txt` in the same repo lists, by name, the keys to read from the environment.
+The sync is merge-only: those keys are added or updated and every other key already in the bundle
+is kept; a key leaves only when named in `remove_keys`
+([Merge and explicit removal](sync-bundle-key.md#merge-and-explicit-removal)). With
+`payload_source: caller` (the default) the action reads one secret named `payload_json` out of
+`secrets_json` instead, and does not read `secret_keys_file` at all.
 
 ## Inputs, secrets and outputs
 
@@ -105,16 +108,19 @@ here, with two differences:
   names. **Caller hygiene is therefore required:** define every listed key in the environment,
   and delete any repo- or org-level secret that shares a name with a listed key, or a stale copy
   will ship the day the environment copy is removed.
-- **A key that only a rotator writes cannot be listed with the environment source.** See
-  [Mode](sync-bundle-key.md#mode-replace-and-removal-by-list): use `mode: merge` with only the
-  environment-held keys listed, until a carry-over input exists.
+- **A key that only a rotator writes needs no listing.** `secret_keys_file` only names the keys to
+  read from the job's secrets, and the sync keeps every bundle key it was not given, so a
+  rotator-owned key stays. See
+  [Merge and explicit removal](sync-bundle-key.md#merge-and-explicit-removal).
+- **`remove_keys`** (CSV) is the only way a key leaves the bundle; there is no `mode` and no
+  `confirm_removed` (both removed in v5.0.0).
 - **Booleans are exactly `'true'` or `'false'`.** `dry_run`, `strict_values`,
   `require_branch_policy`, `pin_versions` and `concurrency_declared` are checked by the first
   step, which refuses anything else (`yes`, `1`, `True`). GitHub's `if:` compares
   case-insensitively and bash does not, so a loose value would be read two ways and could turn a
   dry run into a live write.
 - **The key list is checked out into `.rw-sync-bundle-key/`** under the workspace (sparse, only
-  `secret_keys_file`), never into the workspace root: `actions/checkout` cleans its target, and a
+  `secret_keys_file`, and only with the environment source), never into the workspace root: `actions/checkout` cleans its target, and a
   root checkout would wipe the caller's own checkout and build. Do not use that directory name.
   The checkout path must be inside `$GITHUB_WORKSPACE`, so `runner.temp` cannot be used.
 - **`environment`** is only the name for the S0 guard. The action cannot read its own job's
