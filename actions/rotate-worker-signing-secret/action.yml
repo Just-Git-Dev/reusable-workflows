@@ -130,6 +130,10 @@ runs:
         CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
       run: '"$GITHUB_ACTION_PATH/warn-concurrency.sh"'
 
+    - name: Deprecation notice
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/deprecated.sh"'
+
     - name: Authenticate to GCP via WIF
       uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
       with:
