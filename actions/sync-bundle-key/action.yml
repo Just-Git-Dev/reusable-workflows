@@ -95,6 +95,18 @@ inputs:
       the bundle's desired state.
     required: false
     default: deploy/secret-keys.txt
+  mode:
+    description: >-
+      REMOVED in v5. Must be empty; a non-empty value fails the run. The sync is merge-only now:
+      drop this input.
+    required: false
+    default: ''
+  confirm_removed:
+    description: >-
+      REMOVED in v5. Must be empty; a non-empty value fails the run. Name the keys to remove in
+      remove_keys instead.
+    required: false
+    default: ''
   remove_keys:
     description: >-
       CSV of key names to remove from the bundle. The only way a key leaves it; every other key is
@@ -141,6 +153,13 @@ runs:
         PIN_VERSIONS: ${{ inputs.pin_versions }}
         CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
       run: '"$GITHUB_ACTION_PATH/validate-booleans.sh"'
+
+    - name: Refuse removed v4 inputs
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        CONFIRM_REMOVED: ${{ inputs.confirm_removed }}
+      run: '"$GITHUB_ACTION_PATH/refuse-removed-inputs.sh"'
 
     - name: Warn about the caller's concurrency group
       shell: bash

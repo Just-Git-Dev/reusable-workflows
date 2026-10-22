@@ -30,7 +30,7 @@ upsert() {
 awk 'BEGIN{FS="="} NF && $0 !~ /^[[:space:]]*#/ {print $1}' /tmp/bundle.env \
   | LC_ALL=C sort -u > /tmp/keys.cur
 printf '%s' "$PAYLOAD_JSON" | jq -r 'keys[]' | LC_ALL=C sort -u > /tmp/keys.payload
-# remove_keys: trimmed, empties ignored, case-sensitive, env-name pattern.
+# remove_keys (comma or newline separated): trimmed, empties ignored, case-sensitive, env-name pattern.
 printf '%s' "$REMOVE_KEYS" | tr ',' '\n' \
   | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | LC_ALL=C sort -u > /tmp/keys.remove || true
 BADREMOVE=$(grep -v -E '^[A-Za-z_][A-Za-z0-9_]*$' /tmp/keys.remove | jq -R . | paste -sd, - || true)
@@ -45,9 +45,10 @@ if [ -n "$CONFLICT" ]; then
   exit 1
 fi
 LC_ALL=C comm -12 /tmp/keys.remove /tmp/keys.cur > /tmp/keys.dropped
+# Matching is by line prefix `KEY=` only; an indented or `export KEY=` line is not matched.
 ABSENT=$(LC_ALL=C comm -23 /tmp/keys.remove /tmp/keys.cur | paste -sd, - || true)
 if [ -n "$ABSENT" ]; then
-  echo "::warning::remove_keys names key(s) not in the current bundle (nothing to remove): $ABSENT."
+  echo "::warning::remove_keys names key(s) have no line starting KEY= in the current bundle (nothing removed): $ABSENT."
 fi
 # Remove first (only the named keys' lines; order of the rest preserved).
 if [ -s /tmp/keys.dropped ]; then

@@ -49,7 +49,7 @@ on:
     inputs:
       dry_run:
         type: boolean
-        default: true     # run the dry run first: it prints the +added -removed =kept diff
+        default: true     # run the dry run first: it prints the +added ~updated -removed diff
 
 jobs:
   sync:

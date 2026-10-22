@@ -9,7 +9,8 @@ version N+1, rolls the named Cloud Run service(s) onto that **numbered version**
 > **v4.0.0 changes the defaults of this workflow** (pinning on, `mode: replace`,
 > `strict_values: true`; `mode` was removed again in v5.0.0, see [Merge and explicit removal](#merge-and-explicit-removal)). See [MIGRATION-v4.md](MIGRATION-v4.md) for what a v3.x caller must
 > do first, and [runtime-config.md](runtime-config.md) for where this bundle sits among the
-> four config homes. Sections below describe v4; where v3 differed it says so.
+> four config homes. Sections below describe v4 and later; where v3 differed it says so, and the merge-only change of
+> v5.0.0 is in [Merge and explicit removal](#merge-and-explicit-removal).
 
 The payload is a single JSON secret whose **keys are the destination bundle
 keys**. That absorbs both the number of keys and any naming drift between apps,
@@ -46,7 +47,7 @@ payload: every payload key is added or updated, and every other key already in t
 byte-for-byte. A key leaves the bundle only when you name it in `remove_keys`. There is no `mode`
 input and no `confirm_removed` input.
 
-`remove_keys` (CSV, default empty) is the only way a key is removed. Names are trimmed, empty
+`remove_keys` (CSV, default empty) is the only way a key is removed. Names are trimmed (a newline also separates names), empty
 entries are ignored, names are case-sensitive and each must match `^[A-Za-z_][A-Za-z0-9_]*$`.
 Naming a key is the explicit confirmation, so no second input repeats it.
 
@@ -74,8 +75,10 @@ bundle version and rolls, exactly as before; the sync has no skip-if-unchanged s
 
 ### Migrating from v4
 
-- Drop `mode:` and `confirm_removed:` from every caller; both inputs are gone and a caller that
-  still passes one fails the call contract.
+- Drop `mode:` and `confirm_removed:` from every caller. The wrapper workflow no longer declares
+  them, so a workflow caller that still passes one fails the call contract. The composite action
+  keeps both as tombstone inputs that refuse any non-empty value, because a composite action only
+  warns on an unknown `with:` key and the run would otherwise go green with the key not removed.
 - A key you used to remove by deleting it from `secret_keys_file` must now be named in
   `remove_keys` (for example `remove_keys: OLD_API_KEY`). Deleting it from the file alone no longer
   removes it from the bundle.
@@ -290,7 +293,7 @@ on:
     inputs:
       dry_run:
         type: boolean
-        default: true     # run the dry run first: it prints the +added -removed =kept diff
+        default: true     # run the dry run first: it prints the +added ~updated -removed diff
 
 permissions:
   contents: read
@@ -317,7 +320,7 @@ jobs:
          "REDIS_PASSWORD": ${{ toJSON(secrets.REDIS_PASSWORD) }}}
 ```
 
-`deploy/secret-keys.txt` in the same repo then lists the bundle's keys by name:
+`deploy/secret-keys.txt` in the same repo is not read with this (caller) source; it only matters with `payload_source: environment`, where it lists the keys to read:
 
 ```text
 DB_PASSWORD

@@ -574,6 +574,8 @@ Status: design of record; supersedes nothing. Revisit this entry when Q1 is answ
 
 ## 2026-10-21 — RW v4: pinning, replace mode, strict values, env files; rotators also pin; S0 and forward-only fallback
 
+Superseded 2026-10-22 (for `mode: replace` and `confirm_removed` only) by "sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)".
+
 Context: the platform strategy wants every revision to record exactly which secret-bundle version and
 which env file it ran, and a removed key to actually disappear. At v3.9.0 none of that exists:
 `sync-bundle-key` rolls every service onto `<bundle>:latest`, upserts only, and `strict_values`

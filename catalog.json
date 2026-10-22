@@ -213,6 +213,11 @@
           "description": "Set by the wrapper workflow, which declares the concurrency group itself; direct callers leave it unset.",
           "required": false
         },
+        "confirm_removed": {
+          "default": "",
+          "description": "REMOVED in v5. Must be empty; a non-empty value fails the run. Name the keys to remove in remove_keys instead.",
+          "required": false
+        },
         "dry_run": {
           "default": "false",
           "description": "'true' = validate the payload and print the plan; write nothing, roll nothing.",
@@ -241,6 +246,11 @@
         "min_value_length": {
           "default": "8",
           "description": "Reject the run if any payload value is shorter than this many characters. 0 disables.",
+          "required": false
+        },
+        "mode": {
+          "default": "",
+          "description": "REMOVED in v5. Must be empty; a non-empty value fails the run. The sync is merge-only now: drop this input.",
           "required": false
         },
         "mount_path": {

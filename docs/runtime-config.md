@@ -98,7 +98,7 @@ Every revision carries these labels:
    digest, the revision, the bundle version, and the keys with their sources. Retention follows
    the `manifest_retention_days` input (default 400); the repository's own maximum artifact
    retention must be at least that, or GitHub caps it.
-4. The key list is also committed: `deploy/secret-keys.txt` (bundle key names) and
+4. The key list is also committed: `deploy/secret-keys.txt` (names of the keys the sync reads; rotator-written keys are not listed) and
    `deploy/env.<stage>.yaml` at the labelled commit. `jgd_env_sha` proves the file the revision ran
    is the one rendered from that commit plus its generated values.
 5. `gcloud secrets versions describe <N> --secret <deployable>-env` gives the time the bundle

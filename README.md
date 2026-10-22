@@ -31,7 +31,7 @@ lands everywhere.
 > this document is their umbrella-repo application.
 
 > **v4 is coming (pending release; not yet tagged).** v4.0.0 flips three defaults (bundle
-> pinning on, `mode: replace`, `strict_values: true`) and adds env-file deploys, revision labels
+> pinning on, `strict_values: true`; v5.0.0 made `sync-bundle-key` merge-only) and adds env-file deploys, revision labels
 > and a loud rollback refusal. Read [runtime-config](docs/runtime-config.md) for the model and
 > [MIGRATION-v4](docs/MIGRATION-v4.md) for the per-caller checklist. The additive new workflows
 > (`repos-environments`, `distribute-env-secrets`, `deploy-env-lint`) ship in the same v4.0.0

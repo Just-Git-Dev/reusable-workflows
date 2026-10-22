@@ -218,6 +218,16 @@ def mode_cases():
     check("an absent remove key warns naming it and is a no-op",
           r["rc"] == 0 and "::warning::" in r["out"] and "GONE_ALREADY" in r["out"]
           and r["bundle"].startswith("A=old-a\nSTALE=gone-soon\n"), r["out"])
+    for bad in ("A.*", "A B", "$(id)", "A;B"):
+        r = go(REMOVE_KEYS=bad)
+        check(f"injection-shaped remove_keys {bad!r} is refused by the pattern check, bundle untouched",
+              r["rc"] != 0 and r["bundle"] == bundle, r["out"])
+    r = go(REMOVE_KEYS="A\nSTALE")
+    check("remove_keys also accepts newline separators",
+          r["rc"] == 0 and r["bundle"].splitlines() == ["B=value-b-1", "C=value-c-1"], r["bundle"] + r["out"])
+    r = go(bundle="  A=indented\nexport STALE=x\n", REMOVE_KEYS="A,STALE")
+    check("a key only matching after spaces/export gets an accurate warning, matching not widened",
+          r["rc"] == 0 and "no line starting" in r["out"] and "A=indented" in r["bundle"], r["out"] + r["bundle"])
     r = go(REMOVE_KEYS="BAD-KEY")
     check("an invalid remove key name is refused", r["rc"] != 0 and "BAD-KEY" in r["out"], r["out"])
     r = go(bundle="# note\nA=old-a\n\nSTALE=x=y\n")
@@ -685,6 +695,31 @@ def boolean_cases():
             check(f"{b}={bad!r} is refused and named", r["rc"] != 0 and b.lower() in r["out"].lower(), r["out"])
 
 
+TOMB_STEP = "Refuse removed v4 inputs"
+
+
+def tombstone_cases():
+    print("\nv5 · mode / confirm_removed survive on the ACTION only as refusing tombstones")
+    ad = action_doc() or {"inputs": {}}
+    for k in ("mode", "confirm_removed"):
+        i = ad["inputs"].get(k, {})
+        check(f"action input {k} is declared with default '' and a REMOVED description",
+              i.get("default") == "" and "REMOVED in v5" in str(i.get("description")), i)
+    body = extract_action_step(ACTION, TOMB_STEP)
+    check(f"step '{TOMB_STEP}' exists", body is not None)
+    if body is None:
+        return
+    names = [st.get("name") for st in action_steps(ACTION)]
+    check("it runs right after the boolean validation, before any other step", names[:2] == [BOOL_STEP, TOMB_STEP], names[:3])
+    check("empty tombstones pass", run_body(body, {"MODE": "", "CONFIRM_REMOVED": ""})["rc"] == 0)
+    for env in ({"MODE": "replace", "CONFIRM_REMOVED": ""}, {"MODE": "", "CONFIRM_REMOVED": "OLD_API_KEY"}):
+        r = run_body(body, env)
+        check(f"{env} is refused, telling the caller to use remove_keys",
+              r["rc"] != 0 and "remove_keys" in r["out"] and "mode" in r["out"], r["out"])
+    wf_inputs, _, _ = workflow_inputs()
+    check("the wrapper workflow_call does NOT carry the tombstones", "mode" not in wf_inputs and "confirm_removed" not in wf_inputs)
+
+
 def checkout_cases():
     print("\nF6 · the key-list checkout must not touch the caller's workspace root")
     steps = action_steps(ACTION)
@@ -695,6 +730,8 @@ def checkout_cases():
     path = str(co[0].get("with", {}).get("path", ""))
     check("the checkout has a non-empty relative path: (a clean checkout in the root wipes the caller's tree)",
           path not in ("", ".") and not path.startswith("/") and ".." not in path.split("/"), path)
+    check("the checkout runs only for payload_source: environment",
+          str(co[0].get("if", "")).strip() == "inputs.payload_source == 'environment'", co[0].get("if"))
     readers = [s for s in steps if "SECRET_KEYS_FILE" in s.get("env", {})]
     check("the env-payload step reads the key list", len(readers) >= 1, [s.get("name") for s in readers])
     check("every reader points SECRET_KEYS_FILE into the checkout path",
@@ -724,8 +761,7 @@ def wrapper_cases():
     check("remove_keys is passed through by the wrapper", with_.get("remove_keys") == "${{ inputs.remove_keys }}",
           with_.get("remove_keys"))
     for gone in ("mode", "confirm_removed"):
-        check(f"v5: {gone} is gone from the wrapper's with: and the action's inputs",
-              gone not in with_ and gone not in ad.get("inputs", {}))
+        check(f"v5: {gone} is not forwarded by the wrapper", gone not in with_)
     check("v5: remove_keys is an action input defaulting to ''", ad.get("inputs", {}).get("remove_keys", {}).get("default") == "")
     check("the wrapper sets concurrency_declared: 'true' (it declares the group itself)",
           str(with_.get("concurrency_declared")).lower() == "true", with_.get("concurrency_declared"))
@@ -749,7 +785,7 @@ def wrapper_cases():
 def main():
     for fn in (input_cases, source_cases, s0_cases, mode_cases, strict_cases, roll_cases, keep_cases, rollback_cases,
                round2_keep_cases, unresponsive_cases, round2_undo_cases, identical_cases, env_source_cases,
-               action_cases, boolean_cases, checkout_cases, wrapper_cases):
+               action_cases, boolean_cases, checkout_cases, wrapper_cases, tombstone_cases):
         fn()
     print(f"\n{CASES} cases ran, {len(FAILURES)} failed")
     return 1 if FAILURES else 0

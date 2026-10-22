@@ -7,8 +7,8 @@ they connect end-to-end. Start here, then follow the links into each workflow's 
 > **Audience:** maintainers wiring up CI, deploys, secret rotation, backups, alerts, and
 > cross-repo access for an app repo.
 
-> **v4 notice (pending release).** v4.0.0 flips the pinning, `mode: replace` and `strict_values`
-> defaults and adds env-file deploys; see [runtime-config](runtime-config.md) and
+> **v4 notice (pending release).** v4.0.0 flips the pinning and `strict_values`
+> defaults (v5.0.0 then made `sync-bundle-key` merge-only) and adds env-file deploys; see [runtime-config](runtime-config.md) and
 > [MIGRATION-v4](MIGRATION-v4.md). The new workflows in the catalog ship in the same v4.0.0 release
 > (owner ruling 2026-10-21; no v3.10.0); pin the current latest tag until it is cut.
 
