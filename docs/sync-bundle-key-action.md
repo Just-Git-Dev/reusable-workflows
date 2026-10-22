@@ -105,6 +105,9 @@ here, with two differences:
   names. **Caller hygiene is therefore required:** define every listed key in the environment,
   and delete any repo- or org-level secret that shares a name with a listed key, or a stale copy
   will ship the day the environment copy is removed.
+- **A key that only a rotator writes cannot be listed with the environment source.** See
+  [Mode](sync-bundle-key.md#mode-replace-and-removal-by-list): use `mode: merge` with only the
+  environment-held keys listed, until a carry-over input exists.
 - **Booleans are exactly `'true'` or `'false'`.** `dry_run`, `strict_values`,
   `require_branch_policy`, `pin_versions` and `concurrency_declared` are checked by the first
   step, which refuses anything else (`yes`, `1`, `True`). GitHub's `if:` compares

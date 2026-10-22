@@ -52,6 +52,12 @@ checkout. It must also list every key that [`rotate-signing-keypair`](rotate-sig
 and [`rotate-worker-signing-secret`](rotate-worker-signing-secret.md) write, or the next sync
 drops them.
 
+**Not yet with `payload_source: environment`.** That source refuses every listed key that the
+job's secrets do not hold (it will not build a partial payload). A key that only a rotator writes
+lives in the bundle and nowhere else, so it can be neither listed (the sync refuses) nor left
+off the list (`replace` drops it). Until a carry-over input exists (`TODO.md:"carry_keys"`), such a caller uses `mode: merge` and lists only the keys held in the
+environment: the rotator-owned key is kept, and removal by list is unavailable.
+
 Removing a key is therefore a one-line edit to the list. A live run that would drop keys
 refuses unless `confirm_removed` (CSV) equals the dropped set **exactly**. The dry run prints
 `+added -removed =kept` by **name only**, never a value. Because every revision pins its own

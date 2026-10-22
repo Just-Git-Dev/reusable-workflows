@@ -37,6 +37,13 @@ section opens or closes. Closed sections live in
   reads repo/org secrets only, because the caller job cannot declare `environment:`. Until it's
   fixed, cross-org callers keep sync-read values at repo level (docs/sync-bundle-key.md).
 
+- [ ] `actions/sync-bundle-key/build-env-payload.sh` — DESIGN NEEDED (owner): with
+  `payload_source: environment`, a rotator-owned key (in the bundle only) cannot be listed
+  (refused: no environment secret) nor unlisted (`replace` drops it), so the caller falls back
+  to `mode: merge`. Proposed: a `carry_keys` input naming listed keys carried from the current
+  bundle and never read from the job's secrets; P1's refusal stays for every other key, so a
+  forgotten environment key still fails. Minor release. Reported by consumer A 2026-10-22.
+
 - [ ] `catalog.json` + `scripts/workflow_preflight.py` (fleet) — ship the list of workflows that
   receive the App private key (workflow, secret input name, required caller environment) with rw,
   and have workflow-preflight check every caller against it, so projects stop hand-maintaining
