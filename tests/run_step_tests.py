@@ -3630,6 +3630,18 @@ def main():
     r = run_cf_validate_step(body, **full)
     check("an empty retarget_from changes nothing", r["rc"] == 0, r["out"])
 
+    print("\nbootstrap-cf-service · environment input")
+    cfdoc = yaml.safe_load(CFSERVICE.read_text())
+    envin = cfdoc[True]["workflow_call"]["inputs"].get("environment") or {}
+    check("environment input is an optional string defaulting to ''",
+          envin.get("type") == "string" and envin.get("required") is False and envin.get("default") == "",
+          envin)
+    envexpr = str(cfdoc["jobs"]["bootstrap"].get("environment", ""))
+    check("the bootstrap job's environment is wired to inputs.environment",
+          "inputs.environment" in envexpr, envexpr)
+    check("an empty environment yields no environment (null, not '')",
+          "|| null" in envexpr, envexpr)
+
     print("\nbootstrap-cf-service · retarget_from · Converge")
     body = extract_step(CFSERVICE, "bootstrap", "Converge the Cloud Run domain mapping")
     r = run_cf_retarget_step(body, current="svc-old")

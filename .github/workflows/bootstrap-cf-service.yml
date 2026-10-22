@@ -39,6 +39,11 @@ name: Bootstrap a public hostname for a Cloud Run service (reusable)
 on:
   workflow_call:
     inputs:
+      environment:
+        description: "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment. Main only if that environment has a branch policy."
+        type: string
+        required: false
+        default: ''
       mode:
         description: 'dns-only (Cloud Run domain mapping, any CF plan) or proxied (CF in front, needs CF Pro+).'
         type: string
@@ -178,6 +183,8 @@ env:
 
 jobs:
   bootstrap:
+    # '' must mean NO environment; the `|| null` form guarantees it (no repo precedent for '').
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
     defaults:

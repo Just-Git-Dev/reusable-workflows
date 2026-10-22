@@ -492,6 +492,12 @@
           "required": false,
           "type": "boolean"
         },
+        "environment": {
+          "default": "",
+          "description": "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment. Main only if that environment has a branch policy.",
+          "required": false,
+          "type": "string"
+        },
         "gcp_project": {
           "default": "",
           "description": "GCP project owning the service.",
