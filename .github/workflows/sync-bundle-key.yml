@@ -201,7 +201,7 @@ concurrency:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v4.1.0
+  WORKFLOW_VERSION: v4.1.1
 
 
 jobs:
@@ -221,7 +221,7 @@ jobs:
       # cannot see this job's concurrency group; the group is declared above.
       - name: Sync keys into the bundle
         id: sync
-        uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.1.0
+        uses: Just-Git-Dev/reusable-workflows/actions/sync-bundle-key@v4.1.1
         with:
           # Reason: the action picks `payload_json` (or the keys named in secret_keys_file) out of
           # the job's secrets, and a key name cannot be a static `secrets.NAME`.
