@@ -4,7 +4,7 @@ Give a Cloud Run service a public hostname on a Cloudflare zone. Idempotent — 
 re-run; nothing is created twice.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.1
 ```
 
 ## Pick a mode
@@ -47,6 +47,7 @@ identity.
 | `check_ssl_mode` | `true` | `proxied` only. Warns, never flips. |
 | `smoke_path` / `smoke_status` | `''` / `''` | Probe after bootstrapping. **Required** when `retarget_from` is set; an empty `smoke_status` then means `200`. |
 | `retarget_from` | `''` | `dns-only` only. Move a hostname that is mapped to *this* service name onto `service`. Empty = refuse, as always. See [Re-target a hostname](#re-target-a-hostname). |
+| `environment` | `''` | The calling repo's environment the job runs in. Empty = no environment (existing callers unchanged). Needed when the caller's GCP service account is WIF-trusted to an environment subject; main only if that environment has a branch policy. See [Re-target a hostname](#re-target-a-hostname). |
 
 ### Leave `cloud_run_url` empty
 
@@ -109,6 +110,12 @@ combination fails validation).
 
 Validation refuses `retarget_from` when `mode` is `proxied`, when `smoke_path` is empty, and
 when it equals `service`.
+
+A caller whose service account is trusted to an **environment-scoped** WIF subject (for example
+`repo:<org>/<repo>:environment:<name>`) must pass `environment: <name>`. A reusable workflow
+cannot inherit the caller's environment, and a caller job that `uses:` this workflow cannot set
+`environment:` itself, so without the input the OIDC token has no `environment` claim and
+authentication fails.
 
 The sequence:
 
@@ -175,7 +182,7 @@ permissions:
 
 jobs:
   bootstrap:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.1
     with:
       mode: dns-only
       hostname: ${{ inputs.hostname }}
