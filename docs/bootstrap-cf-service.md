@@ -4,7 +4,7 @@ Give a Cloud Run service a public hostname on a Cloudflare zone. Idempotent — 
 re-run; nothing is created twice.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.1
 ```
 
 ## Pick a mode
@@ -182,7 +182,7 @@ permissions:
 
 jobs:
   bootstrap:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-cf-service.yml@v4.1.1
     with:
       mode: dns-only
       hostname: ${{ inputs.hostname }}
