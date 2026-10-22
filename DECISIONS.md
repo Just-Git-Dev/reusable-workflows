@@ -2,8 +2,9 @@
 
 ## Index
 
-126 entries total — 116 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+127 entries total — 117 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-22` — [bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)](#2026-10-22--bootstrap-cf-service-environment-input--environment-scoped-wif-trust-rca)
 - `2026-10-21` — [RCA: release stamp skipped action pins inside workflows](#2026-10-21--rca-release-stamp-skipped-action-pins-inside-workflows)
 - `2026-10-21` — [v4.1.0 review fixes — composite-action inputs and the remap fail closed](#2026-10-21--v410-review-fixes--composite-action-inputs-and-the-remap-fail-closed)
 - `2026-10-21` — [sync-bundle-key + rotate-worker-signing-secret as composite actions; rotator secret via env (RCA)](#2026-10-21--sync-bundle-key--rotate-worker-signing-secret-as-composite-actions-rotator-secret-via-env-rca)
@@ -242,6 +243,28 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-22 — bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)
+
+**RCA: `bootstrap-cf-service` had no `environment` input, so an environment-scoped WIF trust could not authenticate.**
+
+- **Symptom.** A consumer whose least-privilege domain-mapping service account is WIF-trusted only to
+  the subject `repo:<org>/<repo>:environment:<name>` could not use `retarget_from` (v4.1.0): the
+  Google auth step was rejected.
+- **Root cause.** `retarget_from` assumed the caller's SA trust was repo/ref-scoped. A caller job that
+  `uses:` a reusable workflow cannot set `environment:` itself, and the callee did not declare one, so
+  the OIDC token minted in the callee carried no `environment` claim.
+- **Why it wasn't caught.** The tests stub gcloud/curl and never mint a token; no review asked what
+  subject the caller's trust expects.
+- **Fix.** New optional input `environment` (string, default `''`), used as the job-level
+  `environment:` of the single job `bootstrap`. Existing callers are unchanged. Chosen form:
+  `${{ inputs.environment != '' && inputs.environment || null }}`. No file in this repo uses an
+  empty environment (the sibling workflows default to a non-empty name), so "empty = none" had no
+  precedent here; the conditional makes it explicit instead of relying on how GitHub treats `''`.
+  actionlint accepts it.
+- **Prevention.** Structural test in `tests/run_step_tests.py` asserts the input and the job wiring.
+  Docs now say a caller with an environment-scoped trust passes `environment:`. Any new workflow that
+  authenticates to GCP should offer `environment` from the start.
 
 ## 2026-10-21 — RCA: release stamp skipped action pins inside workflows
 
