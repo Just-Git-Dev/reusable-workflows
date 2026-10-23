@@ -6,7 +6,7 @@
 
 - `2026-10-23` — [bootstrap-cf-service: pre-flight authorized domains before any mapping change; retry the retarget smoke probe](#2026-10-23--bootstrap-cf-service-pre-flight-authorized-domains-before-any-mapping-change-retry-the-retarget-smoke-probe)
 - `2026-10-23` — [Public Cloud Run service via F7 public: true; deploy-cloud-run reads the invoker back (v5.1.0, RCA)](#2026-10-23--public-cloud-run-service-via-f7-public-true-deploy-cloud-run-reads-the-invoker-back-v510-rca)
-- `2026-10-22` — [rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.1.0)](#2026-10-22--rotate-external-secret-rotate-externally-shared-secrets-from-the-project-repo-with-alternating-slots-v510)
+- `2026-10-22` — [rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.2.0)](#2026-10-22--rotate-external-secret-rotate-externally-shared-secrets-from-the-project-repo-with-alternating-slots-v520)
 - `2026-10-22` — [sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)](#2026-10-22--sync-bundle-key-is-merge-only-remove_keys-replaces-mode-and-confirm_removed-v500)
 - `2026-10-22` — [bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)](#2026-10-22--bootstrap-cf-service-environment-input--environment-scoped-wif-trust-rca)
 - `2026-10-21` — [RCA: release stamp skipped action pins inside workflows](#2026-10-21--rca-release-stamp-skipped-action-pins-inside-workflows)
@@ -312,10 +312,10 @@ could only grant a service account `run.developer`).
   `tests/run_deploy_env_tests.py` (`public_cases`). Rule for new steps: when a cloud CLI can
   "succeed" with a warning, check the resulting state, not the exit code.
 
-## 2026-10-22 — rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.1.0)
+## 2026-10-22 — rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.2.0)
 
 Owner rulings 2026-10-22, plan `plans/2026-10-22-rotate-external-secret.md`. Added the reusable
-workflow and composite action `rotate-external-secret` (v5.1.0, additive); `rotate-worker-signing-secret`
+workflow and composite action `rotate-external-secret` (v5.2.0, additive); `rotate-worker-signing-secret`
 is deprecated (notice step, docs banners) and removed in v6.
 
 **Rulings 1-13, summarised.** Only secrets shared with an EXTERNAL system (Cloudflare tokens and Worker

@@ -1,4 +1,4 @@
-# rotate-external-secret (v5.1.0) — plan
+# rotate-external-secret (v5.2.0) — plan
 
 Approved by the owner 2026-10-22. Consumers are named only by pseudonym (public repo).
 
@@ -12,7 +12,7 @@ Approved by the owner 2026-10-22. Consumers are named only by pseudonym (public 
 | 4 | Grace (24h default) | longer than a job may run (6h), so **one daily scheduled run advances a small state machine** |
 | 5 | State | one non-secret GitHub **variable** in project: `{current, pending, rotated_at}` |
 | 6 | Old rotator | `rotate-worker-signing-secret` stays, **deprecated** (notice + docs), removed in the next major |
-| 7 | Release | **v5.1.0** (additive), after v5.0.0 ships |
+| 7 | Release | **v5.2.0** (additive), after v5.0.0 ships |
 
 ## Rulings (owner, 2026-10-22)
 
@@ -84,5 +84,5 @@ write. Workflow `concurrency: rotate-external-<worker_script>-<slot_a>`, `timeou
 - [ ] Deprecation of `rotate-worker-signing-secret` (notice step + docs), README row, catalog,
       Makefile `step-bodies`, DECISIONS entry, TODO (removal in v6).
 - [ ] `make ci` green; critic review; fixes.
-- [ ] Ship v5.1.0 after v5.0.0; tag verified by ls-remote; action read at the tag.
+- [ ] Ship v5.2.0 after v5.0.0; tag verified by ls-remote; action read at the tag.
 - [ ] Consumer adoption steps sent (owner-approved).

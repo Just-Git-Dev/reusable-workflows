@@ -27,7 +27,7 @@ section opens or closes. Closed sections live in
 
 ## Owner rulings to build (opened 2026-10-21)
 
-- [ ] remove rotate-worker-signing-secret in v6 (deprecated v5.1.0, replaced by rotate-external-secret)
+- [ ] remove rotate-worker-signing-secret in v6 (deprecated v5.2.0, replaced by rotate-external-secret)
   `actions/rotate-worker-signing-secret` + `.github/workflows/rotate-worker-signing-secret.yml` +
   both docs pages and README rows.
 
