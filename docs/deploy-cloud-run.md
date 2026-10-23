@@ -9,7 +9,7 @@ are inputs.
 | `deploy_mode` | gcloud call | When |
 |---|---|---|
 | `update-image` (default) | `gcloud run services update --image` | Strict image flip. Env/secrets/scale/SA/probes are owned by a **separate provision workflow**; this only changes which image is live. Safest. |
-| `deploy` | `gcloud run deploy … <deploy_flags>` | Create/configure the service inline. Pass `--allow-unauthenticated`, `--set-env-vars=…`, `--ingress=…` via `deploy_flags` (one per line). |
+| `deploy` | `gcloud run deploy … <deploy_flags>` | Create/configure the service inline. Pass `--set-env-vars=…`, `--ingress=…` via `deploy_flags` (one per line). `--allow-unauthenticated` is read back after the deploy, and an F7 deployer cannot set it: see [Public services](#public-services). |
 
 App-specific pre-deploy gates (unit tests, `pyproject`/`go.mod` version
 cross-checks, migration smokes) stay as their own caller jobs and gate this with
@@ -156,6 +156,33 @@ value with a space or comma is safe:
 
 > The old `extra_deploy_flags` (single space-separated string) still works but
 > word-splits — a space inside any value breaks argv. Migrate to `deploy_flags`.
+
+## Public services
+
+**A service whose deployer F7 manages is made public by F7, not by this workflow** (v5.1.0).
+`--allow-unauthenticated`
+asks gcloud to give `allUsers` the role `roles/run.invoker` on the service, which needs
+`run.services.setIamPolicy`. A deployer made by F7 holds only `roles/run.developer` on its service:
+it can read who may call the service, never change it. Without the check below, gcloud printed
+a warning, exited 0, the job went green, and the service answered 403 to every request.
+
+- **To make a service public:** add `public: true` to its `deploys` entry in the org's `project`
+  repo `repos.yaml` and run `repos-deploy-scope` (F7) there
+  ([repos-register.md](repos-register.md#6-features-f1-f9-adopt-any-one-alone)). The grant and any
+  domain mapping both run from the `project` repo; the service repo only deploys code.
+- **Read-back:** when `deploy_mode: deploy` and `deploy_flags` (or `extra_deploy_flags`) carries
+  `--allow-unauthenticated`, the step **Check public access** reads the service's IAM policy after
+  the deploy and fails unless `allUsers` holds exactly `roles/run.invoker` (another role that also
+  lets anyone call the service does not count). It reads the real policy and never looks at
+  gcloud's wording; a policy it cannot read is a failure too, so a deployer with a custom role must
+  hold `run.services.getIamPolicy`. When the flag appears more than once, the last of
+  `--allow-unauthenticated` / `--no-allow-unauthenticated` decides (`extra_deploy_flags` counts
+  after `deploy_flags`). It is the job's **last** step: the new revision is already serving, so
+  the Deployment marker, the manifest and `service_url` are recorded before it can fail. Skipped
+  on `dry_run` and `build_only`, and in `update-image` mode (which ignores deploy flags).
+- **Fix for that failure:** the `public: true` step above, then re-run the deploy. Keeping
+  `--allow-unauthenticated` in `deploy_flags` afterwards is harmless and keeps the check on;
+  dropping it turns the check off.
 
 ## Example — decoupled image tag (app version ≠ git tag)
 

@@ -195,10 +195,12 @@ def validate_register_feature(reg):
     for r in repos if isinstance(repos, list) else []:
         deploys = r.get("deploys") if isinstance(r, dict) else None
         for i, dep in enumerate(deploys if isinstance(deploys, list) else []):
-            if isinstance(dep, dict) and "env_secret" in dep and dep["env_secret"] is not True:
-                errs.append(err(r["name"] if isinstance(r.get("name"), str) else "register",
-                                f"deploys[{i}].env_secret must be true (the secret name "
-                                "`<cloud_run>-env` is derived, never chosen)"))
+            # F7: `public: true` asks for allUsers roles/run.invoker; private is the key's absence
+            for key, why in (("env_secret", "the secret name `<cloud_run>-env` is derived, never chosen"),
+                             ("public", "a private service omits the key")):
+                if isinstance(dep, dict) and key in dep and dep[key] is not True:
+                    errs.append(err(r["name"] if isinstance(r.get("name"), str) else "register",
+                                    f"deploys[{i}].{key} must be true ({why})"))
     if errs:
         raise PlanError(errs)
     for e in sorted(jsonschema.Draft202012Validator(schema).iter_errors(reg),

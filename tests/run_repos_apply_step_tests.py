@@ -51,7 +51,7 @@ def extract_step(workflow, step_name):
     raise SystemExit(f"step '{step_name}' not found in {workflow}")
 
 
-def run_apply(body, plan, *, env=None, fail_on=0):
+def run_apply(body, plan, *, env=None, fail_on=0, public=None):
     """Run the body in a scratch dir holding plan.json (also $RUNNER_TEMP); return rc, output,
     the stubbed calls (list of argv lists) and the files left in the working dir."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -63,6 +63,8 @@ def run_apply(body, plan, *, env=None, fail_on=0):
             f.write_text(STUB)
             f.chmod(0o755)
         (tmp / "work" / "plan.json").write_text(json.dumps(plan))
+        if public is not None:                       # F7: the Plan step's list of `public: true` services
+            (tmp / "work" / "public.json").write_text(json.dumps(public))
         e = dict(os.environ)
         e.update({"PATH": f"{tmp / 'bin'}:{e['PATH']}", "STUB_DIR": str(tmp / "stub"),
                   "RUNNER_TEMP": str(tmp / "work"), "GITHUB_STEP_SUMMARY": str(tmp / "summary.md"),
@@ -232,6 +234,7 @@ def sa_cases():
 # ---------------------------------------------------------------- F7 repos-deploy-scope
 RUN_DEV, SA_USER, GAR_W = ("roles/run.developer", "roles/iam.serviceAccountUser",
                            "roles/artifactregistry.writer")
+INVOKER = "roles/run.invoker"
 DEPLOYER = "serviceAccount:payments-api-deployer@example-proj.iam.gserviceaccount.com"
 ADMIN = "serviceAccount:repo-admin@example-proj.iam.gserviceaccount.com"
 SUFFIX = "@example-proj.iam.gserviceaccount.com"
@@ -310,12 +313,40 @@ def deploy_cases():
         "project resource type": d_bind("project", "example-proj", RUN_DEV, DEPLOYER),
         "user member": d_run(mem="user:someone@example.com"),
         "run.service without a region": d_bind("run.service", "payments-api", RUN_DEV, DEPLOYER),
+        "allAuthenticatedUsers invoker": d_run(mem="allAuthenticatedUsers", role=INVOKER),
+        "allUsers with run.developer": d_run(mem="allUsers"),
+        "allUsers with run.admin": d_run(mem="allUsers", role="roles/run.admin"),
+        "allUsers on a GAR repository": d_gar(mem="allUsers", role="roles/artifactregistry.reader"),
+        "allUsers invoker without a region": d_bind("run.service", "payments-api", INVOKER, "allUsers"),
+        "service account with run.invoker": d_run(role=INVOKER),
+        "user with run.invoker": d_run(mem="user:someone@example.com", role=INVOKER),
     }
     for label, bad in foreign.items():
         r = deploy_run([d_gar(), bad, d_gar()])
         check(f"F7 foreign binding ({label}): step fails", r["rc"] != 0, r["out"])
         check(f"F7 foreign binding ({label}): no call made (even the valid actions around it)",
               r["calls"] == [], r["calls"])
+
+    # v5.1.0 `public: true`: exactly one extra shape, allUsers roles/run.invoker on a run.service
+    for label, pub in (("no public.json", None), ("service not listed", ["ledger-worker"]),
+                       ("empty list", [])):
+        r = deploy_run([d_run(), d_run(mem="allUsers", role=INVOKER)], public=pub)
+        check(f"F7 public invoker, {label}: refused, no call (register must say public: true)",
+              r["rc"] != 0 and r["calls"] == [], (r["rc"], r["calls"]))
+    r = deploy_run([d_run(), d_run(mem="allUsers", role=INVOKER)], public=["payments-api"])
+    check("F7 public invoker: rc 0", r["rc"] == 0, r["out"])
+    check("F7 public invoker: bound with the planned region", r["calls"] == [
+        g_bind(["run", "services", "add-iam-policy-binding"], "payments-api", DEPLOYER, RUN_DEV,
+               ["--region=europe-west1"]),
+        g_bind(["run", "services", "add-iam-policy-binding"], "payments-api", "allUsers", INVOKER,
+               ["--region=europe-west1"]),
+    ], r["calls"])
+    r = deploy_run([act("deploy-scope", "r", "drift", {
+        "would": "remove-public-invoker", "resource_type": "run.service", "resource": "payments-api",
+        # (deploy_run passes no public.json here: a drift is never applied)
+        "region": "europe-west1", "role": INVOKER, "member": "allUsers", "reason": "x"})])
+    check("F7 remove-public-invoker drift: rc 0, no call", r["rc"] == 0 and r["calls"] == [],
+          (r["rc"], r["calls"]))
 
     r = deploy_run([d_run(), d_gar(), d_gar(res="europe-west1/other")], fail_on=2)
     check("F7 first failure: rc != 0", r["rc"] != 0, r["out"])
@@ -325,7 +356,9 @@ def deploy_cases():
     for v in NASTY + ["--ingress=all", "-x"]:
         for label, plan in (("service", [d_create(svc=v)]), ("region", [d_create(region=v)]),
                             ("runtime SA", [d_create(rt=v)]), ("binding service", [d_run(svc=v)]),
-                            ("binding region", [d_run(region=v)])):
+                            ("binding region", [d_run(region=v)]),
+                            ("public binding service", [d_run(svc=v, mem="allUsers", role=INVOKER)]),
+                            ("public binding region", [d_run(region=v, mem="allUsers", role=INVOKER)])):
             r = deploy_run(plan)
             check(f"F7 malformed {label} {v!r}: step fails, no call, nothing executed",
                   r["rc"] != 0 and r["calls"] == [] and "pwned" not in r["files"], (r["rc"], r["calls"]))
@@ -564,6 +597,37 @@ def deploy_gated_cases():
                   for c in r["calls"]), r["calls"])
 
 
+def deploy_public_end_to_end_cases():
+    """v5.1.0, end to end: the real Plan step (planner + public.json from the register) feeds the
+    real apply step; only the `public: true` service gets allUsers roles/run.invoker."""
+    fix = ROOT / "tests" / "fixtures-repos-deploy"
+    reg = json.loads((fix / "repos.yaml").read_text())
+    reg["defaults"]["mode"] = "enforce"
+    next(r for r in reg["repos"] if r["name"] == "ledger-worker")["deploys"][0]["public"] = True
+    with tempfile.TemporaryDirectory() as t:
+        (Path(t) / "r.yaml").write_text(json.dumps(reg))
+        (Path(t) / "s.json").write_text((fix / "state-base.json").read_text())
+        glue = (f'ln -s {ROOT} .repos-src; cp {t}/s.json state.json; '
+                f'export PATH="{Path(sys.executable).parent}:$PATH"\n')
+        p = run_apply(glue + extract_step("repos-deploy-scope.yml", "Plan")
+                      + "\necho '=== public'; cat public.json; echo '=== plan'; cat plan.json",
+                      [], env={"REGISTER": f"{t}/r.yaml",
+                               "REPO_ADMIN_SA_EMAIL": "repo-admin@example-proj.iam.gserviceaccount.com"})
+    check("F7 Plan step: rc 0", p["rc"] == 0, p["out"])
+    try:
+        pub_part, plan_part = p["out"].split("=== public\n", 1)[1].split("=== plan\n", 1)
+        public, plan = json.loads(pub_part), json.loads(plan_part)
+    except (IndexError, ValueError):
+        public, plan = None, []
+    check("F7 Plan step: public.json lists exactly the public: true service",
+          public == ["ledger-worker"], p["out"][-300:])
+    r = deploy_run(plan, public=public)
+    check("F7 public end to end: apply rc 0", r["rc"] == 0, r["out"])
+    pub = [c for c in r["calls"] if "--member=allUsers" in c]
+    check("F7 public end to end: one allUsers invoker binding, on ledger-worker only",
+          len(pub) == 1 and pub[0][4] == "ledger-worker" and "--role=roles/run.invoker" in pub[0], pub)
+
+
 # ------------------------------------------- F3/F4 write token is narrowed to the plan's targets
 def targets_cases():
     for wf, feature, verb, mint_name in (
@@ -666,6 +730,7 @@ def main():
     sa_cases()
     deploy_cases()
     deploy_gated_cases()
+    deploy_public_end_to_end_cases()
     secrets_cases()
     print(f"repos apply step tests: {RAN} cases run, {RAN - len(FAILURES)} passed, {len(FAILURES)} failed")
     if RAN == 0 or FAILURES:

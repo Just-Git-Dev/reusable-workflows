@@ -12,6 +12,8 @@ defined in [repos-register.md](repos-register.md) (sections 6, 7 and 8).
 |---|---|
 | `cloud_run`, service missing | `gcloud run deploy <service> --image=<placeholder_image> --service-account=<runtime SA> --region <region> --no-allow-unauthenticated`, once |
 | `cloud_run` | `roles/run.developer` ON that service for `<service>-deployer` (`gcloud run services add-iam-policy-binding`) |
+| `cloud_run` with `public: true` | `allUsers` → `roles/run.invoker` ON that service, so anyone may call it (`gcloud run services add-iam-policy-binding`); the only non-service-account member the apply step accepts, and only on a service the register itself marks `public: true` |
+| `cloud_run` without `public: true`, service already public | a `drift` (`would: "remove-public-invoker"`) and a warning, in every mode; F7 never removes the grant, a person does |
 | `cloud_run` with `image_repository` | `roles/artifactregistry.writer` ON that repository (`gcloud artifacts repositories add-iam-policy-binding`) |
 
 **No service-account policy is written here** (one writer per service-account policy). The runtime

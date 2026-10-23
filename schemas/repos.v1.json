@@ -82,7 +82,8 @@
             "region": {"$ref": "#/$defs/regionName"},
             "runtime_service_account": {"$ref": "#/$defs/saName"},
             "image_repository": {"$ref": "#/$defs/slashPair"},
-            "env_secret": {"const": true}
+            "env_secret": {"const": true},
+            "public": {"const": true}
           }
         },
         {

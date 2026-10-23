@@ -621,6 +621,117 @@ def repo_admin_sa_email_flag_is_required():
     assert rc != 0 and out.strip() == "", (rc, out[:100])
 
 
+# --------------------------------------------------------------- public: true (v5.1.0)
+INVOKER = "roles/run.invoker"
+
+
+def public_register(mode="enforce"):
+    reg = load_register()
+    reg["defaults"]["mode"] = mode
+    repo(reg, "ledger-worker")["deploys"][0]["public"] = True
+    return reg
+
+
+def invoker_binding(svc="ledger-worker"):
+    return binding("run.service", svc, INVOKER, "allUsers")
+
+
+def remove_public_drift(svc="ledger-worker"):
+    return ("drift", {"would": "remove-public-invoker", "resource_type": "run.service",
+                      "resource": svc, "region": "europe-west1", "role": INVOKER,
+                      "member": "allUsers",
+                      "reason": "the service is public but its register entry has no `public: true`; "
+                                "F7 never removes a grant: remove allUsers roles/run.invoker by hand "
+                                "or add `public: true`"})
+
+
+@case
+def public_true_without_invoker_adds_one_allusers_invoker_binding():
+    acts = of(plan(public_register(), fully_bound_state()), "ledger-worker")
+    assert shape(acts) == [invoker_binding()], json.dumps(shape(acts))
+
+
+@case
+def public_true_with_invoker_held_is_in_sync():
+    st = fully_bound_state()
+    st["cloud_run_services"]["ledger-worker"]["iam"].append({"role": INVOKER, "members": ["allUsers"]})
+    acts = of(plan(public_register(), st), "ledger-worker")
+    assert shape(acts) == [("in-sync", {})], json.dumps(shape(acts))
+
+
+@case
+def public_true_on_a_new_service_binds_after_create():
+    st = load_state()
+    reg = load_register()
+    reg["defaults"]["mode"] = "enforce"
+    repo(reg, "payments-api")["deploys"][0]["public"] = True
+    got = shape(of(plan(reg, st), "payments-api"))
+    exp = [create("payments-api", "payments-api-run"),
+           binding("run.service", "payments-api", RUN_DEV, member("payments-api-deployer")),
+           invoker_binding("payments-api"),
+           binding("artifactregistry.repository", "europe-west1/services", GAR_W,
+                   member("payments-api-deployer")),
+           needs_deployed_by("payments-api-run", "payments-api-deployer")]
+    assert got == exp, json.dumps(got)
+
+
+@case
+def public_absent_never_plans_an_allusers_binding():
+    for st in (load_state(), fully_bound_state()):
+        for mode in ("enforce", "report"):
+            reg = load_register()
+            reg["defaults"]["mode"] = mode
+            for a in plan(reg, st):
+                assert "allUsers" not in json.dumps(a), a
+
+
+@case
+def public_true_is_gated_by_ready_like_every_binding():
+    st = load_state()
+    st["service_accounts"].pop("payments-api-run")
+    for mode in ("enforce", "report"):
+        reg = load_register()
+        reg["defaults"]["mode"] = mode
+        repo(reg, "payments-api")["deploys"][0]["public"] = True
+        got = shape(of(plan(reg, st), "payments-api"))
+        assert got == [needs_act_as("payments-api-run"),
+                       needs_deployed_by("payments-api-run", "payments-api-deployer")], (mode, got)
+
+
+@case
+def public_true_in_report_mode_is_drift():
+    acts = of(plan(public_register("report"), fully_bound_state()), "ledger-worker")
+    v, d = invoker_binding()
+    assert shape(acts) == [("drift", dict(would=v, **d))], json.dumps(shape(acts))
+
+
+@case
+def q1_public_service_without_public_true_is_drift_in_every_mode_never_a_write():
+    # owner Q1 (2026-10-23): F7 never removes; it reports the service is public but the register
+    # says private, and a person removes the grant
+    st = fully_bound_state()
+    st["cloud_run_services"]["ledger-worker"]["iam"].append({"role": INVOKER, "members": ["allUsers"]})
+    for mode in ("enforce", "report"):
+        reg = load_register()
+        reg["defaults"]["mode"] = mode
+        acts = of(plan(reg, st), "ledger-worker")
+        assert shape(acts) == [remove_public_drift()], (mode, json.dumps(shape(acts)))
+        assert not [a for a in acts if a["action"] in WRITE_VERBS], (mode, acts)
+
+
+@case
+def public_never_list_still_holds():
+    st = fully_bound_state()
+    st["cloud_run_services"]["payments-api"]["iam"].append({"role": INVOKER, "members": ["allUsers"]})
+    for mode in ("enforce", "report"):
+        for a in plan(public_register(mode), st):
+            assert a["action"] in WRITE_VERBS | NON_WRITE, a
+            for bad in ("delete", "remove", "archive", "key-create", "public"):
+                assert bad not in a["action"], a
+            if a["action"] == "add-resource-binding" and a["details"]["member"] == "allUsers":
+                assert (a["details"]["resource_type"], a["details"]["role"]) == ("run.service", INVOKER), a
+
+
 def main():
     failed = 0
     for fn in CASES:

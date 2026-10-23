@@ -64,6 +64,7 @@ repos:
         region: europe-west1                            # runtime SA is derived: payments-api-run
         image_repository: europe-west1/services         # <location>/<GAR repository>
         env_secret: true                                # F8: secret payments-api-env (derived name)
+        public: true                                    # F7: anyone may call it (allUsers run.invoker)
   - name: ledger-worker
     status: new                   # F2 creates it if missing
     mode: enforce                 # overrides defaults.mode for this repo only
@@ -87,6 +88,7 @@ repos:
 | `repos[].gcp.service_accounts` | F5 WIF link | SAs must already exist; F5 never creates one |
 | top-level `service_accounts:` | F6 service accounts | create-if-missing only |
 | `repos[].deploys` | F7 deploy scope | Cloud Run entries; a GKE entry is reported `unsupported` |
+| `repos[].deploys[].public` | F7 deploy scope | `true` = anyone may call this Cloud Run service (`allUsers` holds `roles/run.invoker` on it); absent = private; any other value is an error |
 | `repos[].deploys[].env_secret` | F8 secrets | `true` = this Cloud Run entry gets the secret `<cloud_run>-env`; any other value is an error (the name is derived, never chosen) |
 | `repos[].environments` | F9 environments | GitHub deployment environments of this repo and their branch/tag policy ([§6](#6-features-f1-f9-adopt-any-one-alone)); no secrets, no reviewers |
 | `repos[].kind` | nobody yet | inventory only |
@@ -131,7 +133,8 @@ F1 validates against it; every planner validates the parts it reads before plann
       `runtime_service_account` is optional and **derived**: the runtime SA is always
       `<cloud_run>-run`; a value that is present must equal it, or F7 exits `1`.
       `env_secret` is optional and must be the boolean `true` when present (F8; the secret name
-      `<cloud_run>-env` is derived, so a string such as `web-env` is refused). A `cloud_run` name
+      `<cloud_run>-env` is derived, so a string such as `web-env` is refused). `public` is optional
+      and must be the boolean `true` when present (F7); a private service omits the key. A `cloud_run` name
       may appear under only one repo (a deployable belongs to exactly one repo; F1-F9 refuse a
       register that lists it twice);
     - `environments` (array, optional; F9). Each entry is an object with required `name`
@@ -182,7 +185,9 @@ No feature, in any mode, ever:
 
 1. **deletes** a repository;
 2. **archives** a repository;
-3. **makes a repository public** (`visibility` is checked; `public` is invalid in the register);
+3. **makes a repository public** (`visibility` is checked; `visibility: public` is invalid in the
+   register). A Cloud Run service is a different thing: F7 lets anyone call one only when its
+   `deploys` entry says `public: true` ([§6](#6-features-f1-f9-adopt-any-one-alone));
 4. **renames** a repository unless that repo's entry says `rename_from:` explicitly;
 5. **creates a service-account key** (deploys are keyless, WIF only);
 6. **deletes a service account**;
@@ -295,6 +300,21 @@ a service name like `--ingress=all` never reaches `gcloud`). Then, per `deploys:
   `roles/run.developer` **on that service** and `roles/artifactregistry.writer` **on
   `image_repository`** (GAR IAM is per repository, not per image — a dedicated repository per
   deployable is the stricter option).
+- **Public services: `public: true`** (owner, 2026-10-23). F7 is the one writer of who may *call* a
+  service. For an entry with `public: true` it adds `allUsers` → `roles/run.invoker` **on that
+  service** (an `add-resource-binding`, gated like every other binding, after `create-service`).
+  The service repo cannot do it: its deployer holds `run.developer`, which can read the service's
+  policy but not set it, so `--allow-unauthenticated` in its `deploy_flags` only makes gcloud warn
+  (deploy-cloud-run then fails its read-back, [deploy-cloud-run.md](deploy-cloud-run.md#public-services)).
+  The grant runs from the org's `project` repo, never from the service repo. **F7 never removes it:**
+  a service where `allUsers` holds `roles/run.invoker` but whose entry has no `public: true` is
+  `drift{would: "remove-public-invoker", resource_type: "run.service", resource, region, role,
+  member: "allUsers", reason}` in **every** mode (plus a run warning), and a person removes the
+  grant or adds `public: true` (owner Q1, 2026-10-23). The apply step also checks, from the
+  register itself rather than the planner, that each `allUsers` binding is on a `public: true`
+  entry (`public.json`, written by the Plan step), so a planner bug cannot open another service.
+  An org policy that restricts members to
+  the org's domain refuses `allUsers`; the binding then fails in the apply step, loudly.
 - **F7 writes no service-account policy** (ruling 21). The runtime SA `<deployable>-run` is
   declared by the access-provisioning side, which is the only writer of its policy; its config
   carries `deployed_by: <deployable>-deployer` (the deployer's `roles/iam.serviceAccountUser` on it)
@@ -534,7 +554,7 @@ partial plan:** one error refuses the whole run.
 |---|---|
 | `in-sync` | `{}` — emitted once per examined repo (or SA) with nothing to do, so a summary can list every repo examined |
 | `skip` | `{"reason": string}` — e.g. `"exists"`, `"rename already done"` |
-| `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode; and (F3 only) every `visibility` difference in ANY mode, because visibility is never written |
+| `drift` | `{"would": <write verb>, ...that verb's details}` — a difference in `report` mode; and in ANY mode: (F3) every `visibility` difference, because visibility is never written, and (F7) `would: "remove-public-invoker"` for a public service whose entry has no `public: true`, because F7 never removes a grant |
 | `unsupported` | `{"key": string, "reason": string}` — something this org, plan or feature cannot honour: branch protection, or (F7) `key: "gke"`, a `deploys` entry the feature does not act on |
 | `unregistered-binding` | `{"service_account": string, "role": string, "member": string}` — F5: a binding on a registered SA that the register does not list; reported, never removed |
 | `needs-jgd` | `{"resource_type": "iam.serviceAccount", "resource": string, "role": "roles/iam.serviceAccountUser", "member": string, "needs": string}` — F7: a line on the runtime SA `<d>-run`'s policy that the access-provisioning side must declare (`deployed_by: <d>-deployer`, or `act_as: repo-admin` while a service is still to be created); reported in both modes, never written. F8 uses the same verb for a missing runtime SA, with `{"resource_type": "iam.serviceAccount", "resource": "<d>-run@<project>...", "needs": "service account <d>-run"}` (no `role`/`member`) |
@@ -553,7 +573,7 @@ partial plan:** one error refuses the whole run.
 | `service-accounts` | `create-service-account` | `{"name": string, "display_name": string, "description": string}` |
 | `service-accounts` | `update-service-account` | `{"name": string, "field": "description"\|"display_name", "from": string, "to": string}` |
 | `deploy-scope` | `create-service` | `{"service": string, "region": string, "runtime_service_account": string (derived `<service>-run`), "image": "placeholder"}` |
-| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}`; a `run.service` binding adds `"region": string` (from the register) |
+| `deploy-scope` | `add-resource-binding` | `{"resource_type": "run.service"\|"artifactregistry.repository", "resource": string, "role": string, "member": string}`; a `run.service` binding adds `"region": string` (from the register). `member` is a `serviceAccount:` except for one shape: `public: true` gives `run.service` + `roles/run.invoker` + `"allUsers"`; the apply refuses every other non-SA member |
 | `secrets` | `create-secret` | `{"secret": string (`<d>-env`), "labels": {"managed-by": "repos-secrets", "deployable": string}}` |
 | `secrets` | `add-secret-binding` | `{"secret": string, "role": one of the four F8 roles, "member": "serviceAccount:<d>-run@..." or "serviceAccount:<d>-deployer@..."}` |
 | `environments` | `create-environment` | `{"environment": string}` — created with custom deployment policies on; its policies follow as `add-branch-policy` actions |
