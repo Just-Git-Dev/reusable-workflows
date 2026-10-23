@@ -1014,13 +1014,16 @@ def _run_body(body, env_extra, *, stubs=None):
 
 
 def run_cf_retarget_step(body, *, current="", svc_json=None, ready_at=1, curl_run="200",
-                         curl_host="200", create_fails=False, delete_fails=False, **env_kw):
+                         curl_host="200", create_fails=False, delete_fails=False, curl_seq=None,
+                         **env_kw):
     """Run a bootstrap-cf-service retarget-aware step with stubbed gcloud/curl and a fake clock.
 
     current:    live mapping's routeName ('' = no mapping; describe fails).
     svc_json:   what `gcloud run services describe --format=json` prints (default: healthy).
     ready_at:   the Nth `domain-mappings describe --format=json` reports Ready (0 = never).
     curl_run/curl_host: status printed for a *.run.app URL / any other URL.
+    curl_seq:   optional list of results for non-run.app URLs, one per call (the last repeats);
+                "rc35" prints 000 and exits 35 like a failed TLS handshake.
     Returns rc/out/outputs/env plus `calls` (gcloud argv lines), `curls` (urls), `elapsed`
     (fake seconds) and `summary` (GITHUB_STEP_SUMMARY text).
     """
@@ -1054,10 +1057,16 @@ def run_cf_retarget_step(body, *, current="", svc_json=None, ready_at=1, curl_ru
             + ('  *"domain-mappings create"*) exit 1 ;;\n' if create_fails else '')
             + ('  *"domain-mappings delete"*) exit 1 ;;\n' if delete_fails else '')
             + 'esac\nexit 0\n')
+        (tmp / "seq").write_text("\n".join(curl_seq or [curl_host]) + "\n")
         curl = ("#!/usr/bin/env bash\n"
                 'for a in "$@"; do u="$a"; done\n'
                 f'echo "$u" >> "{curls}"\n'
-                f'case "$u" in *.run.app*) echo "{curl_run}" ;; *) echo "{curl_host}" ;; esac\n')
+                f'case "$u" in *.run.app*) echo "{curl_run}"; exit 0 ;; esac\n'
+                f'n=$(grep -c . "{curls}"); m=$(wc -l < "{tmp}/seq")\n'
+                '[ "$n" -gt "$m" ] && n=$m\n'
+                f'r=$(sed -n "${{n}}p" "{tmp}/seq")\n'
+                '[ "$r" = rc35 ] && { echo 000; exit 35; }\n'
+                'echo "$r"\n')
         sleep = ("#!/usr/bin/env bash\n"
                  f'now=$(cat "{clock}"); echo $(( now + ${{1%%.*}} )) > "{clock}"\n')
         date = ("#!/usr/bin/env bash\n"
@@ -1074,6 +1083,37 @@ def run_cf_retarget_step(body, *, current="", svc_json=None, ready_at=1, curl_ru
                    curls=[l for l in curls.read_text().splitlines() if l],
                    elapsed=int(clock.read_text()) - 1000000000,
                    summary=summ.read_text() if summ.exists() else "")
+        return res
+
+
+def run_cf_authdomains_step(body, *, status="200", payload='{"domains":[{"id":"example.com"}]}',
+                            host="img.example.com", token_fails=False, **env_kw):
+    """Run the authorized-domains pre-flight with stubbed gcloud (token) and curl (REST).
+
+    curl honours -o <file> / -w '%{http_code}': it writes `payload` to the file, prints `status`.
+    Returns rc/out plus `calls` (gcloud argv lines) and `curls` (urls).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        calls, curls = tmp / "calls", tmp / "curls"
+        calls.write_text("")
+        curls.write_text("")
+        (tmp / "payload").write_text(payload)
+        gcloud = ("#!/usr/bin/env bash\n"
+                  f'echo "$*" >> "{calls}"\n'
+                  + ('case "$*" in *print-access-token*) exit 1 ;; esac\n' if token_fails else '')
+                  + 'case "$*" in *print-access-token*) echo tok123 ;; esac\nexit 0\n')
+        curl = ("#!/usr/bin/env bash\n"
+                'out=""; prev=""\n'
+                'for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; u="$a"; done\n'
+                f'echo "$u" >> "{curls}"\n'
+                f'[ -n "$out" ] && [ "$out" != /dev/null ] && cp "{tmp}/payload" "$out"\n'
+                f'echo "{status}"\n')
+        env = {"HOST": host, "REGION": "r", "PROJECT": "p", "SA": "bot@p.iam.gserviceaccount.com"}
+        env.update({k.upper(): v for k, v in env_kw.items()})
+        res = _run_body(body, env, stubs={"gcloud": gcloud, "curl": curl})
+        res.update(calls=[l for l in calls.read_text().splitlines() if l],
+                   curls=[l for l in curls.read_text().splitlines() if l])
         return res
 
 
@@ -3753,6 +3793,66 @@ def main():
     r = run_cf_retarget_step(body, retarget_from="svc-old", svc_json={})
     check("a missing service refuses", r["rc"] == 1, r["out"])
     check("pre-flight never deletes", not has_call(r, "domain-mappings"), r["calls"])
+
+    print("\nbootstrap-cf-service · authorized-domains pre-flight")
+    body = extract_step(CFSERVICE, "bootstrap", "Pre-flight the domain-mapping permission and ownership")
+    r = run_cf_authdomains_step(body, host="api.example.com")
+    check("a listed parent domain passes", r["rc"] == 0, r["out"])
+    check("it queries the authorizeddomains endpoint with the caller's token",
+          any("/v1/projects/p/locations/r/authorizeddomains" in c for c in r["curls"])
+          and has_call(r, "print-access-token"), (r["curls"], r["calls"]))
+    r = run_cf_authdomains_step(body, host="example.com")
+    check("a listed domain equal to the host passes", r["rc"] == 0, r["out"])
+    r = run_cf_authdomains_step(body, host="sub.api.example.com")
+    check("a nested hostname is covered by the listed parent", r["rc"] == 0, r["out"])
+    r = run_cf_authdomains_step(body, host="notexample.com")
+    check("notexample.com is NOT covered by example.com",
+          r["rc"] == 1 and "Nothing was deleted" in r["out"] and "Search Console" in r["out"]
+          and "bot@p.iam.gserviceaccount.com" in r["out"], r["out"])
+    r = run_cf_authdomains_step(body, payload="{}")
+    check("a missing domains key counts as empty and refuses",
+          r["rc"] == 1 and "Nothing was deleted" in r["out"], r["out"])
+    r = run_cf_authdomains_step(body, payload='{"domains":[]}')
+    check("an empty domains list refuses", r["rc"] == 1, r["out"])
+    r = run_cf_authdomains_step(body, status="403", payload='{"error":{"code":403}}')
+    check("HTTP 403 refuses and names run.authorizeddomains.list",
+          r["rc"] == 1 and "run.authorizeddomains.list" in r["out"]
+          and "Nothing was deleted" in r["out"], r["out"])
+    r = run_cf_authdomains_step(body, token_fails=True)
+    check("no access token refuses", r["rc"] == 1, r["out"])
+    r = run_cf_authdomains_step(body, host="api.example.com")
+    check("the check never touches a domain mapping", not has_call(r, "domain-mappings"), r["calls"])
+    wf = CFSERVICE.read_text()
+    m = re.search(r"- name: Pre-flight the domain-mapping permission and ownership\n(.*?)\n      - name:",
+                  wf, re.S)
+    head = m.group(1).split("env:")[0] if m else ""
+    check("the step runs for dns-only, retarget or not, and on a dry run",
+          m is not None and "inputs.mode == 'dns-only'" in head
+          and "retarget_from" not in head and "dry_run" not in head, head)
+    check("the step precedes the converge step",
+          "Pre-flight the domain-mapping permission and ownership" in wf
+          and wf.index("Pre-flight the domain-mapping permission and ownership")
+          < wf.index("Converge the Cloud Run domain mapping"))
+
+    print("\nbootstrap-cf-service · retarget_from · Smoke probe retry")
+    body = extract_step(CFSERVICE, "bootstrap", "Smoke probe")
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_seq=["rc35", "rc35", "rc35", "200"])
+    check("retarget: TLS failures then 200 passes",
+          r["rc"] == 0 and r["env"].get("T_OK", "").isdigit(), r["out"])
+    check("retarget: it waited between tries", r["elapsed"] >= 45 and len(r["curls"]) == 4,
+          (r["elapsed"], r["curls"]))
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_seq=["000", "000", "200"])
+    check("retarget: HTTP 000 then 200 passes", r["rc"] == 0, r["out"])
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_seq=["rc35"],
+                             probe_timeout="60", probe_interval="15")
+    check("retarget: never connecting inside the window fails after the window",
+          r["rc"] == 1 and r["elapsed"] >= 60 and "T_OK" not in r["env"],
+          (r["rc"], r["elapsed"], r["out"]))
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_seq=["rc35", "401"])
+    check("retarget: a wrong status after connecting fails at once, without retrying",
+          r["rc"] == 1 and len(r["curls"]) == 2 and "401" in r["out"], (r["curls"], r["out"]))
+    r = run_cf_retarget_step(body, retarget_from="svc-old", curl_seq=["404"], want="404")
+    check("retarget: an explicit smoke_status is honoured", r["rc"] == 0, r["out"])
 
     print("\nbootstrap-cf-service · retarget_from · CAA warning")
     body = extract_step(CFSERVICE, "bootstrap", "Check CAA records")

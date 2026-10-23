@@ -2,8 +2,9 @@
 
 ## Index
 
-129 entries total — 119 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+130 entries total — 120 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-23` — [bootstrap-cf-service: pre-flight authorized domains before any mapping change; retry the retarget smoke probe](#2026-10-23--bootstrap-cf-service-pre-flight-authorized-domains-before-any-mapping-change-retry-the-retarget-smoke-probe)
 - `2026-10-23` — [Public Cloud Run service via F7 public: true; deploy-cloud-run reads the invoker back (v5.1.0, RCA)](#2026-10-23--public-cloud-run-service-via-f7-public-true-deploy-cloud-run-reads-the-invoker-back-v510-rca)
 - `2026-10-22` — [sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)](#2026-10-22--sync-bundle-key-is-merge-only-remove_keys-replaces-mode-and-confirm_removed-v500)
 - `2026-10-22` — [bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)](#2026-10-22--bootstrap-cf-service-environment-input--environment-scoped-wif-trust-rca)
@@ -245,6 +246,18 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-23 — bootstrap-cf-service: pre-flight authorized domains before any mapping change; retry the retarget smoke probe
+
+**Symptom.** A consumer's hostname served nothing for about 2.5 h after a `retarget_from` run; the service itself stayed healthy. The run deleted the live mapping, then `domain-mappings create` failed with `run.authorizeddomains.list` denied; after the grant it failed again ("domain does not appear to be verified ... no verified domains"). A later single smoke probe, right after CertificateProvisioned, got curl rc=35 (TLS handshake) and failed a run whose move had worked.
+
+**Root cause.** (1) The documented permission list omitted `run.authorizeddomains.list`, which `domain-mappings create` needs. (2) The docs never said the calling account must be a Search Console **Owner** (not a "Full" user) of the base domain; every earlier mapping had been made by a human Owner, and verification is per account, not per project. (3) The re-target deletes before anything proves the caller can create. Contributing: a single-shot probe fails while the edge is still serving the new cert.
+
+**Why it wasn't caught.** The consumer's role tests asserted the documented list; dry-run exercised no permission; first live use was a production hostname; ownership lives outside IAM.
+
+**Fix.** Docs and header list `run.authorizeddomains.list` plus a "Domain ownership is not IAM" section. A new pre-flight step (dns-only, retarget or not, also on dry run) GETs `run.googleapis.com/v1/projects/<p>/locations/<r>/authorizeddomains` with the caller's token, asserts HTTP 200, and refuses unless a listed domain equals the hostname or is a dot-suffix parent of it (missing `domains` key = empty). The retarget smoke probe retries connection/TLS failures every 15 s for up to 10 min (env `PROBE_TIMEOUT`/`PROBE_INTERVAL`, for tests); a wrong status after connecting still fails at once. Side effect: the probe no longer builds "000000" from curl's `-w` output plus `|| echo 000`, so the non-retarget "no response yet" warning now actually fires.
+
+**Prevention.** "Caller cannot create the mapping" is now a pre-flight failure with nothing deleted. Tests cover the parent-domain match (including `notexample.com`), 403, empty list, and the probe retry matrix. UNVERIFIED: the endpoint's behaviour for an account with no domains is taken as `{}` per a live observation, not documented by Google. Non-retarget runs keep their single-shot probe (warn on no response), unchanged by design.
 
 ## 2026-10-23 — Public Cloud Run service via F7 public: true; deploy-cloud-run reads the invoker back (v5.1.0, RCA)
 
