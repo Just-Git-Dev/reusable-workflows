@@ -83,6 +83,7 @@ resource scope:
 |---|---|
 | `run.services.get` | Resolving the `*.run.app` URL (`roles/run.viewer` covers it) |
 | `run.domainmappings.create`, `run.domainmappings.get` | `mode: dns-only` (needs a custom role, below) |
+| `run.authorizeddomains.list` | `mode: dns-only`: `domain-mappings create` calls it, and the pre-flight reads the same list (see [Domain ownership](#domain-ownership-is-not-iam)) |
 | `run.domainmappings.delete`, `run.services.get` | `retarget_from` only: the delete, and the pre-flight read of the target service |
 
 Never grant `roles/run.admin` for this. A custom role carrying exactly the verbs above is enough:
@@ -90,10 +91,29 @@ Never grant `roles/run.admin` for this. A custom role carrying exactly the verbs
 ```bash
 gcloud iam roles create domainMappingBootstrap --project=<project> \
   --title="Domain mapping bootstrap" \
-  --permissions=run.services.get,run.domainmappings.get,run.domainmappings.create,run.domainmappings.delete
+  --permissions=run.services.get,run.domainmappings.get,run.domainmappings.create,run.authorizeddomains.list,run.domainmappings.delete
 ```
 
 Leave `run.domainmappings.delete` off the role of a caller that never sets `retarget_from`.
+
+### Domain ownership is not IAM
+
+Granting every permission above is **not enough** for `mode: dns-only`. Cloud Run only lets an
+account map a hostname whose base domain that account has verified. The calling service
+account must be a verified **Owner** of the base domain in Google Search Console (a "Full" or
+"Restricted" user is not enough). Verification is per **account**, not per project: a domain
+verified by a human in the same project does not cover the service account.
+
+To add it: Search Console, pick the domain property, Settings, Users and permissions, the
+three-dot menu next to an existing owner, Manage property owners, Add an owner, and enter the
+service account's email.
+
+The workflow checks this before it changes any mapping (see the pre-flight below): it reads
+`GET https://run.googleapis.com/v1/projects/<project>/locations/<region>/authorizeddomains`
+with the caller's token and refuses unless a listed domain equals the hostname or is a parent
+of it (`example.com` covers `api.example.com` and `sub.api.example.com`, not
+`notexample.com`). A missing `domains` key means the caller has verified nothing. A 403 names
+`run.authorizeddomains.list`.
 
 A `proxied` caller that passes `cloud_run_url` explicitly needs **no GCP access**: leave
 `wif_provider`/`service_account` empty and no auth step runs at all.
@@ -122,6 +142,10 @@ The sequence:
 1. **Pre-flight (nothing is deleted if it fails).** The target `service` exists, its latest
    revision is Ready, that revision serves 100% of traffic, and its own `*.run.app` URL
    answers `smoke_path` with `smoke_status` (default `200`; the status code is asserted).
+   A second pre-flight step proves the caller can create the new mapping: its authorized
+   domains list (see [Domain ownership](#domain-ownership-is-not-iam)) must cover the
+   hostname. Without it the delete would succeed and the create would fail, leaving the
+   hostname down.
 2. **Converge.** The live mapping's `routeName` must equal `retarget_from`. Then the mapping
    is deleted and created for `service`. If it is already on `service` the run is a no-op, so
    a re-run is safe. Any *third* service still refuses, exactly as without the input.
@@ -129,8 +153,10 @@ The sequence:
    a timeout **fails** (non-remap runs still only warn), and the wait runs even if
    `wait_for_certificate` is `false`. Default is 1800 s (30 min); set `3600` if you want 60
    min, and raise `timeout_minutes` above it (default 40).
-4. **Probe** `https://<hostname><smoke_path>`; anything but the expected status, or no
-   response, fails the run.
+4. **Probe** `https://<hostname><smoke_path>`. The edge can lag the `CertificateProvisioned`
+   condition by a few seconds, so a connection or TLS failure is treated as "not yet" and
+   retried every 15 s for up to 10 min. A status other than the expected one after a
+   successful connection fails at once; so does exhausting the window.
 
 **Expect an outage.** Between the delete and the first good probe the hostname serves
 nothing, because the managed cert is re-issued. The step summary records the window (delete
@@ -148,7 +174,8 @@ gcloud beta run domain-mappings create --service=<retarget_from> --domain=<host>
 ```
 
 **Dry run** prints the plan (the current `routeName`, the target's readiness, the delete and
-create that would happen) and writes nothing. The pre-flight is read-only, so it still runs.
+create that would happen) and writes nothing. The pre-flights are read-only, so they still run (the authorized-domains check also runs on a
+dry run of a first create).
 
 **CAA.** The zone's (and hostname's) CAA records are read; if any exist and none allows
 `pki.goog`, a warning is emitted, since Google could not then issue the new cert. This check

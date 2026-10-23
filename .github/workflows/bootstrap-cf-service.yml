@@ -26,9 +26,11 @@ name: Bootstrap a public hostname for a Cloud Run service (reusable)
 # be held at resource scope):
 #   run.services.get                                    (resolve the *.run.app URL)
 #   run.domainmappings.create|get                       (mode: dns-only only)
+#   run.authorizeddomains.list                          (mode: dns-only only; create needs it)
 #   run.domainmappings.delete                           (retarget_from only)
 # `roles/run.viewer` covers the first; the domain-mapping verbs need a custom role (see
-# docs/bootstrap-cf-service.md; never `roles/run.admin`). A `proxied` caller that passes cloud_run_url explicitly needs no GCP access
+# docs/bootstrap-cf-service.md; never `roles/run.admin`). IAM is not enough for dns-only: the
+# account must also be a verified Search Console OWNER of the hostname's base domain (docs). A `proxied` caller that passes cloud_run_url explicitly needs no GCP access
 # at all — leave wif_provider/service_account empty and no auth step runs.
 #
 # Cloudflare API token scopes:
@@ -305,6 +307,39 @@ jobs:
           [ "$code" = "$want" ] || fail "$probe returned HTTP $code, want $want."
           echo "Pre-flight ok: $SERVICE is Ready on $latest, 100% traffic, $probe -> HTTP $code"
 
+      - name: Pre-flight the domain-mapping permission and ownership
+        # `domain-mappings create` needs run.authorizeddomains.list AND a caller that is a
+        # verified owner of the hostname's base domain (ownership is per account, outside IAM).
+        # Read-only, so it also runs on a dry run, and before any mapping is deleted.
+        if: inputs.mode == 'dns-only'
+        env:
+          HOST:    ${{ inputs.hostname }}
+          REGION:  ${{ inputs.gcp_region }}
+          PROJECT: ${{ inputs.gcp_project }}
+          SA:      ${{ inputs.service_account }}
+        run: |
+          fail() { echo "::error::Pre-flight: $1 Nothing was deleted." >&2; exit 1; }
+          token=$(gcloud auth print-access-token 2>/dev/null) || token=""
+          [ -n "$token" ] || fail "could not get an access token for $SA."
+          resp=$(mktemp)
+          code=$(curl -sS -o "$resp" -w '%{http_code}' --max-time 30 \
+                   -H "Authorization: Bearer $token" \
+                   "https://run.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/authorizeddomains" \
+                   || true)
+          if [ "$code" != "200" ]; then
+            fail "listing authorized domains returned HTTP ${code:-000}; grant $SA the permission run.authorizeddomains.list (domain-mappings create needs it)."
+          fi
+          covered=false
+          while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            if [ "$HOST" = "$d" ] || [ "${HOST%."$d"}" != "$HOST" ]; then covered=true; break; fi
+          done < <(jq -r '.domains[]?.id // empty' "$resp")
+          if [ "$covered" != "true" ]; then
+            listed=$(jq -r '[.domains[]?.id] | join(", ")' "$resp")
+            fail "no verified domain of $SA covers $HOST (verified: ${listed:-none}). Add $SA as a verified OWNER (not a Full user) of the base domain of $HOST in Google Search Console: Settings, Users and permissions, Manage property owners, Add an owner."
+          fi
+          echo "Pre-flight ok: $SA has a verified domain covering $HOST"
+
       - name: Resolve the Cloudflare zone id
         id: zone
         env:
@@ -548,11 +583,23 @@ jobs:
           RETARGET_FROM: ${{ inputs.retarget_from }}
         run: |
           url="https://${HOST}${PATH_}"
-          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo "000")
+          probe() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$1" || true; }
+          code=$(probe "$url")
+          code="${code:-000}"
           if [ -n "$RETARGET_FROM" ]; then
             # The old service is unmapped: a probe that does not return the expected status
-            # is a down hostname, so it fails (no "still propagating" pass).
+            # is a down hostname, so it fails (no "still propagating" pass). The edge can lag
+            # CertificateProvisioned by seconds (curl rc 35, TLS handshake), so a failure to
+            # CONNECT is "not yet" and retried inside a bounded window; a status after
+            # connecting is final. PROBE_TIMEOUT/PROBE_INTERVAL exist for tests.
             want="${WANT:-200}"
+            deadline=$(( $(date +%s) + ${PROBE_TIMEOUT:-600} ))
+            while [ "$code" = "000" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+              echo "No response yet from $url (connection/TLS not up) — retrying in ${PROBE_INTERVAL:-15}s"
+              sleep "${PROBE_INTERVAL:-15}"
+              code=$(probe "$url")
+              code="${code:-000}"
+            done
             if [ "$code" != "$want" ]; then
               echo "::error::$url returned HTTP $code, want $want, after the re-target." >&2
               exit 1
