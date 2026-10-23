@@ -369,6 +369,17 @@ def schema_env_secret_is_the_boolean_true_only_on_a_cloud_run_entry():
     assert "env_secret" in s, "schemas/repos.v1.json does not know env_secret"
 
 
+@case
+def schema_public_is_the_boolean_true_only():
+    # v5.1.0: `public: true` asks F7 for allUsers roles/run.invoker; there is no other value
+    rc, out, err = run("register", reg([_deploy(public=True)]))
+    assert rc == 0, f"public: true refused: {err!r}"
+    for bad in ("true", "yes", False, 1, None, [], {}):
+        rc, out, err = run("register", reg([_deploy(public=bad)]))
+        assert rc == 1 and out.strip() == "" and "public" in err, (bad, rc, err[:200])
+    assert '"public"' in json.dumps(_schema()), "schemas/repos.v1.json does not know public"
+
+
 # ---------------------------------------------------------------- F2 create
 
 @case

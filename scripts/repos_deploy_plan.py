@@ -20,6 +20,8 @@ FEATURE = "deploy-scope"
 RUN_DEV = "roles/run.developer"
 SA_USER = "roles/iam.serviceAccountUser"
 GAR_WRITER = "roles/artifactregistry.writer"
+RUN_INVOKER = "roles/run.invoker"
+ALL_USERS = "allUsers"
 MIN_SA_LEN = 6
 MAX_SA_LEN = 30
 
@@ -38,7 +40,7 @@ def held(policy_entries, role, member):
 def plan_repo(repo, mode, state, errors, admin_email):
     name = repo["name"]
     project = state.get("project_id")
-    writes = []  # (verb, details) in apply order; the verbs that are never applied as drift come last
+    writes = []  # (verb, details) in apply order; needs-jgd/unsupported/drift pass through in any mode
     for d in repo.get("deploys") or []:
         if "gke" in d:
             # ruling 19: GKE is deferred; no kubectl path exists, so the entry is only reported
@@ -64,9 +66,9 @@ def plan_repo(repo, mode, state, errors, admin_email):
             continue
         member = "serviceAccount:%s@%s.iam.gserviceaccount.com" % (deployer, project)
 
-        def bind(rtype, res, role, iam, region=None):
-            if not held(iam, role, member):
-                det = {"resource_type": rtype, "resource": res, "role": role, "member": member}
+        def bind(rtype, res, role, iam, region=None, mem=member):
+            if not held(iam, role, mem):
+                det = {"resource_type": rtype, "resource": res, "role": role, "member": mem}
                 if region:
                     det["region"] = region      # from the register: no live lookup is ever needed
                 writes.append(("add-resource-binding", det))
@@ -84,6 +86,15 @@ def plan_repo(repo, mode, state, errors, admin_email):
             continue
         services = state.get("cloud_run_services") or {}
         svc = services.get(deployable)
+        # F7 never removes a grant (owner Q1, 2026-10-23): a public service whose entry is not
+        # `public: true` is reported in every mode, and a person removes the grant
+        if svc is not None and d.get("public") is not True and held(svc.get("iam"), RUN_INVOKER, ALL_USERS):
+            writes.append(("drift", {
+                "would": "remove-public-invoker", "resource_type": "run.service",
+                "resource": deployable, "region": region, "role": RUN_INVOKER, "member": ALL_USERS,
+                "reason": "the service is public but its register entry has no `public: true`; "
+                          "F7 never removes a grant: remove allUsers roles/run.invoker by hand "
+                          "or add `public: true`"}))
         sa = (state.get("service_accounts") or {}).get(runtime) or {}
         runtime_email = "%s@%s.iam.gserviceaccount.com" % (runtime, project)
         admin_member = "serviceAccount:%s" % admin_email
@@ -98,6 +109,10 @@ def plan_repo(repo, mode, state, errors, admin_email):
                     "service": deployable, "region": region,
                     "runtime_service_account": runtime, "image": "placeholder"}))
             bind("run.service", deployable, RUN_DEV, (svc or {}).get("iam"), region)
+            # `public: true`: F7 is the one writer of who may CALL a service; the deployer's
+            # run.developer cannot set a service policy, so `--allow-unauthenticated` on deploy is inert
+            if d.get("public") is True:
+                bind("run.service", deployable, RUN_INVOKER, (svc or {}).get("iam"), region, ALL_USERS)
             gar = d.get("image_repository")
             if gar:
                 bind("artifactregistry.repository", gar, GAR_WRITER,
@@ -116,7 +131,7 @@ def plan_repo(repo, mode, state, errors, admin_email):
 
     out = []
     for verb, details in writes:
-        if verb in ("unsupported", "needs-jgd") or mode == "enforce":
+        if verb in ("unsupported", "needs-jgd", "drift") or mode == "enforce":
             out.append(act(name, verb, details))
         else:
             out.append(act(name, "drift", dict(would=verb, **details)))

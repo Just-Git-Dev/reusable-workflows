@@ -445,8 +445,79 @@ def image_cases():
     check("verify fails on an empty digest answer", r["rc"] != 0, r["out"])
 
 
+PUBLIC_STEP = "Check public access"
+
+
+def _policy_stub(policy=None, fail=False):
+    if fail:
+        return ('if [ "$1 $2 $3" = "run services get-iam-policy" ]; then '
+                'echo "ERROR: (gcloud.run.services.get-iam-policy) PERMISSION_DENIED" >&2; exit 1; fi')
+    return ('if [ "$1 $2 $3" = "run services get-iam-policy" ]; then cat <<\'JSON\'\n'
+            + json.dumps(policy) + '\nJSON\nfi')
+
+
+def public_cases():
+    # v5.1.0 (owner Q2, 2026-10-23): `--allow-unauthenticated` is checked against the real policy
+    # after the deploy; gcloud's warning wording is never grepped
+    print("\ndeploy-cloud-run v5.1 · read-back of --allow-unauthenticated")
+    doc = yaml.safe_load(DEPLOY.read_text())
+    names = [s.get("name") for s in doc["jobs"]["deploy"]["steps"]]
+    step = next((s for s in doc["jobs"]["deploy"]["steps"] if s.get("name") == PUBLIC_STEP), None)
+    check(f"step '{PUBLIC_STEP}' exists", step is not None, "(not implemented yet)")
+    if step is None:
+        return
+    # critic: a failing check must not skip the Deployment marker / manifest / URL after the deploy
+    check("it is the job's last step", names[-1] == PUBLIC_STEP, names)
+    cond = str(step.get("if", ""))
+    check("it is skipped on dry_run and build_only",
+          "!inputs.dry_run" in cond and "!inputs.build_only" in cond, cond)
+    body = step["run"]
+    public = {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]},
+                           {"role": "roles/run.developer", "members": ["serviceAccount:d@p.iam"]}]}
+    private = {"bindings": [{"role": "roles/run.developer", "members": ["serviceAccount:d@p.iam"]}]}
+    wrong_role = {"bindings": [{"role": "roles/run.viewer", "members": ["allUsers"]}]}
+    flags = "--memory=512Mi\n--allow-unauthenticated\n"
+
+    def go(policy=None, fail=False, mode="deploy", deploy_flags=flags, extra=""):
+        return run_body(body, {"MODE": mode, "DEPLOY_FLAGS": deploy_flags, "EXTRA": extra},
+                        gcloud=_policy_stub(policy, fail))
+
+    r = go(public)
+    check("flag + allUsers invoker held: passes", r["rc"] == 0, r["out"])
+    check("flag + held: reads the policy of THIS service once",
+          r["calls"].splitlines() == ["gcloud run services get-iam-policy svc --project=p --region=r "
+                                      "--format=json"], r["calls"])
+    r = go(private)
+    check("flag + invoker missing: fails", r["rc"] != 0, r["out"])
+    check("flag + invoker missing: message names F7 `public: true`",
+          "public: true" in r["out"] and "repos-deploy-scope" in r["out"], r["out"])
+    r = go(wrong_role)
+    check("flag + allUsers with another role only: fails", r["rc"] != 0, r["out"])
+    r = go(fail=True)
+    check("flag + unreadable policy: fails (never passes on an unread policy)", r["rc"] != 0, r["out"])
+    r = go(public, deploy_flags="", extra="--allow-unauthenticated --cpu=1")
+    check("legacy extra_deploy_flags carrying the flag: policy read", "get-iam-policy" in r["calls"],
+          r["calls"] or r["out"])
+    r = go(private, deploy_flags="", extra="--cpu=1 --allow-unauthenticated")
+    check("legacy flag + invoker missing: fails", r["rc"] != 0, r["out"])
+    r = go(private, deploy_flags="--no-allow-unauthenticated\n--allow-unauthenticated\n")
+    check("--no-… then --allow-…: the last one wins, policy read, fails", r["rc"] != 0
+          and "get-iam-policy" in r["calls"], (r["rc"], r["calls"]))
+    for label, kw in (("flag absent", {"deploy_flags": "--memory=512Mi\n"}),
+                      ("--allow-… then --no-…: the last one wins",
+                       {"deploy_flags": "--allow-unauthenticated\n--no-allow-unauthenticated\n"}),
+                      ("--allow-… in deploy_flags, --no-… in the legacy string after it",
+                       {"extra": "--no-allow-unauthenticated"}),
+                      ("only --no-allow-unauthenticated", {"deploy_flags": "--no-allow-unauthenticated\n"}),
+                      ("update-image ignores deploy flags", {"mode": "update-image"})):
+        r = go(private, **kw)
+        check(f"{label}: passes with no policy read", r["rc"] == 0 and r["calls"] == "",
+              (r["rc"], r["calls"], r["out"][:200]))
+
+
 def main():
-    for fn in (input_cases, image_cases, render_cases, pin_cases, label_cases, manifest_cases, forward_cases):
+    for fn in (input_cases, image_cases, render_cases, pin_cases, label_cases, manifest_cases, forward_cases,
+               public_cases):
         fn()
     pin = extract_step(PIN)
     if pin is not None:

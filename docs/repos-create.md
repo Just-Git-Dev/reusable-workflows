@@ -14,7 +14,7 @@ decision is `scripts/repos_plan.py --feature create`.
 | `skip` | the repo exists (`exists`), or the rename is already done | nothing |
 | `in-sync` | an existing repo with nothing to create | nothing |
 
-It never deletes, archives or makes a repo public (`public` is refused at validation), never renames
+It never deletes, archives or makes a repo public (`visibility: public` is refused at validation), never renames
 without `rename_from`, and refuses the whole run when both the old and the new name exist.
 The register's `default_branch` is carried in the `create-repo` entry, but a branch cannot exist in
 an empty repo: the first push creates it, and [F3](repos-settings.md) reports a default branch that

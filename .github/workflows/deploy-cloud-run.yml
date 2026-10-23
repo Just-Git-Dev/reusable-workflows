@@ -787,3 +787,42 @@ jobs:
               echo "- Service URL: $URL"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # LAST step on purpose: the revision is already serving, so a failure here must not skip
+      # the Deployment marker, the manifest or the URL (the forward-only guard reads the marker).
+      - name: Check public access
+        if: ${{ !inputs.build_only && !inputs.dry_run }}
+        env:
+          SERVICE: ${{ inputs.service }}
+          PROJECT: ${{ inputs.gcp_project }}
+          REGION: ${{ inputs.gcp_region }}
+          MODE: ${{ inputs.deploy_mode }}
+          DEPLOY_FLAGS: ${{ inputs.deploy_flags }}
+          EXTRA: ${{ inputs.extra_deploy_flags }}
+        run: |
+          # `--allow-unauthenticated` needs run.services.setIamPolicy, which the deployer's
+          # run.developer lacks: gcloud then only warns and exits 0, and the service answers 403.
+          # So read the real policy back; never trust (or grep) gcloud's output.
+          [ "$MODE" = "deploy" ] || exit 0
+          # the last of --allow-unauthenticated / --no-allow-unauthenticated decides, legacy flags last
+          # as in the deploy step
+          want=false
+          # shellcheck disable=SC2086  # legacy input: the deploy step word-splits it the same way
+          while IFS= read -r flag; do
+            case "$flag" in
+              --allow-unauthenticated) want=true ;;
+              --no-allow-unauthenticated) want=false ;;
+            esac
+          done < <(printf '%s\n' "$DEPLOY_FLAGS"; printf '%s\n' $EXTRA)
+          [ "$want" = true ] || exit 0
+          policy="$(gcloud run services get-iam-policy "$SERVICE" --project="$PROJECT" --region="$REGION" --format=json)" || {
+            echo "::error::could not read the IAM policy of $SERVICE to confirm --allow-unauthenticated took effect" >&2
+            exit 1
+          }
+          if jq -e '[.bindings[]? | select(.role=="roles/run.invoker") | .members[]?] | index("allUsers")' \
+               <<< "$policy" > /dev/null; then
+            echo "$SERVICE is public: allUsers holds roles/run.invoker"
+            exit 0
+          fi
+          echo "::error::$SERVICE is NOT public: deploy_flags asks for --allow-unauthenticated but allUsers does not hold roles/run.invoker (the deployer cannot set a service policy, so gcloud only warned). The new revision IS live. Add \`public: true\` to this service's deploys entry in the org's project repos.yaml and run repos-deploy-scope (F7) there; see docs/deploy-cloud-run.md, 'Public services'." >&2
+          exit 1

@@ -177,6 +177,13 @@ jobs:
             --register "$REGISTER" --state state.json \
             --repo-admin-sa-email "$REPO_ADMIN_SA_EMAIL" > plan.json
           echo "actions: $(jq length plan.json)"
+          # read from the register directly, NOT from the planner: Apply makes a service public only
+          # if it is listed here, so a planner bug cannot open any other service to the internet
+          python3 -c 'import json, os, yaml
+          reg = yaml.safe_load(open(os.environ["REGISTER"])) or {}
+          print(json.dumps(sorted({d["cloud_run"] for r in reg.get("repos") or [] for d in r.get("deploys") or []
+                                   if isinstance(d, dict) and d.get("cloud_run") and d.get("public") is True})))' > public.json
+          echo "public services in the register: $(jq -c . public.json)"
 
       - name: Report
         run: |
@@ -192,6 +199,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           jq -r '.[] | select(.action=="unsupported") | "::warning::\(.repo): \(.details.key): \(.details.reason)"' plan.json
           jq -r '.[] | select(.action=="needs-jgd") | "::warning::\(.repo): needs an access-provisioning change on \(.details.resource): \(.details.needs)"' plan.json
+          jq -r '.[] | select(.action=="drift" and .details.would=="remove-public-invoker") | "::warning::\(.repo): Cloud Run service \(.details.resource) is PUBLIC (allUsers roles/run.invoker) but its register entry has no public: true; F7 never removes it, a person must"' plan.json
           [ "$examined" != "0" ] || echo "::warning::the register lists no repos; nothing was examined"
 
       - name: Apply (write actions, in order)
@@ -200,16 +208,25 @@ jobs:
           echo "write actions to apply: $writes"
           # Re-check the WHOLE plan before the first write: an unknown verb (there is no kubectl or
           # k8s verb any more), a role/resource pair outside the allow-list, a member that is not a
-          # service account, or a name of the wrong shape fails with nothing applied.
+          # service account, or a name of the wrong shape fails with nothing applied. The one
+          # non-SA member is `public: true`'s exact shape: allUsers roles/run.invoker on a run.service.
           bad=$(jq '[.[] | select(.action as $a | ["in-sync","skip","drift","unsupported","needs-jgd","create-service","add-resource-binding"] | index($a) | not)] | length' plan.json)
           [ "$bad" = "0" ] || { echo "::error::plan holds $bad action(s) outside the allow-list; nothing applied"; exit 1; }
           badbind=$(jq '[.[] | select(.action=="add-resource-binding") | select(
-              ((.details.resource_type=="run.service" and .details.role=="roles/run.developer"
+              (.details.resource_type=="run.service"
                   and (.details.resource | test("\\A[a-z]([-a-z0-9]{0,61}[a-z0-9])?\\z"))
-                  and ((.details.region // "") | test("\\A[a-z]+-[a-z]+[0-9]\\z")))
-               or (.details.resource_type=="artifactregistry.repository" and .details.role=="roles/artifactregistry.writer"))
-              and (.details.member | startswith("serviceAccount:")) | not)] | length' plan.json)
+                  and ((.details.region // "") | test("\\A[a-z]+-[a-z]+[0-9]\\z"))
+                  and ((.details.role=="roles/run.developer" and (.details.member | startswith("serviceAccount:")))
+                       or (.details.role=="roles/run.invoker" and .details.member=="allUsers")))
+              or (.details.resource_type=="artifactregistry.repository" and .details.role=="roles/artifactregistry.writer"
+                  and (.details.member | startswith("serviceAccount:"))) | not)] | length' plan.json)
           [ "$badbind" = "0" ] || { echo "::error::refusing $badbind binding(s) outside the role/resource allow-list; nothing applied"; exit 1; }
+          # an allUsers binding needs the service's register entry to say `public: true` (public.json,
+          # written by the Plan step from the register); no file = no service may be made public
+          [ -f public.json ] || echo '[]' > public.json
+          badpub=$(jq --slurpfile pub public.json '[.[] | select(.action=="add-resource-binding"
+              and .details.member=="allUsers") | select(.details.resource as $r | $pub[0] | index($r) | not)] | length' plan.json)
+          [ "$badpub" = "0" ] || { echo "::error::refusing $badpub allUsers binding(s) on a service whose register entry is not public: true; nothing applied"; exit 1; }
           badsvc=$(jq '[.[] | select(.action=="create-service") | select(
               (.details.service | test("\\A[a-z]([-a-z0-9]{0,61}[a-z0-9])?\\z"))
               and (.details.region | test("\\A[a-z]+-[a-z]+[0-9]\\z"))

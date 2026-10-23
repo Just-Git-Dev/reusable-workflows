@@ -2,8 +2,9 @@
 
 ## Index
 
-128 entries total — 118 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+129 entries total — 119 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-23` — [Public Cloud Run service via F7 public: true; deploy-cloud-run reads the invoker back (v5.1.0, RCA)](#2026-10-23--public-cloud-run-service-via-f7-public-true-deploy-cloud-run-reads-the-invoker-back-v510-rca)
 - `2026-10-22` — [sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)](#2026-10-22--sync-bundle-key-is-merge-only-remove_keys-replaces-mode-and-confirm_removed-v500)
 - `2026-10-22` — [bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)](#2026-10-22--bootstrap-cf-service-environment-input--environment-scoped-wif-trust-rca)
 - `2026-10-21` — [RCA: release stamp skipped action pins inside workflows](#2026-10-21--rca-release-stamp-skipped-action-pins-inside-workflows)
@@ -244,6 +245,58 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-23 — Public Cloud Run service via F7 public: true; deploy-cloud-run reads the invoker back (v5.1.0, RCA)
+
+**Decision.** A Cloud Run service is made public by F7 (`repos-deploy-scope`), from a new
+`public: true` key on its `deploys` entry, and `deploy-cloud-run` now reads the service policy back
+when `deploy_flags` asks for `--allow-unauthenticated`. Additive, v5.1.0.
+
+**Why F7 owns it.** F7 already writes the service's resource-level IAM as `repo-admin`, from the
+org's `project` repo under environment `repo-admin`, which is also where the domain mapping runs.
+The access-provisioning side models no service bindings. The service repo's deployer holds
+`run.developer` on its own service: it can read who may call the service (`getIamPolicy`) but not
+change it (no `setIamPolicy`). Giving it `run.admin` would let every service repo open itself to the
+internet, so the grant stays with the one writer. No new verb: the grant is an `add-resource-binding`
+of `run.service` + `roles/run.invoker` + `allUsers`, the only non-service-account member the apply
+step accepts, so "no verb makes anything public" still holds.
+
+**Turning `public` off (owner Q1, 2026-10-23).** F7 never removes a grant. A service where `allUsers`
+holds `roles/run.invoker` but whose entry has no `public: true` is `drift{would:
+"remove-public-invoker"}` in every mode, with a run warning, and a person removes it. The fetch step
+already read the service policy, so no new read was needed.
+
+**Read-back, not a grep (owner Q2, 2026-10-23).** The check reads the real policy and fails unless
+`allUsers` holds `roles/run.invoker`; an unreadable policy fails too. Grepping gcloud's warning would
+break the day the wording changes, and would miss any other reason the policy did not take.
+
+**Review fixes (critic, 2026-10-23).** (1) The check is the job's LAST step: the revision is already
+serving when it runs, and a failure placed earlier skipped the Deployment marker the forward-only
+guard reads, so a later older deploy would have passed as forward. (2) The last of
+`--allow-unauthenticated` / `--no-allow-unauthenticated` decides, so an override is not a false
+failure. (3) Defence in depth: the Plan step lists the register's `public: true` services into
+`public.json` straight from the register, and the apply step refuses an `allUsers` binding on any
+other service, so a planner bug cannot open an unlisted service (before this, the worst planner bug
+could only grant a service account `run.developer`).
+
+**RCA: deploy-cloud-run went green on a service that answered 403 to every request.**
+
+- **Symptom.** Consumer B's new service deployed green with `--allow-unauthenticated` in
+  `deploy_flags`, and every request got 403.
+- **Root cause.** The workflow assumed `gcloud run deploy --allow-unauthenticated` either sets the
+  policy or fails. With a deployer that lacks `run.services.setIamPolicy` (F7's deployer holds only
+  `run.developer`: 89 permissions, `getIamPolicy` present, `setIamPolicy` absent), gcloud prints a
+  warning and exits 0. Separately, F7 creates every service with `--no-allow-unauthenticated` and
+  had no way to say a service should be public, so there was no sanctioned path at all.
+- **Why it wasn't caught.** The step tests stub gcloud and check the argv sent, never the state that
+  results. Nobody checked the flag against the permissions of the deployer F7 creates.
+- **Fix.** F7 `public: true` grants the invoker binding; deploy-cloud-run's new step "Check public
+  access" reads the policy after the deploy and fails with the fix (`public: true`, run F7 from the
+  `project` repo).
+- **Prevention.** Tests: `tests/run_repos_deploy_plan_tests.py` (`public_*`, `q1_*`),
+  `tests/run_repos_apply_step_tests.py` (the invoker shape and seven refused neighbours),
+  `tests/run_deploy_env_tests.py` (`public_cases`). Rule for new steps: when a cloud CLI can
+  "succeed" with a warning, check the resulting state, not the exit code.
 
 ## 2026-10-22 — sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)
 
