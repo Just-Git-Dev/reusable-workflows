@@ -264,8 +264,7 @@ rejected until the following day's rotation. The old doc line called this case s
 fix (pending recorded, env write failed: the sync would ship the OLD value, promote the new slot, retire the
 old one). Why it was not caught: tests drove each script with hand-injected state, so no test followed the
 failure of one step into the next run's decision. Fix: the state carries a `phase`. `pending` and `phase=put`
-are recorded before the PUT, `phase=env` after the environment write. `pending` with `put` (or no `phase`,
-old format) is the new branch `resume-put`: a Worker secret cannot be read back, so it generates a fresh
+are recorded before the PUT, `phase=env` after the environment write. `pending` with `put` is the new branch `resume-put`: a Worker secret cannot be read back, so it generates a fresh
 value, overwrites (or creates) the pending slot, writes the environment secret, marks `env` and syncs.
 `pending` with `env` is the old pending-sync. Retire fires only when `pending` is empty, which now arises
 only after a promote. Residual window (documented): a service sync between the earlier env write and

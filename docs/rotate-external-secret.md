@@ -18,13 +18,13 @@ repo (`state_variable`) holds `{"current": "<slot>", "pending": "<slot or empty>
 `phase` is only present while `pending` is set: `put` means the pending slot may hold a stale or
 missing value and the service's environment secret may or may not carry the new one; `env` means
 both the Worker slot and the environment secret hold the new value. A state with `pending` but no
-`phase` (written before `phase` existed) is read as `put`.
+`phase` is refused: every state this action writes carries a phase, so it was edited by hand.
 Because the grace period (default 24 h) outlives a job (6 h at most), the old slot is retired by a
 LATER scheduled run: run the workflow daily.
 
 | State seen | Branch | What it does |
 |---|---|---|
-| `pending` set, `phase` `put` (or absent) | **resume-put** | The Worker PUT and the environment write may or may not have happened, and a Worker secret value cannot be read back. So: generate a FRESH value, PUT it into the pending slot (this overwrites it, or creates it if absent), write the environment secret, set `phase=env`, dispatch the sync, wait, promote. |
+| `pending` set, `phase` `put` | **resume-put** | The Worker PUT and the environment write may or may not have happened, and a Worker secret value cannot be read back. So: generate a FRESH value, PUT it into the pending slot (this overwrites it, or creates it if absent), write the environment secret, set `phase=env`, dispatch the sync, wait, promote. |
 | `pending` set, `phase` `env` | **pending-sync** | Dispatch the service sync again, wait up to `wait_minutes`. Success: `current=pending`, `pending=""`, `phase` cleared, `rotated_at=now`. Failure: fail the run, change nothing. The pending slot must exist on the Worker, else refuse. |
 | both slots exist, nothing pending, `now - rotated_at >= grace_hours` | **retire** | DELETE the slot that is not `current`. Both slots with nothing pending arise only after a promote, so the other slot really is the old value. |
 | both slots exist, nothing pending, grace not reached | **no-op** | Success. The summary says when the old slot retires ("retires at ..."). |
@@ -32,7 +32,7 @@ LATER scheduled run: run the workflow daily.
 | one slot exists, `rotate_every_days` not reached | **no-op** | Success. The summary says when the next rotation is due. |
 | no state, one slot exists | **bootstrap (adopt)** | Adopt it as `current`, `rotated_at=now`. |
 | no state, no slot exists | **bootstrap (rotate)** | Rotate into `slot_a`. |
-| pending slot missing on the Worker with `phase` `env`; both slots exist and no state; state JSON unreadable; `phase` neither `put` nor `env`; any API error | **refuse** | Fail closed, nothing changed. The error says what to check. |
+| pending slot missing on the Worker with `phase` `env`; both slots exist and no state; state JSON unreadable; `pending` with no `phase`, or a `phase` neither `put` nor `env`; any API error | **refuse** | Fail closed, nothing changed. The error says what to check. |
 
 The intent is recorded BEFORE the first write. If the run dies at any point after `pending` is
 written, the next run sees `pending` and never retires anything, because retire runs only when
@@ -40,9 +40,11 @@ written, the next run sees `pending` and never retires anything, because retire 
 
 - Failure after the PUT and before `phase=env`: `phase` is still `put`, so the next run takes
   **resume-put**, which replaces whatever the slot and the environment secret hold with one fresh
-  value and re-syncs. The remaining window: a service sync that ran between the earlier environment
-  write and resume-put shipped a value that resume-put then replaces; the sync that resume-put
-  dispatches immediately afterwards fixes it.
+  value and re-syncs. **Accepted residual window**, which needs three faults together: the earlier
+  environment write was stored, `Mark env written` was lost, AND a sync this workflow did not start
+  shipped that earlier value (value1) in between. After resume-put, value1 is in no Worker slot until
+  a sync succeeds: resume-put's own sync, or a later daily pending-sync if that one fails. It cannot
+  be closed, because a Worker secret cannot be read back to compare.
 - Failure in dispatch, wait or promote: `phase` is `env`, so **pending-sync** re-dispatches only.
 
 Either way the old value stays valid until a successful promote plus the grace period.
@@ -99,7 +101,9 @@ mints one token scoped to exactly those two repos.
    identity, and a Worker secret value cannot be read). A sync that only plans, or whose jobs are
    skipped yet conclude "success", breaks the rotation: the new slot is promoted, the old one is
    retired after the grace period, and the signer still holds the old value. For this reason
-   `sync_inputs_json` may not carry a truthy `dry_run` key.
+   `sync_inputs_json` may not carry a truthy `dry_run` key. The sync workflow's DEFAULTS must write
+   too: a `dry_run` left out of `sync_inputs_json` falls to the sync's own default, so that default
+   must be a real write.
 
 ## Caller template
 

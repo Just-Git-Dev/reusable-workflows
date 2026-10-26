@@ -41,7 +41,7 @@ CUR=$(printf '%s' "$STATE_JSON" | jq -r .current)
 PEND=$(printf '%s' "$STATE_JSON" | jq -r .pending)
 PHASE=$(printf '%s' "$STATE_JSON" | jq -r '.phase // ""')
 if [ -n "$PEND" ]; then
-  [ -n "$PHASE" ] || PHASE=put
+  [ -n "$PHASE" ] || refuse "the state has pending (${PEND}) but no phase. Every state this action writes carries one, so check the state variable and the Worker slots."
   case "$PHASE" in put | env) ;; *) refuse "the state has phase '${PHASE}', neither put nor env. Check the state variable." ;; esac
 fi
 AT=$(printf '%s' "$STATE_JSON" | jq -r .rotated_at)
@@ -59,7 +59,7 @@ if [ -n "$CUR" ] && ! has "$CUR"; then
 fi
 
 if [ -n "$PEND" ]; then
-  # phase put (or none, an old-format state): the PUT / environment write may or may not have happened
+  # phase put: the PUT / environment write may or may not have happened
   # and a Worker secret cannot be read back, so redo both with a fresh value. Never retire here.
   if [ "$PHASE" != env ]; then
     finish resume-put "$PEND" "" "$CUR" "$AT" "a rotation into ${PEND} died before its environment secret was confirmed: writing a fresh value into ${PEND} and the environment secret, then syncing"

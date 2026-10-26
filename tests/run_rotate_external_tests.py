@@ -170,13 +170,13 @@ def decide_cases():
         ("pending slot absent, phase env -> refuse", st("SIG_A", "SIG_B", 0, "env"), "SIG_A", "refuse", {}),
         ("pending set, phase env, both slots -> pending-sync", st("SIG_A", "SIG_B", 100, "env"), "SIG_A,SIG_B", "pending-sync", {"new_slot": "SIG_B"}),
         ("bootstrap pending (current empty), phase env -> pending-sync", st("", "SIG_A", 0, "env"), "SIG_A", "pending-sync", {"new_slot": "SIG_A"}),
-        # F1: the env write may have happened, so a pending in phase put (or an old state with no phase) is redone from scratch
+        # F1: the env write may have happened, so a pending in phase put is redone from scratch
         ("pending set, phase put, slot exists -> resume-put", st("SIG_A", "SIG_B", 100, "put"), "SIG_A,SIG_B", "resume-put",
          {"new_slot": "SIG_B", "current": "SIG_A", "retire_slot": ""}),
         ("pending set, phase put, slot absent -> resume-put (creates it)", st("SIG_A", "SIG_B", 31 * D, "put"), "SIG_A", "resume-put",
          {"new_slot": "SIG_B", "current": "SIG_A"}),
-        ("pending set, no phase (old state) -> resume-put", st("SIG_A", "SIG_B", 100), "SIG_A,SIG_B", "resume-put", {"new_slot": "SIG_B"}),
-        ("pending set, no phase, slot absent -> resume-put", st("SIG_A", "SIG_B"), "SIG_A", "resume-put", {"new_slot": "SIG_B"}),
+        ("pending set, no phase -> refuse (every written state has a phase)", st("SIG_A", "SIG_B", 100), "SIG_A,SIG_B", "refuse", {}),
+        ("pending set, no phase, slot absent -> refuse", st("SIG_A", "SIG_B"), "SIG_A", "refuse", {}),
         ("bootstrap pending, phase put -> resume-put", st("", "SIG_A", 0, "put"), "", "resume-put", {"new_slot": "SIG_A"}),
         ("phase put, both slots, grace long past -> resume-put, never retire", st("SIG_A", "SIG_B", 90 * D, "put"), "SIG_A,SIG_B", "resume-put", {"new_slot": "SIG_B"}),
         ("unknown phase -> refuse", st("SIG_A", "SIG_B", 0, "bogus"), "SIG_A,SIG_B", "refuse", {}),
