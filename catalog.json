@@ -128,7 +128,7 @@
         },
         "grace_hours": {
           "default": "24",
-          "description": "Hours the old slot stays valid after a rotation. At least the longest lifetime of anything signed with the old value, plus a margin.",
+          "description": "Hours (1 to 8760) the old slot stays valid after a rotation. At least the longest lifetime of anything signed with the old value, plus a margin.",
           "required": false
         },
         "rotate_every_days": {
@@ -199,7 +199,7 @@
       },
       "name": "Rotate a secret shared with an external system (Cloudflare Worker)",
       "outputs": {
-        "action": "The branch this run took (pending-sync, retire, rotate, adopt, noop)."
+        "action": "The branch this run took (resume-put, pending-sync, retire, rotate, adopt, noop)."
       },
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/rotate-external-secret"

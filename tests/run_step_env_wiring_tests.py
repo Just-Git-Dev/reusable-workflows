@@ -38,6 +38,7 @@ OPTIONAL = {
     # `${NOW:-$(date +%s)}` / `${POLL_SECONDS:-15}`: test-injection points (fake clock, no sleep);
     # unset means the real clock and the 15 s poll, asserted by run_rotate_external_tests.py.
     ("rotate-external-secret.yml", "Record pending"): {"NOW"},
+    ("rotate-external-secret.yml", "Mark env written"): {"NOW"},
     ("rotate-external-secret.yml", "Promote pending"): {"NOW"},
     ("rotate-external-secret.yml", "Adopt slot"): {"NOW"},
     ("rotate-external-secret.yml", "Wait for sync"): {"POLL_SECONDS"},

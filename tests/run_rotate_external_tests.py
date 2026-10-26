@@ -149,8 +149,11 @@ def decide_cases():
     if body is None:
         return
 
-    def st(cur, pend="", age=0):
-        return json.dumps({"current": cur, "pending": pend, "rotated_at": NOW - age})
+    def st(cur, pend="", age=0, phase=None):
+        d = {"current": cur, "pending": pend, "rotated_at": NOW - age}
+        if phase is not None:
+            d["phase"] = phase
+        return json.dumps(d)
 
     base = {**SLOTS, "NOW": str(NOW), "ROTATE_EVERY_DAYS": "30", "GRACE_HOURS": "24", "FORCE": "false"}
     table = [
@@ -164,9 +167,20 @@ def decide_cases():
         ("current names a slot that is absent -> refuse", st("SIG_A"), "SIG_B", "refuse", {}),
         ("current is not one of the slots -> refuse", st("OTHER"), "SIG_A", "refuse", {}),
         ("pending equals current -> refuse", st("SIG_A", "SIG_A"), "SIG_A", "refuse", {}),
-        ("pending slot absent -> refuse", st("SIG_A", "SIG_B"), "SIG_A", "refuse", {}),
-        ("pending set, both slots -> pending-sync", st("SIG_A", "SIG_B", 100), "SIG_A,SIG_B", "pending-sync", {"new_slot": "SIG_B"}),
-        ("bootstrap pending (current empty) -> pending-sync", st("", "SIG_A"), "SIG_A", "pending-sync", {"new_slot": "SIG_A"}),
+        ("pending slot absent, phase env -> refuse", st("SIG_A", "SIG_B", 0, "env"), "SIG_A", "refuse", {}),
+        ("pending set, phase env, both slots -> pending-sync", st("SIG_A", "SIG_B", 100, "env"), "SIG_A,SIG_B", "pending-sync", {"new_slot": "SIG_B"}),
+        ("bootstrap pending (current empty), phase env -> pending-sync", st("", "SIG_A", 0, "env"), "SIG_A", "pending-sync", {"new_slot": "SIG_A"}),
+        # F1: the env write may have happened, so a pending in phase put (or an old state with no phase) is redone from scratch
+        ("pending set, phase put, slot exists -> resume-put", st("SIG_A", "SIG_B", 100, "put"), "SIG_A,SIG_B", "resume-put",
+         {"new_slot": "SIG_B", "current": "SIG_A", "retire_slot": ""}),
+        ("pending set, phase put, slot absent -> resume-put (creates it)", st("SIG_A", "SIG_B", 31 * D, "put"), "SIG_A", "resume-put",
+         {"new_slot": "SIG_B", "current": "SIG_A"}),
+        ("pending set, no phase (old state) -> resume-put", st("SIG_A", "SIG_B", 100), "SIG_A,SIG_B", "resume-put", {"new_slot": "SIG_B"}),
+        ("pending set, no phase, slot absent -> resume-put", st("SIG_A", "SIG_B"), "SIG_A", "resume-put", {"new_slot": "SIG_B"}),
+        ("bootstrap pending, phase put -> resume-put", st("", "SIG_A", 0, "put"), "", "resume-put", {"new_slot": "SIG_A"}),
+        ("phase put, both slots, grace long past -> resume-put, never retire", st("SIG_A", "SIG_B", 90 * D, "put"), "SIG_A,SIG_B", "resume-put", {"new_slot": "SIG_B"}),
+        ("unknown phase -> refuse", st("SIG_A", "SIG_B", 0, "bogus"), "SIG_A,SIG_B", "refuse", {}),
+        ("phase not a string -> refuse", '{"current":"SIG_A","pending":"SIG_B","phase":7,"rotated_at":5}', "SIG_A,SIG_B", "refuse", {}),
         ("both slots, grace reached (A current) -> retire B", st("SIG_A", "", 25 * H), "SIG_A,SIG_B", "retire", {"retire_slot": "SIG_B"}),
         ("both slots, grace reached (B current) -> retire A", st("SIG_B", "", 25 * H), "SIG_A,SIG_B", "retire", {"retire_slot": "SIG_A"}),
         ("both slots, grace exactly reached -> retire", st("SIG_A", "", 24 * H), "SIG_A,SIG_B", "retire", {"retire_slot": "SIG_B"}),
@@ -192,6 +206,8 @@ def decide_cases():
     check("force cannot rotate while both slots exist (no empty slot)", outs(r["outputs"]).get("action") == "noop", r["outputs"])
     r = run(body, {**base, "STATE_JSON": st("SIG_A", "", 31 * D), "PRESENT": "SIG_A,SIG_B", "FORCE": "false"})
     check("both slots past rotate_every_days: retire wins, never a second rotation", outs(r["outputs"]).get("action") == "retire", r["outputs"])
+    r = run(body, {**base, "STATE_JSON": st("SIG_A", "", 25 * H, "put"), "PRESENT": "SIG_A,SIG_B"})
+    check("a stale phase with nothing pending does not block retire", outs(r["outputs"]).get("action") == "retire", r["outputs"])
     r = run(body, {**base, "STATE_JSON": "{nope", "PRESENT": ""})
     check("a refusal prints ::error:: saying what to check", "::error::" in r["out"] and "check" in r["out"].lower(), r["out"])
 
@@ -257,14 +273,17 @@ def gh_cases():
         check("env secret: the value is not on a command line", "v4lue-xyz" not in r["calls"] + r["out"])
         r = run(pre + body, {**env, "DRY_RUN": "true"})
         check("env secret: refuses to write in dry_run", r["rc"] != 0 and "GH" not in r["calls"], r["out"])
-    for name, cur, pend, at, want in (
-            ("Record pending", "SIG_A", "SIG_B", str(NOW - 31 * D), {"current": "SIG_A", "pending": "SIG_B", "rotated_at": NOW - 31 * D}),
-            ("Promote pending", "SIG_B", "", "now", {"current": "SIG_B", "pending": "", "rotated_at": NOW}),
-            ("Adopt slot", "SIG_A", "", "now", {"current": "SIG_A", "pending": "", "rotated_at": NOW})):
+    for name, cur, pend, phase, at, want in (
+            ("Record pending", "SIG_A", "SIG_B", "put", str(NOW - 31 * D),
+             {"current": "SIG_A", "pending": "SIG_B", "phase": "put", "rotated_at": NOW - 31 * D}),
+            ("Mark env written", "SIG_A", "SIG_B", "env", str(NOW - 31 * D),
+             {"current": "SIG_A", "pending": "SIG_B", "phase": "env", "rotated_at": NOW - 31 * D}),
+            ("Promote pending", "SIG_B", "", "", "now", {"current": "SIG_B", "pending": "", "rotated_at": NOW}),
+            ("Adopt slot", "SIG_A", "", "", "now", {"current": "SIG_A", "pending": "", "rotated_at": NOW})):
         body = step(name)
         if body is None:
             continue
-        env = {**base, "STATE_CURRENT": cur, "STATE_PENDING": pend, "STATE_ROTATED_AT": at, "NOW": str(NOW)}
+        env = {**base, "STATE_CURRENT": cur, "STATE_PENDING": pend, "STATE_PHASE": phase, "STATE_ROTATED_AT": at, "NOW": str(NOW)}
         r = run(body, env)
         m = re.search(r"GH variable set ST --repo Org/project --body (\{.*\})", r["calls"])
         got = json.loads(m.group(1)) if m else None
@@ -368,11 +387,21 @@ def inputs_cases():
         check("valid inputs pass and the token repos are target + this repo",
               r["rc"] == 0 and outs(r["outputs"]).get("token_repos") == "svc,project", r["out"] + r["outputs"])
         for k, v in (("SLOT_B", "SIG_A"), ("SLOT_A", "bad name"), ("WAIT_MINUTES", "31"), ("WAIT_MINUTES", "0"),
-                     ("ROTATE_EVERY_DAYS", "x"), ("GRACE_HOURS", "-1"), ("SECRET_BYTES", "8"), ("TARGET_REPO", "a/b"),
+                     ("ROTATE_EVERY_DAYS", "x"), ("GRACE_HOURS", "-1"), ("GRACE_HOURS", "0"), ("SECRET_BYTES", "8"), ("TARGET_REPO", "a/b"),
                      ("SYNC_INPUTS_JSON", "[1]"), ("SYNC_INPUTS_JSON", '{"correlation_id":"x"}'), ("SYNC_WORKFLOW", "../x.yml"),
                      ("STATE_VARIABLE", "GITHUB_X")):
             r = run(b, {**good, k: v})
             check(f"{k}={v!r} is refused", r["rc"] != 0 and "::error::" in r["out"], r["out"])
+        r = run(b, {**good, "GRACE_HOURS": "1"})
+        check("grace_hours=1 is the accepted floor", r["rc"] == 0, r["out"])
+        # F3: the sync must really write the bundle and roll the signer; a dry_run sync only plans
+        for js in ('{"dry_run":true}', '{"dry_run":"true"}', '{"dry_run":"TRUE"}', '{"dry_run":1}', '{"dry_run":"1"}',
+                   '{"DRY_RUN":"True"}', '{"mode":"x","dry_run":"true"}'):
+            r = run(b, {**good, "SYNC_INPUTS_JSON": js})
+            check(f"sync_inputs_json {js} (truthy dry_run) is refused", r["rc"] != 0 and "dry_run" in r["out"], r["out"])
+        for js in ('{"dry_run":"false"}', '{"dry_run":false}', '{"dry_run":0}', '{"dry_run":"0"}', '{"mode":"x"}', '{}'):
+            r = run(b, {**good, "SYNC_INPUTS_JSON": js})
+            check(f"sync_inputs_json {js} is accepted", r["rc"] == 0, r["out"])
     if bools is not None:
         check("booleans true/false accepted", run(bools, {"FORCE": "false", "DRY_RUN": "true", "CONCURRENCY_DECLARED": "true"})["rc"] == 0)
         for bad in ("yes", "True", "1", ""):
@@ -386,8 +415,108 @@ def inputs_cases():
         check("the wrapper gets a ::notice::", "::notice::" in r["out"] and "::warning::" not in r["out"], r["out"])
 
 
-WRITE_STEPS = ("Generate secret", "Put Worker slot", "Write environment secret", "Record pending", "Dispatch sync",
+WRITE_STEPS = ("Generate secret", "Put Worker slot", "Write environment secret", "Record pending", "Mark env written", "Dispatch sync",
                "Promote pending", "Adopt slot", "Retire old slot")
+
+
+ALL = ("rotate", "resume-put", "pending-sync")
+ORDER = ("Generate secret", "Record pending", "Put Worker slot", "Write environment secret", "Mark env written",
+         "Dispatch sync", "Wait for sync", "Promote pending")
+# step -> the decide actions its `if:` may name (exactly; plus the dry_run gate)
+GATES = {"Generate secret": {"rotate", "resume-put"}, "Record pending": {"rotate"}, "Put Worker slot": {"rotate", "resume-put"},
+         "Write environment secret": {"rotate", "resume-put"}, "Mark env written": {"rotate", "resume-put"},
+         "Dispatch sync": set(ALL), "Wait for sync": set(ALL), "Promote pending": set(ALL), "Adopt slot": {"adopt"},
+         "Retire old slot": {"retire"}}
+DEC = "${{ steps.decide.outputs.%s }}"
+# step -> exact env wiring of what the state / Worker steps are fed
+WIRING = {
+    "Record pending": {"STATE_CURRENT": DEC % "current", "STATE_PENDING": DEC % "new_slot", "STATE_PHASE": "put", "STATE_ROTATED_AT": DEC % "rotated_at"},
+    "Mark env written": {"STATE_CURRENT": DEC % "current", "STATE_PENDING": DEC % "new_slot", "STATE_PHASE": "env", "STATE_ROTATED_AT": DEC % "rotated_at"},
+    # promote the PENDING slot (new_slot), never decide.current: that would keep the old slot as current
+    "Promote pending": {"STATE_CURRENT": DEC % "new_slot", "STATE_PENDING": "", "STATE_PHASE": "", "STATE_ROTATED_AT": "now"},
+    "Adopt slot": {"STATE_CURRENT": DEC % "current", "STATE_PENDING": "", "STATE_PHASE": "", "STATE_ROTATED_AT": "now"},
+    "Put Worker slot": {"NEW_SLOT": DEC % "new_slot"},
+    "Retire old slot": {"RETIRE_SLOT": DEC % "retire_slot"},
+}
+
+
+def contract_violations(path):
+    """Read action.yml at `path`; return what breaks the order, `if:` gate and env-wiring contract."""
+    steps = yaml.safe_load(Path(path).read_text())["runs"]["steps"]
+    names = [s.get("name") for s in steps]
+    bad = []
+    for a, b in zip(ORDER, ORDER[1:]):
+        if a not in names or b not in names or names.index(a) >= names.index(b):
+            bad.append(f"order: '{a}' must come before '{b}'")
+    by = {s.get("name"): s for s in steps}
+    for name, want in GATES.items():
+        cond = str(by.get(name, {}).get("if", ""))
+        got = set(re.findall(r"steps\.decide\.outputs\.action == '([\w-]+)'", cond))
+        rest = re.sub(r"steps\.decide\.outputs\.action == '[\w-]+'", "", cond)
+        if got != want or re.sub(r"[\s|()]", "", rest) != "inputs.dry_run!='true'&&":
+            bad.append(f"gate: '{name}' if: {cond!r}, wanted dry_run off and action in {sorted(want)}")
+    for name, want in WIRING.items():
+        env = by.get(name, {}).get("env", {})
+        for k, v in want.items():
+            if env.get(k) != v:
+                bad.append(f"wiring: '{name}' {k}={env.get(k)!r}, wanted {v!r}")
+    for n in ("Shred secret", "Summary"):
+        if by.get(n, {}).get("if") != "always()":
+            bad.append(f"gate: '{n}' must run always()")
+    return bad
+
+
+def contract_cases(path):
+    bad = contract_violations(path)
+    check(f"action.yml keeps the step order, if: gates and state-step env wiring ({len(ORDER)} ordered, {len(GATES)} gated, {len(WIRING)} wired)", not bad, bad)
+
+
+def mutation_cases(doc):
+    """Each mutation of a scratch COPY of action.yml (a temp file, never the real one) must break the contract."""
+    import copy
+
+    def mut_step(d, name):
+        return next(s for s in d["runs"]["steps"] if s.get("name") == name)
+
+    def swap(d, a, b):
+        ss = d["runs"]["steps"]
+        i, j = [next(k for k, s in enumerate(ss) if s.get("name") == n) for n in (a, b)]
+        ss[i], ss[j] = ss[j], ss[i]
+
+    def move_after(d, name, after):
+        ss = d["runs"]["steps"]
+        st = next(s for s in ss if s.get("name") == name)
+        ss.remove(st)
+        ss.insert(next(k for k, s in enumerate(ss) if s.get("name") == after) + 1, st)
+
+    mutations = {
+        "Promote takes STATE_CURRENT from decide.current": lambda d: mut_step(d, "Promote pending")["env"].update(STATE_CURRENT=DEC % "current"),
+        "Record pending runs after Put Worker slot": lambda d: swap(d, "Record pending", "Put Worker slot"),
+        "Record pending runs after Write environment secret": lambda d: move_after(d, "Record pending", "Write environment secret"),
+        "Put Worker slot runs after Write environment secret": lambda d: swap(d, "Put Worker slot", "Write environment secret"),
+        "Mark env written runs after Dispatch sync": lambda d: move_after(d, "Mark env written", "Dispatch sync"),
+        "Retire is gated on noop": lambda d: mut_step(d, "Retire old slot").update({"if": "inputs.dry_run != 'true' && steps.decide.outputs.action == 'noop'"}),
+        "Promote runs under always()": lambda d: mut_step(d, "Promote pending").update({"if": "always()"}),
+        "Promote loses the dry_run gate": lambda d: mut_step(d, "Promote pending").update({"if": " || ".join(f"steps.decide.outputs.action == '{a}'" for a in ALL)}),
+        "Record pending also runs for resume-put": lambda d: mut_step(d, "Record pending").update(
+            {"if": "inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')"}),
+        "Record pending writes phase env": lambda d: mut_step(d, "Record pending")["env"].update(STATE_PHASE="env"),
+        "Mark env written clears pending": lambda d: mut_step(d, "Mark env written")["env"].update(STATE_PENDING=""),
+        "Put Worker slot targets decide.current": lambda d: mut_step(d, "Put Worker slot")["env"].update(NEW_SLOT=DEC % "current"),
+        "Dispatch skips resume-put": lambda d: mut_step(d, "Dispatch sync").update(
+            {"if": "inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'pending-sync')"}),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        for label, fn in mutations.items():
+            d = copy.deepcopy(doc)
+            try:
+                fn(d)
+            except StopIteration:
+                check(f"mutation caught: {label}", False, "a step the mutation targets does not exist")
+                continue
+            f = Path(tmp) / "action.yml"
+            f.write_text(yaml.safe_dump(d, sort_keys=False))
+            check(f"mutation caught: {label}", bool(contract_violations(f)))
 
 
 def structural_cases():
@@ -404,8 +533,14 @@ def structural_cases():
     check("no ${{ }} inside any run: body", not any(EXPR.search(s["run"]) for s in runs))
     texts = {p.name: p.read_text() for p in ACTION.glob("*.sh")}
     check(f"no script contains ${{{{ }}}} ({len(texts)} examined)", texts and not [n for n, t in texts.items() if "${{" in t])
-    check("the value is never echoed or passed through GITHUB_OUTPUT by a script",
-          not [n for n, t in texts.items() if re.search(r"new_secret<<", t)])
+    # the value (NEW_SECRET / the new-secret file) may only be masked, written to its file, or read from it on stdin
+    seen = [(n, ln) for n, t in texts.items() for ln in t.splitlines() if re.search(r"NEW_SECRET|new-secret", ln) and not ln.lstrip().startswith("#")]
+    allowed = (r'echo "::add-mask::\$NEW_SECRET"', r'''printf '%s' "\$NEW_SECRET" > "\$DIR/new-secret"''',
+               r'NEW_SECRET=\$\(openssl rand -hex "\$SECRET_BYTES"\)', r'--rawfile text "\$DIR/new-secret"', r'< "\$\{RUNNER_TEMP:\?\}/rotate-external/new-secret"')
+    stray = [f"{n}: {ln.strip()}" for n, ln in seen if n != "shred.sh" and not any(re.search(a, ln) for a in allowed)]
+    check(f"the value is only masked, written to its 0600 file or read from it ({len(seen)} lines examined)", len(seen) >= 4 and not stray, stray)
+    leak = [n for n, t in texts.items() if re.search(r"GITHUB_(OUTPUT|STEP_SUMMARY|ENV)", t) and re.search(r"NEW_SECRET|new-secret", t)]
+    check("no script that writes GITHUB_OUTPUT/SUMMARY/ENV touches the value", not leak, leak)
     check("no `set -x` in any script", not [n for n, t in texts.items() if re.search(r"^\s*set\s+-\w*x|set -o xtrace", t, re.M)])
     for s in steps:
         if "uses" in s:
@@ -431,7 +566,14 @@ def structural_cases():
           and mint.get("with", {}).get("permission-variables") == "write", mint)
     check("the shred step runs always", next((s for s in steps if s.get("name") == "Shred secret"), {}).get("if") == "always()")
     check("the summary step runs always", next((s for s in steps if s.get("name") == "Summary"), {}).get("if") == "always()")
-    check("the secret is never a step output", "new_secret" not in (ACTION / "action.yml").read_text())
+    yml = (ACTION / "action.yml").read_text()
+    check("the secret is never an action output", set(doc.get("outputs", {})) == {"action"}, list(doc.get("outputs", {})))
+    check("no step env carries the value and the file name is not in action.yml",
+          "new-secret" not in yml and not [s["name"] for s in steps if re.search(r"SECRET_VALUE|NEW_SECRET", " ".join(s.get("env", {})))])
+    notice = (ACTIONS / "rotate-worker-signing-secret" / "deprecated.sh").read_text()
+    check("the deprecation notice names v5.2.0, the release that ships it", "deprecated since v5.2.0" in notice and "v5.1.0" not in notice, notice)
+    contract_cases(ACTION / "action.yml")
+    mutation_cases(doc)
 
 
 def wrapper_cases():

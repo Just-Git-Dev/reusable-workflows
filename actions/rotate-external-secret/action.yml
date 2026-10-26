@@ -3,7 +3,7 @@ description: >-
   Rotate a Cloudflare Worker secret that a backend service also holds, using two alternating Worker
   secret slots, the service repo's environment secret and the service's own bundle sync. Runs in
   the org's project repo and needs no GCP identity. One run advances a small state machine
-  (pending-sync / retire / rotate / adopt / no-op / refuse). See docs/rotate-external-secret.md.
+  (resume-put / pending-sync / retire / rotate / adopt / no-op / refuse). See docs/rotate-external-secret.md.
 
 # A composite action, not only a reusable workflow, on purpose: environment-level secrets cannot
 # cross an org boundary into a reusable workflow, but they do reach a step of the job that declares
@@ -68,7 +68,7 @@ inputs:
     required: false
     default: '30'
   grace_hours:
-    description: Hours the old slot stays valid after a rotation. At least the longest lifetime of anything signed with the old value, plus a margin.
+    description: Hours (1 to 8760) the old slot stays valid after a rotation. At least the longest lifetime of anything signed with the old value, plus a margin.
     required: false
     default: '24'
   wait_minutes:
@@ -94,7 +94,7 @@ inputs:
 
 outputs:
   action:
-    description: The branch this run took (pending-sync, retire, rotate, adopt, noop).
+    description: The branch this run took (resume-put, pending-sync, retire, rotate, adopt, noop).
     value: ${{ steps.decide.outputs.action }}
 
 runs:
@@ -186,15 +186,31 @@ runs:
       run: '"$GITHUB_ACTION_PATH/decide.sh"'
 
     - name: Generate secret
-      if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'rotate'
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
       shell: bash
       env:
         SECRET_BYTES: ${{ inputs.secret_bytes }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: '"$GITHUB_ACTION_PATH/generate-secret.sh"'
 
-    - name: Put Worker slot
+    # The intent is recorded BEFORE the first write (phase put), so a run that dies after the PUT or the
+    # environment write can never look like "nothing pending" to the retire branch.
+    - name: Record pending
       if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'rotate'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+        STATE_CURRENT: ${{ steps.decide.outputs.current }}
+        STATE_PENDING: ${{ steps.decide.outputs.new_slot }}
+        STATE_PHASE: put
+        STATE_ROTATED_AT: ${{ steps.decide.outputs.rotated_at }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/write-state.sh"'
+
+    - name: Put Worker slot
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
       shell: bash
       env:
         CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
@@ -205,7 +221,7 @@ runs:
       run: '"$GITHUB_ACTION_PATH/put-slot.sh"'
 
     - name: Write environment secret
-      if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'rotate'
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -216,8 +232,8 @@ runs:
         DRY_RUN: ${{ inputs.dry_run }}
       run: '"$GITHUB_ACTION_PATH/write-env-secret.sh"'
 
-    - name: Record pending
-      if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'rotate'
+    - name: Mark env written
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -225,12 +241,13 @@ runs:
         STATE_VARIABLE: ${{ inputs.state_variable }}
         STATE_CURRENT: ${{ steps.decide.outputs.current }}
         STATE_PENDING: ${{ steps.decide.outputs.new_slot }}
+        STATE_PHASE: env
         STATE_ROTATED_AT: ${{ steps.decide.outputs.rotated_at }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: '"$GITHUB_ACTION_PATH/write-state.sh"'
 
     - name: Dispatch sync
-      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'pending-sync')
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -244,7 +261,7 @@ runs:
       run: '"$GITHUB_ACTION_PATH/dispatch-sync.sh"'
 
     - name: Wait for sync
-      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'pending-sync')
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -256,7 +273,7 @@ runs:
       run: '"$GITHUB_ACTION_PATH/wait-sync.sh"'
 
     - name: Promote pending
-      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'pending-sync')
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -264,6 +281,7 @@ runs:
         STATE_VARIABLE: ${{ inputs.state_variable }}
         STATE_CURRENT: ${{ steps.decide.outputs.new_slot }}
         STATE_PENDING: ''
+        STATE_PHASE: ''
         STATE_ROTATED_AT: now
         DRY_RUN: ${{ inputs.dry_run }}
       run: '"$GITHUB_ACTION_PATH/write-state.sh"'
@@ -277,6 +295,7 @@ runs:
         STATE_VARIABLE: ${{ inputs.state_variable }}
         STATE_CURRENT: ${{ steps.decide.outputs.current }}
         STATE_PENDING: ''
+        STATE_PHASE: ''
         STATE_ROTATED_AT: now
         DRY_RUN: ${{ inputs.dry_run }}
       run: '"$GITHUB_ACTION_PATH/write-state.sh"'

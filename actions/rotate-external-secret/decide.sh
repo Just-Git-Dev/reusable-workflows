@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Choose the ONE branch of the state machine this run takes. Pure: reads env only, writes outputs.
-# action = pending-sync | retire | rotate | adopt | noop | refuse (refuse exits 1, nothing changed).
+# action = resume-put | pending-sync | retire | rotate | adopt | noop | refuse (refuse exits 1, nothing changed).
+# State: {current, pending, [phase put|env,] rotated_at}. retire fires only with NO pending, which after
+# the phase marker exists only once a promote has happened, so the other slot is really the old value.
 #
 # Env: STATE_JSON ('' = no state), PRESENT (comma list of slots on the Worker), SLOT_A, SLOT_B,
 # ROTATE_EVERY_DAYS, GRACE_HOURS, FORCE, NOW (epoch; tests inject it, default the clock).
@@ -32,11 +34,16 @@ if [ -z "$STATE_JSON" ]; then
   esac
 fi
 
-if ! printf '%s' "$STATE_JSON" | jq -e 'type == "object" and (.current | type == "string") and (.pending | type == "string") and (.rotated_at | type == "number" and . == floor)' >/dev/null 2>&1; then
-  refuse "the state variable is not {current, pending, rotated_at} JSON (rotated_at a whole epoch number). Check its value."
+if ! printf '%s' "$STATE_JSON" | jq -e 'type == "object" and (.current | type == "string") and (.pending | type == "string") and (.rotated_at | type == "number" and . == floor) and ((.phase // "") | type == "string")' >/dev/null 2>&1; then
+  refuse "the state variable is not {current, pending, [phase,] rotated_at} JSON (rotated_at a whole epoch number). Check its value."
 fi
 CUR=$(printf '%s' "$STATE_JSON" | jq -r .current)
 PEND=$(printf '%s' "$STATE_JSON" | jq -r .pending)
+PHASE=$(printf '%s' "$STATE_JSON" | jq -r '.phase // ""')
+if [ -n "$PEND" ]; then
+  [ -n "$PHASE" ] || PHASE=put
+  case "$PHASE" in put | env) ;; *) refuse "the state has phase '${PHASE}', neither put nor env. Check the state variable." ;; esac
+fi
 AT=$(printf '%s' "$STATE_JSON" | jq -r .rotated_at)
 
 for v in "$CUR" "$PEND"; do
@@ -52,6 +59,11 @@ if [ -n "$CUR" ] && ! has "$CUR"; then
 fi
 
 if [ -n "$PEND" ]; then
+  # phase put (or none, an old-format state): the PUT / environment write may or may not have happened
+  # and a Worker secret cannot be read back, so redo both with a fresh value. Never retire here.
+  if [ "$PHASE" != env ]; then
+    finish resume-put "$PEND" "" "$CUR" "$AT" "a rotation into ${PEND} died before its environment secret was confirmed: writing a fresh value into ${PEND} and the environment secret, then syncing"
+  fi
   has "$PEND" || refuse "the state names pending slot ${PEND}, but the Worker has no such secret. Check the Worker secrets and the state variable."
   finish pending-sync "$PEND" "" "$CUR" "$AT" "a sync of ${PEND} is pending: re-dispatching the sync"
 fi

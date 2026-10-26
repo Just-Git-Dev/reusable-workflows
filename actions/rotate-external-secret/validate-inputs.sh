@@ -31,11 +31,16 @@ match state_variable "$STATE_VARIABLE" '^[A-Za-z_][A-Za-z0-9_]*$'
 case "$STATE_VARIABLE" in GITHUB_*) bad "state_variable must not start with GITHUB_" ;; esac
 match app_id "$APP_ID" '^[0-9]+$'
 int_between rotate_every_days "$ROTATE_EVERY_DAYS" 1 3650
-int_between grace_hours "$GRACE_HOURS" 0 8760
+int_between grace_hours "$GRACE_HOURS" 1 8760
 int_between wait_minutes "$WAIT_MINUTES" 1 30
 int_between secret_bytes "$SECRET_BYTES" 16 128
 if ! printf '%s' "$SYNC_INPUTS_JSON" | jq -e 'type == "object" and (has("correlation_id") | not) and all(.[]; type == "string" or type == "number" or type == "boolean")' >/dev/null 2>&1; then
   bad "sync_inputs_json must be a JSON object of scalar values and must not set correlation_id (the rotation adds it)"
+fi
+# The sync's success must mean "bundle written AND signer rolled": a dry_run sync only plans, and the
+# rotation would then promote a value the service never received.
+if printf '%s' "$SYNC_INPUTS_JSON" | jq -e 'type == "object" and any(to_entries[]; (.key | ascii_downcase) == "dry_run" and ((.value | tostring | ascii_downcase) | IN("true", "1")))' >/dev/null 2>&1; then
+  bad "sync_inputs_json must not set a truthy dry_run: the sync's success has to mean the bundle was written and the signer rolled"
 fi
 [ "$BAD" = 0 ] || exit 1
 

@@ -13,6 +13,7 @@ set -eo pipefail
   if [ "$DRY_RUN" = "true" ]; then
     case "$ACTION" in
       rotate) echo "- would PUT \`${NEW_SLOT}\`, set \`${TARGET_SECRET_NAME}\` in \`${TARGET_REPO}\` / \`${TARGET_ENVIRONMENT}\`, set pending in \`${STATE_VARIABLE}\`, dispatch \`${SYNC_WORKFLOW}\`, wait, promote" ;;
+      resume-put) echo "- would generate a fresh value, PUT \`${NEW_SLOT}\`, set \`${TARGET_SECRET_NAME}\` in \`${TARGET_REPO}\` / \`${TARGET_ENVIRONMENT}\`, mark phase env in \`${STATE_VARIABLE}\`, dispatch \`${SYNC_WORKFLOW}\`, wait, promote" ;;
       pending-sync) echo "- would dispatch \`${SYNC_WORKFLOW}\`, wait, then promote \`${NEW_SLOT}\` in \`${STATE_VARIABLE}\`" ;;
       retire) echo "- would DELETE slot \`${RETIRE_SLOT}\`" ;;
       adopt) echo "- would set \`${STATE_VARIABLE}\` to current \`${CURRENT}\`" ;;
