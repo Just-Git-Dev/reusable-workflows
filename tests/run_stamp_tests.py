@@ -213,7 +213,7 @@ def test_repo_is_internally_consistent():
     # assertion a tautology. Bump it when a reusable is ADDED (28 as of
     # service-alerts, 2026-09-23) — if it fails without one being added,
     # a workflow has silently stopped being stamped, which is the point.
-    check("repo: stamped 45 reusables", len(report.stamps), 45)
+    check("repo: stamped 46 reusables", len(report.stamps), 46)
 
 
 def test_scan_flags_a_stale_pin(tmp_check=True):

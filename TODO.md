@@ -1,13 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-51 open across 17 live sections. 8 closed items archived.
+52 open across 17 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 3 open
+- **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 4 open
 - **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
 - **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open, 5 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
@@ -26,6 +26,10 @@ section opens or closes. Closed sections live in
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
 
 ## Owner rulings to build (opened 2026-10-21)
+
+- [ ] remove rotate-worker-signing-secret in v6 (deprecated v5.2.0, replaced by rotate-external-secret)
+  `actions/rotate-worker-signing-secret` + `.github/workflows/rotate-worker-signing-secret.yml` +
+  both docs pages and README rows.
 
 - [x] **CLOSED 2026-10-21 (v4.1.0): the composite action `actions/sync-bundle-key` runs in the
   caller's own `environment:` job and reads environment secrets from `secrets_json`

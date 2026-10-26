@@ -2,10 +2,12 @@
 
 ## Index
 
-130 entries total — 120 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+132 entries total — 122 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-26` — [rotate-external-secret review fixes: phase marker, resume-put, structural test (RCA)](#2026-10-26--rotate-external-secret-review-fixes-phase-marker-resume-put-structural-test-rca)
 - `2026-10-23` — [bootstrap-cf-service: pre-flight authorized domains before any mapping change; retry the retarget smoke probe](#2026-10-23--bootstrap-cf-service-pre-flight-authorized-domains-before-any-mapping-change-retry-the-retarget-smoke-probe)
 - `2026-10-23` — [Public Cloud Run service via F7 public: true; deploy-cloud-run reads the invoker back (v5.1.0, RCA)](#2026-10-23--public-cloud-run-service-via-f7-public-true-deploy-cloud-run-reads-the-invoker-back-v510-rca)
+- `2026-10-22` — [rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.2.0)](#2026-10-22--rotate-external-secret-rotate-externally-shared-secrets-from-the-project-repo-with-alternating-slots-v520)
 - `2026-10-22` — [sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)](#2026-10-22--sync-bundle-key-is-merge-only-remove_keys-replaces-mode-and-confirm_removed-v500)
 - `2026-10-22` — [bootstrap-cf-service environment input — environment-scoped WIF trust (RCA)](#2026-10-22--bootstrap-cf-service-environment-input--environment-scoped-wif-trust-rca)
 - `2026-10-21` — [RCA: release stamp skipped action pins inside workflows](#2026-10-21--rca-release-stamp-skipped-action-pins-inside-workflows)
@@ -247,6 +249,37 @@
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
 
+## 2026-10-26 — rotate-external-secret review fixes: phase marker, resume-put, structural test (RCA)
+
+Critic review of the rotate-external-secret branch (`.scratch/rw-rebase/critic.md`), five findings fixed.
+
+**RCA of F1 (high): the env secret could be written while the state still said "nothing pending".**
+Symptom: none seen in production; found in review. A run died (transient 5xx on the state write, rate limit
+or cancel) after the Worker PUT and the environment-secret write but before `pending` was recorded. State
+stayed `{current A, pending "", rotated_at <old>}` with both Worker slots present and the environment secret
+holding the NEW value. Root cause: the order was PUT, write env, record pending, and the retire branch trusted
+"both slots, no pending, grace reached" to mean "the other slot is the old value". With a stale `rotated_at`
+the next daily run deleted the new slot while a service sync could already have shipped it: every signature
+rejected until the following day's rotation. The old doc line called this case safe. Swapping the order is no
+fix (pending recorded, env write failed: the sync would ship the OLD value, promote the new slot, retire the
+old one). Why it was not caught: tests drove each script with hand-injected state, so no test followed the
+failure of one step into the next run's decision. Fix: the state carries a `phase`. `pending` and `phase=put`
+are recorded before the PUT, `phase=env` after the environment write. `pending` with `put` is the new branch `resume-put`: a Worker secret cannot be read back, so it generates a fresh
+value, overwrites (or creates) the pending slot, writes the environment secret, marks `env` and syncs.
+`pending` with `env` is the old pending-sync. Retire fires only when `pending` is empty, which now arises
+only after a promote. Residual window (documented): a service sync between the earlier env write and
+resume-put shipped a value that resume-put replaces; its immediate sync fixes it. Prevention: F2.
+
+**F2: a structural test reads `action.yml`** (step order, each step's `if:`, the env wiring of the state
+steps, notably Promote's current coming from the pending slot) and proves itself with in-test mutations
+(Promote from `decide.current`, Record pending after the PUT, Retire gated on noop, Promote under `always()`);
+two leak checks that grepped strings the code never uses were rewritten to assert real properties.
+
+**F3: sync success is trusted without a read-back** (no GCP identity, Worker secrets are unreadable). So the
+contract is stated (success MUST mean bundle written AND signer rolled) and a truthy `dry_run` key in
+`sync_inputs_json` is refused. **F4:** the deprecation notice named v5.1.0; the feature ships in v5.2.0.
+**F5:** `grace_hours` 0 let a re-run right after a promote retire the old slot at once; the floor is 1.
+
 ## 2026-10-23 — bootstrap-cf-service: pre-flight authorized domains before any mapping change; retry the retarget smoke probe
 
 **Symptom.** A consumer's hostname served nothing for about 2.5 h after a `retarget_from` run; the service itself stayed healthy. The run deleted the live mapping, then `domain-mappings create` failed with `run.authorizeddomains.list` denied; after the grant it failed again ("domain does not appear to be verified ... no verified domains"). A later single smoke probe, right after CertificateProvisioned, got curl rc=35 (TLS handshake) and failed a run whose move had worked.
@@ -310,6 +343,43 @@ could only grant a service account `run.developer`).
   `tests/run_repos_apply_step_tests.py` (the invoker shape and seven refused neighbours),
   `tests/run_deploy_env_tests.py` (`public_cases`). Rule for new steps: when a cloud CLI can
   "succeed" with a warning, check the resulting state, not the exit code.
+
+## 2026-10-22 — rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.2.0)
+
+Owner rulings 2026-10-22, plan `plans/2026-10-22-rotate-external-secret.md`. Added the reusable
+workflow and composite action `rotate-external-secret` (v5.2.0, additive); `rotate-worker-signing-secret`
+is deprecated (notice step, docs banners) and removed in v6.
+
+**Rulings 1-13, summarised.** Only secrets shared with an EXTERNAL system (Cloudflare tokens and Worker
+secrets, third-party credentials) are rotated from the org's project repo; bundle sync of human-set values
+and `cleanup-secret-versions` stay per service; internal-only keys (a signing keypair verified through the
+service's own JWKS) are not moved, so a private key never also lives in a GitHub environment secret. The
+flow: generate, set on the external system while the old value stays valid, write the service repo's
+environment secret via the org's relay GitHub App, dispatch the service's own sync, wait (at most 30
+minutes) for the run named by a unique `correlation_id` to succeed, retire the old value after a grace
+period (input, default 24 h). Any failure before retirement leaves the old value valid. First version:
+Cloudflare Worker secrets only.
+
+**Why alternating slots.** Two Worker secret names (`slot_a`, `slot_b`) alternate, so the new value goes
+into the empty slot and the old one stays live untouched. The old value is therefore never read back or
+stored anywhere (the previous rotator copied it into a PREVIOUS slot and had to hold it in the bundle).
+
+**Why a state variable and a daily cron.** The grace period (24 h) outlives a job (6 h), so the old slot
+is retired by a LATER run. One non-secret repo variable `{current, pending, rotated_at}` lets a daily run
+advance a small state machine (pending-sync / retire / rotate / adopt / no-op / refuse) and makes every
+failure resumable: `pending` stays set until the sync succeeds, and nothing is retired while it is set.
+Ambiguity (state names a missing slot, both slots and no state, unreadable state) refuses and changes
+nothing. The wrapper job timeout is a constant 40 minutes because `wait_minutes` is capped at 30 and a
+workflow expression cannot add 10.
+
+**Why no GCP identity.** The service's own sync is the ONLY writer of its Secret Manager bundle (merge-only
+since v5.0.0, so other keys are never dropped). The rotation holds the value as an environment secret of
+the service repo but never touches the bundle, so the cross-repo bundle race disappears.
+
+**Secret handling.** The new value is masked at generation, kept only in a 0600 file under `RUNNER_TEMP`
+shredded in an `always()` step, and reaches `gh secret set` and Cloudflare on stdin; it is never a step
+output, env var or summary line. `dry_run` defaults to true and every write script also refuses to run
+under it.
 
 ## 2026-10-22 — sync-bundle-key is merge-only; remove_keys replaces mode and confirm_removed (v5.0.0)
 

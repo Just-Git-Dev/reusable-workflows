@@ -1,0 +1,337 @@
+name: Rotate a secret shared with an external system (Cloudflare Worker)
+description: >-
+  Rotate a Cloudflare Worker secret that a backend service also holds, using two alternating Worker
+  secret slots, the service repo's environment secret and the service's own bundle sync. Runs in
+  the org's project repo and needs no GCP identity. One run advances a small state machine
+  (resume-put / pending-sync / retire / rotate / adopt / no-op / refuse). See docs/rotate-external-secret.md.
+
+# A composite action, not only a reusable workflow, on purpose: environment-level secrets cannot
+# cross an org boundary into a reusable workflow, but they do reach a step of the job that declares
+# the environment. The reusable workflow .github/workflows/rotate-external-secret.yml is a thin
+# wrapper; the logic lives once, in the scripts beside this file.
+#
+# The CALLER's job must declare (a composite action can declare none of these):
+#   permissions: { contents: read }
+#   concurrency: { group: rotate-external-<worker_script>-<slot_a>, cancel-in-progress: false }
+#   timeout-minutes: wait_minutes + 10 (the wrapper uses 40; wait_minutes is capped at 30).
+# The new value lives only in a 0600 file under RUNNER_TEMP, shredded in an always() step. It is
+# never an output, an env var or a summary line.
+
+inputs:
+  cloudflare_api_token:
+    description: Cloudflare API token with Workers Scripts:Edit on cf_account_id.
+    required: true
+  app_key:
+    description: Private key of the org's relay GitHub App.
+    required: true
+  app_id:
+    description: Id of the org's relay GitHub App.
+    required: true
+  cf_account_id:
+    description: Cloudflare account id owning the Worker script.
+    required: true
+  worker_script:
+    description: Cloudflare Worker script name that holds the secret.
+    required: true
+  slot_a:
+    description: First of the two Worker secret names that alternate.
+    required: true
+  slot_b:
+    description: Second of the two Worker secret names that alternate.
+    required: true
+  target_repo:
+    description: Name of the service repo (same owner as this repo) that receives the environment secret and runs the sync.
+    required: true
+  target_environment:
+    description: Environment of target_repo that holds the secret.
+    required: false
+    default: prod
+  target_secret_name:
+    description: Environment secret name written in target_repo.
+    required: true
+  sync_workflow:
+    description: File name of the service's sync workflow; it must accept a correlation_id input and set run-name from it.
+    required: true
+  sync_ref:
+    description: Ref the sync is dispatched on.
+    required: false
+    default: main
+  sync_inputs_json:
+    description: JSON object of extra dispatch inputs for the sync (correlation_id is added).
+    required: false
+    default: '{"dry_run":"false"}'
+  state_variable:
+    description: Name of the non-secret state variable in this repo.
+    required: true
+  rotate_every_days:
+    description: Age of the current value at which a rotation is due.
+    required: false
+    default: '30'
+  grace_hours:
+    description: Hours (1 to 8760) the old slot stays valid after a rotation. At least the longest lifetime of anything signed with the old value, plus a margin.
+    required: false
+    default: '24'
+  wait_minutes:
+    description: Minutes to wait for the sync run (1 to 30).
+    required: false
+    default: '30'
+  secret_bytes:
+    description: Random bytes of the generated value (hex-encoded, so the string is 2x this).
+    required: false
+    default: '32'
+  force:
+    description: "'true' = rotate now when exactly one slot exists."
+    required: false
+    default: 'false'
+  dry_run:
+    description: "'true' = read state and print the plan; make no write call."
+    required: false
+    default: 'true'
+  concurrency_declared:
+    description: Set by the wrapper workflow, which declares the concurrency group itself; direct callers leave it unset.
+    required: false
+    default: 'false'
+
+outputs:
+  action:
+    description: The branch this run took (resume-put, pending-sync, retire, rotate, adopt, noop).
+    value: ${{ steps.decide.outputs.action }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate boolean inputs
+      shell: bash
+      env:
+        FORCE: ${{ inputs.force }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
+      run: '"$GITHUB_ACTION_PATH/validate-booleans.sh"'
+
+    - name: Validate inputs
+      id: inputs
+      shell: bash
+      env:
+        CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+        WORKER_SCRIPT: ${{ inputs.worker_script }}
+        SLOT_A: ${{ inputs.slot_a }}
+        SLOT_B: ${{ inputs.slot_b }}
+        TARGET_REPO: ${{ inputs.target_repo }}
+        TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+        TARGET_SECRET_NAME: ${{ inputs.target_secret_name }}
+        SYNC_WORKFLOW: ${{ inputs.sync_workflow }}
+        SYNC_REF: ${{ inputs.sync_ref }}
+        SYNC_INPUTS_JSON: ${{ inputs.sync_inputs_json }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+        ROTATE_EVERY_DAYS: ${{ inputs.rotate_every_days }}
+        GRACE_HOURS: ${{ inputs.grace_hours }}
+        WAIT_MINUTES: ${{ inputs.wait_minutes }}
+        SECRET_BYTES: ${{ inputs.secret_bytes }}
+        APP_ID: ${{ inputs.app_id }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: '"$GITHUB_ACTION_PATH/validate-inputs.sh"'
+
+    - name: Warn about the caller's concurrency group
+      shell: bash
+      env:
+        WORKER_SCRIPT: ${{ inputs.worker_script }}
+        SLOT_A: ${{ inputs.slot_a }}
+        CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
+      run: '"$GITHUB_ACTION_PATH/warn-concurrency.sh"'
+
+    - name: Mint App token
+      id: token
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ steps.inputs.outputs.token_repos }}
+        permission-environments: write
+        permission-actions: write
+        permission-variables: write
+        permission-metadata: read
+
+    - name: Read state
+      id: state
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+      run: '"$GITHUB_ACTION_PATH/read-state.sh"'
+
+    - name: List Worker slots
+      id: slots
+      shell: bash
+      env:
+        CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+        WORKER_SCRIPT: ${{ inputs.worker_script }}
+        CF_API_TOKEN: ${{ inputs.cloudflare_api_token }}
+        SLOT_A: ${{ inputs.slot_a }}
+        SLOT_B: ${{ inputs.slot_b }}
+      run: '"$GITHUB_ACTION_PATH/list-worker-slots.sh"'
+
+    - name: Decide
+      id: decide
+      shell: bash
+      env:
+        STATE_JSON: ${{ steps.state.outputs.state_json }}
+        PRESENT: ${{ steps.slots.outputs.present }}
+        SLOT_A: ${{ inputs.slot_a }}
+        SLOT_B: ${{ inputs.slot_b }}
+        ROTATE_EVERY_DAYS: ${{ inputs.rotate_every_days }}
+        GRACE_HOURS: ${{ inputs.grace_hours }}
+        FORCE: ${{ inputs.force }}
+      run: '"$GITHUB_ACTION_PATH/decide.sh"'
+
+    - name: Generate secret
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
+      shell: bash
+      env:
+        SECRET_BYTES: ${{ inputs.secret_bytes }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/generate-secret.sh"'
+
+    # The intent is recorded BEFORE the first write (phase put), so a run that dies after the PUT or the
+    # environment write can never look like "nothing pending" to the retire branch.
+    - name: Record pending
+      if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'rotate'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+        STATE_CURRENT: ${{ steps.decide.outputs.current }}
+        STATE_PENDING: ${{ steps.decide.outputs.new_slot }}
+        STATE_PHASE: put
+        STATE_ROTATED_AT: ${{ steps.decide.outputs.rotated_at }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/write-state.sh"'
+
+    - name: Put Worker slot
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
+      shell: bash
+      env:
+        CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+        WORKER_SCRIPT: ${{ inputs.worker_script }}
+        CF_API_TOKEN: ${{ inputs.cloudflare_api_token }}
+        NEW_SLOT: ${{ steps.decide.outputs.new_slot }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/put-slot.sh"'
+
+    - name: Write environment secret
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        TARGET_REPO: ${{ inputs.target_repo }}
+        TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+        TARGET_SECRET_NAME: ${{ inputs.target_secret_name }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/write-env-secret.sh"'
+
+    - name: Mark env written
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+        STATE_CURRENT: ${{ steps.decide.outputs.current }}
+        STATE_PENDING: ${{ steps.decide.outputs.new_slot }}
+        STATE_PHASE: env
+        STATE_ROTATED_AT: ${{ steps.decide.outputs.rotated_at }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/write-state.sh"'
+
+    - name: Dispatch sync
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        TARGET_REPO: ${{ inputs.target_repo }}
+        SYNC_WORKFLOW: ${{ inputs.sync_workflow }}
+        SYNC_REF: ${{ inputs.sync_ref }}
+        SYNC_INPUTS_JSON: ${{ inputs.sync_inputs_json }}
+        CORRELATION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/dispatch-sync.sh"'
+
+    - name: Wait for sync
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        TARGET_REPO: ${{ inputs.target_repo }}
+        SYNC_WORKFLOW: ${{ inputs.sync_workflow }}
+        CORRELATION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        WAIT_MINUTES: ${{ inputs.wait_minutes }}
+      run: '"$GITHUB_ACTION_PATH/wait-sync.sh"'
+
+    - name: Promote pending
+      if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+        STATE_CURRENT: ${{ steps.decide.outputs.new_slot }}
+        STATE_PENDING: ''
+        STATE_PHASE: ''
+        STATE_ROTATED_AT: now
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/write-state.sh"'
+
+    - name: Adopt slot
+      if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'adopt'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+        STATE_CURRENT: ${{ steps.decide.outputs.current }}
+        STATE_PENDING: ''
+        STATE_PHASE: ''
+        STATE_ROTATED_AT: now
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/write-state.sh"'
+
+    - name: Retire old slot
+      if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'retire'
+      shell: bash
+      env:
+        CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+        WORKER_SCRIPT: ${{ inputs.worker_script }}
+        CF_API_TOKEN: ${{ inputs.cloudflare_api_token }}
+        RETIRE_SLOT: ${{ steps.decide.outputs.retire_slot }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: '"$GITHUB_ACTION_PATH/delete-slot.sh"'
+
+    - name: Shred secret
+      if: always()
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/shred.sh"'
+
+    - name: Summary
+      if: always()
+      shell: bash
+      env:
+        ACTION: ${{ steps.decide.outputs.action }}
+        MESSAGE: ${{ steps.decide.outputs.message }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        WORKER_SCRIPT: ${{ inputs.worker_script }}
+        SLOT_A: ${{ inputs.slot_a }}
+        SLOT_B: ${{ inputs.slot_b }}
+        TARGET_REPO: ${{ inputs.target_repo }}
+        TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+        TARGET_SECRET_NAME: ${{ inputs.target_secret_name }}
+        SYNC_WORKFLOW: ${{ inputs.sync_workflow }}
+        STATE_VARIABLE: ${{ inputs.state_variable }}
+        CURRENT: ${{ steps.decide.outputs.current }}
+        NEW_SLOT: ${{ steps.decide.outputs.new_slot }}
+        RETIRE_SLOT: ${{ steps.decide.outputs.retire_slot }}
+      run: '"$GITHUB_ACTION_PATH/summary.sh"'

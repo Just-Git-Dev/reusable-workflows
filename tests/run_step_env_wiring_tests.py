@@ -23,6 +23,7 @@ from action_steps import job_steps  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 WF = ROOT / ".github" / "workflows"
 V4 = ["sync-bundle-key.yml", "rotate-signing-keypair.yml", "rotate-worker-signing-secret.yml",
+      "rotate-external-secret.yml",
       "deploy-cloud-run.yml", "cloud-run-update.yml", "rollback-service.yml",
       "distribute-env-secrets.yml", "deploy-env-lint.yml", "repos-environments.yml"]
 
@@ -34,6 +35,13 @@ OPTIONAL = {
     # `${BOOTSTRAP:-false}`: parity with the v3 keypair rotator; unset == false is asserted by
     # run_sync_v4_tests.py ("BOOTSTRAP unset (sync-bundle-key) behaves as false").
     ("sync-bundle-key.yml", "Force new Cloud Run revision(s)"): {"BOOTSTRAP"},
+    # `${NOW:-$(date +%s)}` / `${POLL_SECONDS:-15}`: test-injection points (fake clock, no sleep);
+    # unset means the real clock and the 15 s poll, asserted by run_rotate_external_tests.py.
+    ("rotate-external-secret.yml", "Record pending"): {"NOW"},
+    ("rotate-external-secret.yml", "Mark env written"): {"NOW"},
+    ("rotate-external-secret.yml", "Promote pending"): {"NOW"},
+    ("rotate-external-secret.yml", "Adopt slot"): {"NOW"},
+    ("rotate-external-secret.yml", "Wait for sync"): {"POLL_SECONDS"},
 }
 
 READ = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")

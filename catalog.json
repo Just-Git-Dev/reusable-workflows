@@ -88,6 +88,122 @@
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/release-flow"
     },
+    "rotate-external-secret": {
+      "action": "actions/rotate-external-secret",
+      "inputs": {
+        "app_id": {
+          "default": null,
+          "description": "Id of the org's relay GitHub App.",
+          "required": true
+        },
+        "app_key": {
+          "default": null,
+          "description": "Private key of the org's relay GitHub App.",
+          "required": true
+        },
+        "cf_account_id": {
+          "default": null,
+          "description": "Cloudflare account id owning the Worker script.",
+          "required": true
+        },
+        "cloudflare_api_token": {
+          "default": null,
+          "description": "Cloudflare API token with Workers Scripts:Edit on cf_account_id.",
+          "required": true
+        },
+        "concurrency_declared": {
+          "default": "false",
+          "description": "Set by the wrapper workflow, which declares the concurrency group itself; direct callers leave it unset.",
+          "required": false
+        },
+        "dry_run": {
+          "default": "true",
+          "description": "'true' = read state and print the plan; make no write call.",
+          "required": false
+        },
+        "force": {
+          "default": "false",
+          "description": "'true' = rotate now when exactly one slot exists.",
+          "required": false
+        },
+        "grace_hours": {
+          "default": "24",
+          "description": "Hours (1 to 8760) the old slot stays valid after a rotation. At least the longest lifetime of anything signed with the old value, plus a margin.",
+          "required": false
+        },
+        "rotate_every_days": {
+          "default": "30",
+          "description": "Age of the current value at which a rotation is due.",
+          "required": false
+        },
+        "secret_bytes": {
+          "default": "32",
+          "description": "Random bytes of the generated value (hex-encoded, so the string is 2x this).",
+          "required": false
+        },
+        "slot_a": {
+          "default": null,
+          "description": "First of the two Worker secret names that alternate.",
+          "required": true
+        },
+        "slot_b": {
+          "default": null,
+          "description": "Second of the two Worker secret names that alternate.",
+          "required": true
+        },
+        "state_variable": {
+          "default": null,
+          "description": "Name of the non-secret state variable in this repo.",
+          "required": true
+        },
+        "sync_inputs_json": {
+          "default": "{\"dry_run\":\"false\"}",
+          "description": "JSON object of extra dispatch inputs for the sync (correlation_id is added).",
+          "required": false
+        },
+        "sync_ref": {
+          "default": "main",
+          "description": "Ref the sync is dispatched on.",
+          "required": false
+        },
+        "sync_workflow": {
+          "default": null,
+          "description": "File name of the service's sync workflow; it must accept a correlation_id input and set run-name from it.",
+          "required": true
+        },
+        "target_environment": {
+          "default": "prod",
+          "description": "Environment of target_repo that holds the secret.",
+          "required": false
+        },
+        "target_repo": {
+          "default": null,
+          "description": "Name of the service repo (same owner as this repo) that receives the environment secret and runs the sync.",
+          "required": true
+        },
+        "target_secret_name": {
+          "default": null,
+          "description": "Environment secret name written in target_repo.",
+          "required": true
+        },
+        "wait_minutes": {
+          "default": "30",
+          "description": "Minutes to wait for the sync run (1 to 30).",
+          "required": false
+        },
+        "worker_script": {
+          "default": null,
+          "description": "Cloudflare Worker script name that holds the secret.",
+          "required": true
+        }
+      },
+      "name": "Rotate a secret shared with an external system (Cloudflare Worker)",
+      "outputs": {
+        "action": "The branch this run took (resume-put, pending-sync, retire, rotate, adopt, noop)."
+      },
+      "runs": "composite",
+      "uses": "Just-Git-Dev/reusable-workflows/actions/rotate-external-secret"
+    },
     "rotate-worker-signing-secret": {
       "action": "actions/rotate-worker-signing-secret",
       "inputs": {
@@ -4287,6 +4403,144 @@
         }
       },
       "workflow": "rotate-cloudflare-token.yml"
+    },
+    "rotate-external-secret": {
+      "inputs": {
+        "app_id": {
+          "default": null,
+          "description": "Id of the org relay GitHub App.",
+          "required": true,
+          "type": "string"
+        },
+        "cf_account_id": {
+          "default": null,
+          "description": "Cloudflare account id owning the Worker script.",
+          "required": true,
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "true = read state and print the plan; make no write call.",
+          "required": false,
+          "type": "boolean"
+        },
+        "environment": {
+          "default": "",
+          "description": "GitHub environment the job runs in (holds app_key and the Cloudflare token). Empty = none.",
+          "required": false,
+          "type": "string"
+        },
+        "force": {
+          "default": false,
+          "description": "true = rotate now when exactly one slot exists.",
+          "required": false,
+          "type": "boolean"
+        },
+        "grace_hours": {
+          "default": 24,
+          "description": "Hours the old slot stays valid after a rotation; at least the longest lifetime of anything signed with the old value, plus a margin.",
+          "required": false,
+          "type": "number"
+        },
+        "rotate_every_days": {
+          "default": 30,
+          "description": "Age of the current value at which a rotation is due.",
+          "required": false,
+          "type": "number"
+        },
+        "secret_bytes": {
+          "default": 32,
+          "description": "Random bytes of the generated value (hex-encoded, so the string is 2x this).",
+          "required": false,
+          "type": "number"
+        },
+        "slot_a": {
+          "default": null,
+          "description": "First of the two Worker secret names that alternate.",
+          "required": true,
+          "type": "string"
+        },
+        "slot_b": {
+          "default": null,
+          "description": "Second of the two Worker secret names that alternate.",
+          "required": true,
+          "type": "string"
+        },
+        "state_variable": {
+          "default": null,
+          "description": "Name of the non-secret state variable in this repo.",
+          "required": true,
+          "type": "string"
+        },
+        "sync_inputs_json": {
+          "default": "{\"dry_run\":\"false\"}",
+          "description": "JSON object of extra dispatch inputs for the sync (correlation_id is added).",
+          "required": false,
+          "type": "string"
+        },
+        "sync_ref": {
+          "default": "main",
+          "description": "Ref the sync is dispatched on.",
+          "required": false,
+          "type": "string"
+        },
+        "sync_workflow": {
+          "default": null,
+          "description": "File name of the service sync workflow; it must accept a correlation_id input and set run-name from it.",
+          "required": true,
+          "type": "string"
+        },
+        "target_environment": {
+          "default": "prod",
+          "description": "Environment of target_repo that holds the secret.",
+          "required": false,
+          "type": "string"
+        },
+        "target_repo": {
+          "default": null,
+          "description": "Name of the service repo (same owner as this repo) that receives the environment secret and runs the sync.",
+          "required": true,
+          "type": "string"
+        },
+        "target_secret_name": {
+          "default": null,
+          "description": "Environment secret name written in target_repo.",
+          "required": true,
+          "type": "string"
+        },
+        "wait_minutes": {
+          "default": 30,
+          "description": "Minutes to wait for the sync run (1 to 30; the job timeout is 40).",
+          "required": false,
+          "type": "number"
+        },
+        "worker_script": {
+          "default": null,
+          "description": "Cloudflare Worker script name that holds the secret.",
+          "required": true,
+          "type": "string"
+        }
+      },
+      "jobs": {
+        "rotate": {
+          "conditional": false,
+          "declared_permissions": "inherits-caller"
+        }
+      },
+      "name": "Rotate a secret shared with an external system (reusable)",
+      "outputs": {},
+      "path": ".github/workflows/rotate-external-secret.yml",
+      "secrets": {
+        "app_key": {
+          "description": "Private key of the org relay GitHub App.",
+          "required": true
+        },
+        "cloudflare_api_token": {
+          "description": "Cloudflare API token with Workers Scripts:Edit on cf_account_id.",
+          "required": true
+        }
+      },
+      "workflow": "rotate-external-secret.yml"
     },
     "rotate-signing-keypair": {
       "inputs": {

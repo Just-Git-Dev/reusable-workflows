@@ -1,5 +1,7 @@
 # rotate-worker-signing-secret (composite action)
 
+> **Deprecated since v5.2.0, removed in v6.** Use [`rotate-external-secret`](rotate-external-secret.md): it needs no GCP identity and never reads or stores the old value. This page stays until the callers have moved.
+
 The same operation as the [`rotate-worker-signing-secret`](rotate-worker-signing-secret.md)
 reusable workflow, as a **composite action** that runs as a step of the **caller's own job**. Use
 it when the Cloudflare token (and the rest of the secrets) live in a GitHub **environment**

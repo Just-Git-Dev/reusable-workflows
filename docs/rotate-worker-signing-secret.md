@@ -1,5 +1,7 @@
 # rotate-worker-signing-secret
 
+> **Deprecated since v5.2.0, removed in v6.** Use [`rotate-external-secret`](rotate-external-secret.md): it needs no GCP identity and never reads or stores the old value. This page stays until the callers have moved.
+
 Rotates an HMAC signing secret shared between a **Cloudflare Worker** that
 *verifies* signed URLs and a **backend** that *signs* them from a Secret Manager
 bundle mounted into Cloud Run. Zero-downtime: URLs already signed with the old
