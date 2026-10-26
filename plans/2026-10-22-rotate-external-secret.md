@@ -86,3 +86,15 @@ write. Workflow `concurrency: rotate-external-<worker_script>-<slot_a>`, `timeou
 - [ ] `make ci` green; critic review; fixes.
 - [ ] Ship v5.2.0 after v5.0.0; tag verified by ls-remote; action read at the tag.
 - [ ] Consumer adoption steps sent (owner-approved).
+
+## Review fixes, 2026-10-26 (critic notes `.scratch/rw-rebase/critic.md`)
+
+- [ ] F1 (high): state gains `phase` (`put`|`env`); `pending`+`phase=put` is recorded BEFORE the
+      Worker PUT, `phase=env` after the environment write; new branch `resume-put` (fresh value into
+      the pending slot); retire only when `pending` is empty. Doc state table and failure paragraph.
+- [ ] F2 (medium): structural test over `action.yml` (step order, `if:` gates, state-step env
+      wiring) with in-test mutations that must fail it; the two always-pass leak checks made real.
+- [ ] F3 (medium): `sync_inputs_json` with a truthy `dry_run` is refused; doc contract: sync success
+      means bundle written AND signer rolled.
+- [ ] F4 (low): deprecation notice says v5.2.0.
+- [ ] F5 (low): `grace_hours` must be at least 1.
