@@ -153,7 +153,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v5.1.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v5.2.0
     with:
       go_version_file: go.mod
       coverage_threshold: 50
@@ -171,7 +171,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v5.1.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v5.2.0
     with:
       gcp_project: my-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

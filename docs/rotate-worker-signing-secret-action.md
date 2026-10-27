@@ -10,7 +10,7 @@ environment secrets cannot cross an org boundary into a reusable workflow, but t
 of the job that declares the environment.
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/rotate-worker-signing-secret@v5.1.1
+- uses: Just-Git-Dev/reusable-workflows/actions/rotate-worker-signing-secret@v5.2.0
 ```
 
 The action is the single source of truth. The reusable workflow is a thin wrapper that calls it
@@ -63,7 +63,7 @@ jobs:
       group: bundle-write-my-gcp-project-app-secrets   # bundle-write-<gcp_project>-<bundle_secret>
       cancel-in-progress: false
     steps:
-      - uses: Just-Git-Dev/reusable-workflows/actions/rotate-worker-signing-secret@v5.1.1
+      - uses: Just-Git-Dev/reusable-workflows/actions/rotate-worker-signing-secret@v5.2.0
         with:
           secrets_json: ${{ toJSON(secrets) }}   # the action reads only cloudflare_api_token
           gcp_project: my-gcp-project

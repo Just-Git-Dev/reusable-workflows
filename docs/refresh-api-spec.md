@@ -12,7 +12,7 @@ scheduled workflow. On each run it:
    owner.
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v5.1.1
+- uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v5.2.0
 ```
 
 ## Why this exists
@@ -102,7 +102,7 @@ jobs:
         with: { node-version-file: .nvmrc }
       - run: npm ci
         shell: bash
-      - uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v5.1.1
+      - uses: Just-Git-Dev/reusable-workflows/actions/refresh-api-spec@v5.2.0
         with:
           name: api
           url: ${{ vars.API_SPEC_URL }}
