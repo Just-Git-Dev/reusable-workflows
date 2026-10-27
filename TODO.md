@@ -1,13 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-52 open across 17 live sections. 8 closed items archived.
+53 open across 17 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 4 open
+- **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 5 open
 - **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
 - **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open, 5 closed
 - **ACTIVE** — [Release flow — app-id from the environment (opened 2026-10-13)](#release-flow--app-id-from-the-environment-opened-2026-10-13) — 2 open
@@ -30,6 +30,10 @@ section opens or closes. Closed sections live in
 - [ ] remove rotate-worker-signing-secret in v6 (deprecated v5.2.0, replaced by rotate-external-secret)
   `actions/rotate-worker-signing-secret` + `.github/workflows/rotate-worker-signing-secret.yml` +
   both docs pages and README rows.
+- [ ] v5.1.0 live proof (DECISIONS 2026-10-23, public Cloud Run via F7): no consumer calls
+  `repos-deploy-scope` with `public: true` yet. On the first adopter's run, record the run id,
+  check the Plan step printed `public services in the register: [...]`, and read the invoker back
+  (`allUsers` `roles/run.invoker` on that service only).
 
 - [x] **CLOSED 2026-10-21 (v4.1.0): the composite action `actions/sync-bundle-key` runs in the
   caller's own `environment:` job and reads environment secrets from `secrets_json`
@@ -686,7 +690,7 @@ external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
 
 - [ ] **Callers not yet migrated:** <consumer-D-org>, zop-mannai, and quizzing-pro's other three repos
       (`engine`, `admin-ui`, `ui` — all still on `zopsmart/workflows@main`, GKE, same pattern as
-      `api`). <consumer-C-org> has only the two `project` ops callers, now repinned. `tally-extension`
+      `api`). <consumer-C-org> has only the two `project` ops callers, now repinned. Its extension repo
       was never audited and is out of scope until it is.
 - [x] **Reusables still to build** — all built 2026-08-24: `deploy-cloudflare-worker`,
       `bootstrap-cf-service` + `bootstrap-cf-dns` (the `bootstrap-cf` item split in two —
