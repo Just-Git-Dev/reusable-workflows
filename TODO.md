@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-53 open across 17 live sections. 8 closed items archived.
+54 open across 18 live sections. 8 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)](#app-token-mint--app-id-input-is-deprecated-upstream-opened-2026-10-28) — 1 open
 - **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 5 open
 - **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
 - **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open, 5 closed
@@ -24,6 +25,17 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open, 3 closed
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 13 open, 16 closed
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 0 open
+
+## App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)
+
+- [ ] move every `actions/create-github-app-token` step from `app-id:` to `client-id:`
+  The pinned v3.3.0 `action.yml` marks `app-id` with `deprecationMessage: "Use 'client-id'
+  instead."` — a warning today, not a failure. 23 files use it (`release-publish.yml`,
+  `release-drafts.yml`, `repos-*.yml`, `distribute-env-secrets.yml`, …). Our own `app-id`/`app_id`
+  workflow inputs carry the numeric App ID, and `client-id` wants the App's Client ID, a
+  different value — so this changes the input contract: plan it for the next major, with a
+  deprecation window. No step here passes `permission-actions-variables` (an input that action
+  does not define; a consumer found it ignored as "Unexpected input"), checked 2026-10-28.
 
 ## Owner rulings to build (opened 2026-10-21)
 
