@@ -356,6 +356,10 @@ could only grant a service account `run.developer`).
   `tests/run_repos_apply_step_tests.py` (the invoker shape and seven refused neighbours),
   `tests/run_deploy_env_tests.py` (`public_cases`). Rule for new steps: when a cloud CLI can
   "succeed" with a warning, check the resulting state, not the exit code.
+- **Live proof (2026-10-28).** The first production deploy of a consumer service through the
+  release that carries "Check public access" ran the step to success, and the service answered
+  publicly with its new version afterwards. The run is recorded in that consumer's private release
+  ledger.
 
 ## 2026-10-22 — rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.2.0)
 
