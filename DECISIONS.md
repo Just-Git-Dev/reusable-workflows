@@ -2,8 +2,9 @@
 
 ## Index
 
-132 entries total — 122 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+133 entries total — 123 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-28` — [PLATFORM.md: images build at the version tag, not on every push to main (fleet CI trigger policy)](#2026-10-28--platformmd-images-build-at-the-version-tag-not-on-every-push-to-main-fleet-ci-trigger-policy)
 - `2026-10-26` — [rotate-external-secret review fixes: phase marker, resume-put, structural test (RCA)](#2026-10-26--rotate-external-secret-review-fixes-phase-marker-resume-put-structural-test-rca)
 - `2026-10-23` — [bootstrap-cf-service: pre-flight authorized domains before any mapping change; retry the retarget smoke probe](#2026-10-23--bootstrap-cf-service-pre-flight-authorized-domains-before-any-mapping-change-retry-the-retarget-smoke-probe)
 - `2026-10-23` — [Public Cloud Run service via F7 public: true; deploy-cloud-run reads the invoker back (v5.1.0, RCA)](#2026-10-23--public-cloud-run-service-via-f7-public-true-deploy-cloud-run-reads-the-invoker-back-v510-rca)
@@ -249,6 +250,18 @@
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
 
+## 2026-10-28 — PLATFORM.md: images build at the version tag, not on every push to main (fleet CI trigger policy)
+
+**What:** `docs/PLATFORM.md` §2 gains a "When CI runs" paragraph, and its CI step now says "every
+PR" (a repo with no PRs runs it in its tag gate) instead of "every PR/push". No workflow changed.
+
+**Why:** a fleet CI trigger policy (owner, 2026-10-28) moves tests and image builds off push-to-main:
+unit and hygiene run on the pull request (or in the tag gate where a repo has no PRs), and the image
+is built once when a version tag is cut, then promoted by digest. This supersedes the
+"build on every push to main" half of the 2026-07-27 build-once entry. Build-once and
+promote-by-retag stand, and `build_only` on `deploy-cloud-run` remains the build step; only the event
+that starts the build moves.
+
 ## 2026-10-26 — rotate-external-secret review fixes: phase marker, resume-put, structural test (RCA)
 
 Critic review of the rotate-external-secret branch (`.scratch/rw-rebase/critic.md`), five findings fixed.
@@ -343,6 +356,10 @@ could only grant a service account `run.developer`).
   `tests/run_repos_apply_step_tests.py` (the invoker shape and seven refused neighbours),
   `tests/run_deploy_env_tests.py` (`public_cases`). Rule for new steps: when a cloud CLI can
   "succeed" with a warning, check the resulting state, not the exit code.
+- **Live proof (2026-10-28).** The first production deploy of a consumer service through the
+  release that carries "Check public access" ran the step to success, and the service answered
+  publicly with its new version afterwards. The run is recorded in that consumer's private release
+  ledger.
 
 ## 2026-10-22 — rotate-external-secret: rotate externally shared secrets from the project repo with alternating slots (v5.2.0)
 

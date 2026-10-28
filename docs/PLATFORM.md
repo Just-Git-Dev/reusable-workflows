@@ -58,11 +58,19 @@ flowchart LR
 ```
 
 1. **Access onboarded** — a WIF foothold + a releaser SA with the roles your deploys need (§4).
-2. **CI** — `ci-go` / `ci-node` on every PR/push.
+2. **CI** — `ci-go` / `ci-node` on every PR (a repo with no PRs: in its tag gate; see "When CI runs" below).
 3. **Build once → stage** — `deploy-cloud-run` / `deploy-gke-service` builds `image:<sha>`, rolls stage.
 4. **Promote → prod** — `promote-image` **retags** the stage-proven digest to `:vX.Y.Z` and rolls. No rebuild — prod runs the identical bytes stage tested.
 5. **Operate** — rotate secrets/keys, back up Postgres, sweep old images, apply alerts.
 6. **Rollback** — `rollback-service` is the out-of-band incident bridge; the permanent fix is `git revert` → new linear tag through the promote path.
+
+**When CI runs.** Tests and image builds do not run on every push to `main`. In a repo that works
+through pull requests, hygiene, static and unit checks run on the pull request (and on
+`workflow_dispatch`); in a repo that pushes straight to `main`, they run in the gate a version
+tag starts. Cutting a tag `vX.Y.Z` builds the image once, as `image:<sha>` (`deploy-cloud-run`
+with `build_only`), and tests that exact image. Publishing the release promotes the same image by
+digest with `promote-image`, with no rebuild. A schedule is kept for work no event starts: backups,
+`cleanup-gar-images` sweeps.
 
 Full release model (trunk-based, build-once, promote-by-retag, forward-only, rollback fenced
 out-of-band): **[release-process.md](release-process.md)**.
