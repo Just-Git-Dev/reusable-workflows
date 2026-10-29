@@ -2,8 +2,9 @@
 
 ## Index
 
-133 entries total — 123 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+134 entries total — 124 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-10-29` — [Re-vendor workflow-preflight: PIN_DRIFT reads strategy.matrix values](#2026-10-29--re-vendor-workflow-preflight-pin_drift-reads-strategymatrix-values)
 - `2026-10-28` — [PLATFORM.md: images build at the version tag, not on every push to main (fleet CI trigger policy)](#2026-10-28--platformmd-images-build-at-the-version-tag-not-on-every-push-to-main-fleet-ci-trigger-policy)
 - `2026-10-26` — [rotate-external-secret review fixes: phase marker, resume-put, structural test (RCA)](#2026-10-26--rotate-external-secret-review-fixes-phase-marker-resume-put-structural-test-rca)
 - `2026-10-23` — [bootstrap-cf-service: pre-flight authorized domains before any mapping change; retry the retarget smoke probe](#2026-10-23--bootstrap-cf-service-pre-flight-authorized-domains-before-any-mapping-change-retry-the-retarget-smoke-probe)
@@ -249,6 +250,22 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-10-29 — Re-vendor workflow-preflight: PIN_DRIFT reads strategy.matrix values
+
+**What:** re-vendored `scripts/workflow_preflight.py` and `scripts/test_workflow_preflight.py` from the
+canonical checker. The copy was several canonical changes behind (475-line diff), and the trigger is
+parity `PIN_DRIFT` now reading `strategy.matrix` values: a `with:` value that is exactly `${{ matrix.KEY }}`
+is checked against every literal matrix value of KEY, `include:` entries too.
+
+**Why:** keep the vendored copy equal to canonical, so this repo's gate runs the same rules as the
+rest of the fleet. A matrix leg pinned off the config version used to be invisible to parity.
+
+**Verified:** `make preflight` green with the new copy (lint 48 workflows / 199 uses, parity 14 jobs
+mapped, calls, refs 75 references). The vendored tests pass: 167, 3 skipped (VendorTests, no vendor.sh here). This
+repo has no matrix version fields, so no verdict changes. Not vendored: `laptop_status.sh` and
+`hookaudit.py`. This repo has never carried them, the checker does not import them, and adopting
+them is a separate decision.
 
 ## 2026-10-28 — PLATFORM.md: images build at the version tag, not on every push to main (fleet CI trigger policy)
 
