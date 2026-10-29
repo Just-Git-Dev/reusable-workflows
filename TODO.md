@@ -320,7 +320,7 @@ plus the first test suite in this repo. See DECISIONS.md 2026-07-27.
 ## Convergence — remaining work
 
 The goal (see `docs/convergence-audit.md`, 2026-07-14) is that platform app repos drop the
-external `zopsmart/workflows@main` dependency entirely. Status of the long tail:
+external legacy workflow library (`@main`) dependency entirely. Status of the long tail:
 
 
 - [ ] `.github/workflows/promote-image.yml` — **(optional) artifact quarantine.**
@@ -394,19 +394,5 @@ are the few things about running the convergence that the repo did not already r
 - **Do not build consumer monitoring.** A scheduled caller-drift scan was built and de-scoped
   the same day (2026-08-11): this repo is public, most callers are private, and shipping an
   org-wide scanner from a public repo is the wrong trade.
-- **`zopsmart/eazyupdates-ui` → Cloudflare Pages is PARKED (2026-08-11)**, at the user's
-  request, to do platform fixes first. Nothing live changed; the GKE path still deploys. The
-  decided-and-not-to-be-relitigated shape: serve `app.eazyupdates.com` **at the root** (drop the
-  `/user` prefix); **no DNS zone move** (a subdomain custom domain works from Google Cloud DNS
-  via CNAME — only an apex needs the zone on Cloudflare, and explicit records are mandatory
-  because the zone wildcards answer every name); **two Pages projects**, one per environment;
-  config baked at build from the committed `configs/.{stage,prod}.env`; the
-  `eazyupdates.com/user` 301 belongs on the **ingress**, not in `eazyupdates-web`'s nginx.conf.
-  Build-once/promote was rejected; nginx health endpoints dropped (no signal on a CDN). Work is
-  preserved as a git bundle at `devops/.eazyupdates-pages-wip.bundle` (branch
-  `feat/cloudflare-pages-deploy`, tip `f0728e0`) and closed PR `zopsmart/eazyupdates-ui#4440`.
-  The bundle predates the root-mount decision, so it still nests under `user/`.
-  Still open: the stage hostname; whether to adopt `ci-node`'s badges; Android App Links (the
-  apex `assetlinks.json` returns HTML — already broken); the GKE decommission tail.
 - [ ] `.github/workflows/manage-config-secrets.yml` — refuse a `gsm` create of a `*-env` secret (ruling 24 says F8 owns it; only the doc states it today)
 - [ ] `.github/workflows/repos-secrets.yml` — IAM conditions: the fetch step and `live_lines` (`scripts/repos_secrets_plan.py`) drop `condition` and gcloud add/remove run without `--condition`, so a conditional `<d>-run` line would read in-sync in F8 while the engine's secret_audit flags it forever; F8 now refuses a conditional `<d>-env` policy (error, no write), the redesign (carry condition into state, treat conditional lines as extra, `--condition=None` on add) is open
