@@ -500,14 +500,14 @@ its original `TODO.md` section. Text is verbatim.
   restored tree. Exact-match key (no `restore-keys`), keyed on the resolved Node version;
   install skipped on a hit, with a `::notice::` because lifecycle scripts then don't run.
   **Unverified on a real runner** — no measurement yet of the saving on a large tree; do that
-  when `eazyupdates-ui` or another big caller adopts it. Original entry:
+  when a big caller adopts it. Original entry:
 - [x] **`deploy-cloudflare-pages` post-deploy smoke check — BUILT 2026-08-11** (`smoke_path`, `smoke_expect`, bounded retry, blocking). Next: migrate `<consumer-C-org>/web` onto the reusable, which this unblocks. Original entry:  (`smoke_path` + bounded
   retry poll, fail the deploy if the live site doesn't serve it). Not speculative: `<consumer-C-org>/web`
   hand-rolls exactly this after the **2026-06-29 `/device` outage**, where a stale bundle went
   live with a broken client-routed path and nothing caught it — Pages deploys are
   eventually-consistent, so the poll needs a bounded retry, not a single curl. It is also part of
   why that repo has not migrated to the reusable. **Six consumers**: the five current callers
-  (`<consumer-B-org>/{ui,admin-ui,website}`, `<consumer-A-org>/{webapp,website}`) plus `eazyupdates-ui`. Lift the
+  (`<consumer-B-org>/{ui,admin-ui,website}`, `<consumer-A-org>/{webapp,website}`) plus one other-org UI. Lift the
   logic from `<consumer-C-org>/web`'s `deploy.yml` rather than reinventing it.
 - [x] **Repin the three GAR callers onto `v2.0.0`** (release-relative retention). **DONE — overtaken
       by events 2026-08-20:** all three had already reached `@v2.2.0`, and the fleet-wide repin to
@@ -524,7 +524,7 @@ its original `TODO.md` section. Text is verbatim.
 - [x] ~~build-once/promote for frontends~~ — **considered and rejected 2026-08-11.** Adding
   `build_only` + cross-run artifact download + a `predeploy_command` seam to
   `deploy-cloudflare-pages` (so one bundle could serve stage and prod, differing only in a
-  generated `environment.js`) was scoped for the eazyupdates-ui migration and dropped. A fleet
+  generated `environment.js`) was scoped for an other-org UI migration and dropped. A fleet
   check found **all seven** platform frontends are single-environment, tag-triggered, build-and-
   deploy-in-one-job, with config injected at build time from `vars.*` — so it would have added an
   artifact race, retention tuning, a `github_token`, and a **second `eval` seam** to a
