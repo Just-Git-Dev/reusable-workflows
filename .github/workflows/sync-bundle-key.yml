@@ -179,7 +179,7 @@ permissions:
 
 concurrency:
   # ONE lock across all three bundle writers. sync-bundle-key,
-  # rotate-signing-keypair and rotate-worker-signing-secret each read the latest
+  # sync-bundle-key and rotate-signing-keypair each read the latest
   # version of the SAME app-secrets blob, patch a key or two, and add a new
   # version — so any two of them running at once both read version N and the
   # second write silently drops the first one's keys. The group string must stay

@@ -56,9 +56,8 @@ A revision's spec therefore records exactly which secret version it runs, and sh
 back to an older revision brings that revision's secrets back with it.
 
 - **Only the bundle writers move the pin.** [`sync-bundle-key`](sync-bundle-key.md),
-  [`rotate-signing-keypair`](rotate-signing-keypair.md) and
-  [`rotate-worker-signing-secret`](rotate-worker-signing-secret.md) add version N+1 and roll each
-  service onto `:N+1`. All three pin in v4; otherwise a key rotation would silently un-pin every
+  [`rotate-signing-keypair`](rotate-signing-keypair.md) add version N+1 and roll each
+  service onto `:N+1`. Both pin in v4; otherwise a key rotation would silently un-pin every
   service.
 - **A deploy keeps the pin it inherits.** [`deploy-cloud-run`](deploy-cloud-run.md) never moves it.
   If the template still mounts `:latest`, the deploy resolves the newest ENABLED version, pins that

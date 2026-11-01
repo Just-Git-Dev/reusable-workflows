@@ -31,7 +31,6 @@ rules:
       - neon-backup.yml
       - release.yml
       - rotate-signing-keypair.yml
-      - rotate-worker-signing-secret.yml
       - validate-alerts.yml
   github-app:
     ignore:

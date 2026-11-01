@@ -19,7 +19,7 @@ is named in `remove_keys`, so these names need not be listed anywhere. See
 
 ## No grace window — and when NOT to use this
 
-Unlike [`rotate-worker-signing-secret`](rotate-worker-signing-secret.md), there is
+Unlike [`rotate-external-secret`](rotate-external-secret.md), there is
 **no dual-slot overlap**. Asymmetric JWTs carry a `kid`, and short-lived tokens
 churn onto the new key naturally once the signer rolls, so the old key is disabled
 as soon as the Cloud Run roll succeeds.
@@ -49,7 +49,7 @@ that overlap `sync-bundle-key`.
 
 ## Serialisation — one lock across all three bundle writers
 
-`sync-bundle-key`, `rotate-signing-keypair` and `rotate-worker-signing-secret`
+`sync-bundle-key` and `rotate-signing-keypair`
 each read the latest version of the same `app-secrets` bundle, patch one or two
 keys, and add a new version. They therefore declare an **identical**
 `concurrency.group`:

@@ -2,9 +2,10 @@
 
 ## Index
 
-135 entries total — 125 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+136 entries total — 126 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
 - `2026-11-01` — [ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)](#2026-11-01--ci-green-reads-the-push-path-filter-from-the-workflow-file-models-paths-allowlists-v600-unreleased)
+- `2026-11-01` — [Remove rotate-worker-signing-secret (replaced by rotate-external-secret, ships in v6.0.0)](#2026-11-01--remove-rotate-worker-signing-secret-replaced-by-rotate-external-secret-ships-in-v600)
 - `2026-10-29` — [Re-vendor workflow-preflight: PIN_DRIFT reads strategy.matrix values](#2026-10-29--re-vendor-workflow-preflight-pin_drift-reads-strategymatrix-values)
 - `2026-10-28` — [PLATFORM.md: images build at the version tag, not on every push to main (fleet CI trigger policy)](#2026-10-28--platformmd-images-build-at-the-version-tag-not-on-every-push-to-main-fleet-ci-trigger-policy)
 - `2026-10-26` — [rotate-external-secret review fixes: phase marker, resume-put, structural test (RCA)](#2026-10-26--rotate-external-secret-review-fixes-phase-marker-resume-put-structural-test-rca)
@@ -309,6 +310,27 @@ cut from a branch off the v5.2.0 tag.
 **Consumer migration (for the v6.0.0 release notes).** Remove any services.json `ci`
 `paths_ignore` that differs from the workflow file's `on.push.paths-ignore` (simplest: remove
 it; the file is read). Consumer C removes its `["**"]` workaround before upgrading.
+
+## 2026-11-01 — Remove rotate-worker-signing-secret (replaced by rotate-external-secret, ships in v6.0.0)
+
+**Decision.** Remove the deprecated `rotate-worker-signing-secret` reusable workflow
+(`.github/workflows/rotate-worker-signing-secret.yml`), its composite action
+(`actions/rotate-worker-signing-secret/`), both docs pages, and the tests that only existed for them
+(`tests/run_rotator_action_tests.py`; its cases in the concurrency, env-wiring, step, sync-v4, stamp and
+rotate-external tests). Owner approved 2026-11-01.
+
+**Why.** It was deprecated in v5.2.0 and replaced by `rotate-external-secret`, which rotates the same
+Worker-shared secret from the project repo with two alternating slots and needs no GCP identity.
+Provenance: the workflow and action were created by the 2026-10-21 composite-action entry; nothing in the
+repo `uses:` them except their own wrapper, so removal has no in-repo runtime dependency.
+
+**Release.** Ships in v6.0.0 as a breaking item; v6 is not released, no tag exists yet. Callers pinned to a
+v5.x tag are unaffected because those tags keep the files.
+
+**Consumer migration.** Move to `rotate-external-secret` (docs/rotate-external-secret.md).
+
+**Left unchanged on purpose.** Historical records: existing DECISIONS entries, plans/, docs/MIGRATION-v4.md,
+TODO-ARCHIVE.md. `catalog.json` regenerated with `scripts/gen_catalog.py`.
 
 ## 2026-10-29 — Re-vendor workflow-preflight: PIN_DRIFT reads strategy.matrix values
 

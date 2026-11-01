@@ -89,7 +89,7 @@ out-of-band): **[release-process.md](release-process.md)**.
 | Promote a stage image to prod without rebuilding | [`promote-image`](promote-image.md) |
 | Get a bad release off prod **fast** | [`rollback-service`](rollback-service.md) |
 | Change a service's config / secret **values** | [`manage-config-secrets`](manage-config-secrets.md) (GKE) / [`sync-bundle-key`](sync-bundle-key.md) (Cloud Run) |
-| Rotate JWT keys / a Worker HMAC / check a CF token | [`rotate-signing-keypair`](rotate-signing-keypair.md) / [`rotate-worker-signing-secret`](rotate-worker-signing-secret.md) / [`rotate-cloudflare-token`](rotate-cloudflare-token.md) |
+| Rotate JWT keys / a Worker HMAC / check a CF token | [`rotate-signing-keypair`](rotate-signing-keypair.md) / [`rotate-external-secret`](rotate-external-secret.md) / [`rotate-cloudflare-token`](rotate-cloudflare-token.md) |
 | Deploy a static site to Cloudflare Pages | [`deploy-cloudflare-pages`](deploy-cloudflare-pages.md) |
 | Back up Postgres | [`neon-backup`](neon-backup.md) |
 | Reclaim Artifact Registry storage | [`cleanup-gar-images`](cleanup-gar-images.md) |
@@ -156,7 +156,7 @@ full input/secret contract. Grant `id-token: write` for any WIF workflow. Cross-
 - **[`manage-config-secrets`](manage-config-secrets.md)** — write a **GKE** service's config (dotenv → ConfigMap, `keyvalue`/`react-env-js`) and/or secrets (`k8s` / `gsm`). *Secret: `payload_json`* (masked `toJSON()`); *Auth: WIF or stored `cluster_credentials`.* Values only — no deploy, no pod wiring.
 - **[`sync-bundle-key`](sync-bundle-key.md)** — upsert key(s) into a Secret Manager **bundle** → roll Cloud Run → disable old version. *Secret: `payload_json` {DEST_KEY:value}.* **Ordering contract:** old version disabled only after **every** service rolls.
 - **[`rotate-signing-keypair`](rotate-signing-keypair.md)** — fresh RS256 JWT keypair into a bundle → roll → disable old. *Auth: WIF.* **No grace window** — don't use if verifiers cache one key with no `kid`.
-- **[`rotate-worker-signing-secret`](rotate-worker-signing-secret.md)** — zero-downtime HMAC rotation shared by a CF Worker + Cloud Run, via a PRIMARY/PREVIOUS grace window. *Secret: `cloudflare_api_token`.* `grace_seconds` must exceed your longest signed-URL TTL.
+- **[`rotate-external-secret`](rotate-external-secret.md)** — rotate a secret shared with an external system (a CF Worker secret) from the project repo with two alternating Worker slots and a grace period; no GCP identity. Replaces `rotate-worker-signing-secret` (removed in v6.0.0).
 - **[`rotate-cloudflare-token`](rotate-cloudflare-token.md)** — **verify/nag only** (does not mint): checks the CF token is active, prints a runbook. *Secret: `cloudflare_api_token`.* Rotation is manual by design.
 
 ### Backup · cleanup · alerts

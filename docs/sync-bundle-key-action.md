@@ -27,8 +27,8 @@ A composite action cannot declare `environment:`, `permissions:`, `concurrency:`
 | `concurrency` | `group: bundle-write-<gcp_project>-<bundle_secret>`, `cancel-in-progress: false` | one lock across every writer of the same bundle blob (see below) |
 | `timeout-minutes` | `10` | the wrapper's value; the action sets none |
 
-**Concurrency is the one that bites.** `sync-bundle-key`, `rotate-signing-keypair` and
-`rotate-worker-signing-secret` each read the latest bundle version, patch a key or two and add a
+**Concurrency is the one that bites.** `sync-bundle-key` and
+`rotate-signing-keypair` each read the latest bundle version, patch a key or two and add a
 new version. Two at once both read version N and the second write silently drops the first one's
 keys. The group string must match the one the workflows use
 (`tests/run_concurrency_tests.py` pins it). No GitHub context exposes the running job's

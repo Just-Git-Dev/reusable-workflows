@@ -4,9 +4,8 @@ Sweeps Secret Manager versions on a **quarantine** policy: `ENABLED` →
 `DISABLED` → `DESTROYED`, with a mandatory dwell time in `DISABLED` between the
 last two.
 
-Four reusables here add secret versions and none has ever removed one —
-`manage-config-secrets`, `rotate-signing-keypair`, `rotate-worker-signing-secret`
-and `sync-bundle-key`. Versions accumulate for the life of the secret, every one
+Three reusables here add secret versions and none has ever removed one —
+`manage-config-secrets`, `rotate-signing-keypair` and `sync-bundle-key`. Versions accumulate for the life of the secret, every one
 still holding retrievable plaintext, so exposure grows monotonically with
 rotation frequency. That is the opposite of what rotating is for. This is the
 missing sweep.

@@ -72,9 +72,10 @@ whose run should have fired but never did.
 
 ## Owner rulings to build (opened 2026-10-21)
 
-- [ ] remove rotate-worker-signing-secret in v6 (deprecated v5.2.0, replaced by rotate-external-secret)
+- [x] remove rotate-worker-signing-secret in v6 (deprecated v5.2.0, replaced by rotate-external-secret)
   `actions/rotate-worker-signing-secret` + `.github/workflows/rotate-worker-signing-secret.yml` +
   both docs pages and README rows.
+  Done 2026-11-01 on branch chore/remove-rotate-worker-signing-secret (unreleased, ships in v6.0.0); see DECISIONS "Remove rotate-worker-signing-secret".
 - [ ] v5.1.0 live proof (DECISIONS 2026-10-23, public Cloud Run via F7): no consumer calls
   `repos-deploy-scope` with `public: true` yet. On the first adopter's run, record the run id,
   check the Plan step printed `public services in the register: [...]`, and read the invoker back
