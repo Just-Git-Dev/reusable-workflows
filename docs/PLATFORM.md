@@ -115,13 +115,13 @@ repo (private). You don't create it in your app repo — you reference it. Three
   private** framework/library repo, you don't use a PAT (user-bound) or deploy keys (one repo
   each). A shared org-owned **reader GitHub App** (`contents:read`, installed on the provider
   repos) has its key distributed into your repo's `LIB_READER_APP_KEY` secret +
-  `LIB_READER_APP_ID` variable; your build mints its own short-lived token:
+  `LIB_READER_APP_CLIENT_ID` variable (the App's **Client ID**, see below); your build mints its own short-lived token:
 
   ```yaml
   - uses: actions/create-github-app-token@<sha>
     id: reader
     with:
-      app-id: ${{ vars.LIB_READER_APP_ID }}
+      client-id: ${{ vars.LIB_READER_APP_CLIENT_ID }}
       private-key: ${{ secrets.LIB_READER_APP_KEY }}
       owner: <provider-org>
       repositories: lib-a,lib-b        # only what THIS build imports
@@ -131,6 +131,15 @@ repo (private). You don't create it in your app repo — you reference it. Three
         "https://github.com/"
       go build ./...                   # with GOPRIVATE=github.com/<org>/*
   ```
+
+  **Where to find an App's Client ID (v6.0.0).** The App-token action and our workflows take the
+  App's **Client ID** (`client-id` / `client_id`), not the numeric App ID. Open the App's settings
+  page (org Settings, Developer settings, GitHub Apps, the App) and copy **Client ID** from the
+  "About" block at the top. It is alphanumeric, public, and safe to store as a repository or
+  environment **variable** (e.g. `RELEASE_APP_CLIENT_ID`); only the private key is a secret.
+  Workflows that mint a token (`distribute-env-secrets`, `rotate-external-secret`, `repos-*`,
+  `release-*`) accept either the App (`client-id` + its key) or a single `github-token` secret,
+  and refuse both or neither; in token mode the token's scope is the caller's responsibility.
 
 ---
 

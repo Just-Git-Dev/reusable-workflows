@@ -369,9 +369,11 @@ owner pushes each **annotated** tag before opening the release PR; the flow neve
 
 ## Inputs, outputs, secrets
 
-**Secrets: pass `RELEASE_APP_KEY` to `release-plan`, `release-drafts` and `release-publish`
-BY NAME** (`secrets: {RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}}`), never with
-`secrets: inherit`. Each of the three declares it as its one required `workflow_call` secret.
+**Secrets: in App mode, pass `RELEASE_APP_KEY` to `release-plan`, `release-drafts` and
+`release-publish` BY NAME** (`secrets: {RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}}`),
+never with `secrets: inherit`. Each of the three declares it as an optional `workflow_call`
+secret (optional because a caller may pass `github-token` instead; see
+[Credentials](#credentials)).
 The jobs that mint a token declare `environment: <environment>`. Inside those jobs GitHub
 resolves that environment's *variables*, but an environment *secret* the caller did not pass
 resolves to an empty string, with no error until the mint fails ("The 'private-key' input must
@@ -387,15 +389,57 @@ checks read. Restrict the environment to `base_branch`. Inside the shared workfl
 named only as the `private-key` of a mint step. `release-pr-check` takes no secret: pass it
 none.
 
-**`app-id` must resolve in the CALLER, so it cannot live only on the environment.** The shared
-workflows never read `vars.RELEASE_APP_ID` themselves; the mint steps use `inputs.app-id`, and
-an input's `with:` expression is evaluated in the caller's job. A job that `uses:` a reusable
-workflow has no environment, so `${{ vars.RELEASE_APP_ID }}` there sees only repo and org
-variables. If the variable exists only on the `release` environment, the input arrives empty
-and the first mint fails with "The 'client-id' (or deprecated 'app-id') input must be set to a
-non-empty string", before any write. This was measured in a consumer's rehearsal. Define
-`RELEASE_APP_ID` as a **repo (or org) variable**, or pass the id as a literal. It is not
-secret.
+**`client-id` must resolve in the CALLER, so it cannot live only on the environment.** It is
+the App's **Client ID** (a string such as `Iv23li...`), not the numeric App ID. The shared
+workflows never read `vars.RELEASE_APP_CLIENT_ID` themselves; the mint steps use
+`inputs.client-id`, and an input's `with:` expression is evaluated in the caller's job. A job
+that `uses:` a reusable workflow has no environment, so `${{ vars.RELEASE_APP_CLIENT_ID }}` there
+sees only repo and org variables. If the variable exists only on the `release` environment, the
+input arrives empty. The guard then fails the run with "App incomplete: missing client-id" (or
+"no credentials", when no key is passed either), before any write. (Before v6 the same mistake
+surfaced at the first mint, measured in a consumer's rehearsal.) Define `RELEASE_APP_CLIENT_ID`
+as a **repo (or org) variable**, or pass the id as a literal. It is not secret.
+
+### Credentials
+
+Every job that needs more than the caller's `GITHUB_TOKEN` gets its token from one of two modes.
+Pass exactly one.
+
+- **App mode:** `client-id` (the App's Client ID) plus the secret `RELEASE_APP_KEY`. The
+  workflows mint short-lived installation tokens from them, scoped per job.
+- **Token mode:** one secret, `github-token` (for example a fine-grained PAT). Every job that
+  would hold a minted token holds this one instead. No `client-id` and no `RELEASE_APP_KEY`.
+
+A guard step runs first in `release-plan` (job `plan`), `release-drafts` and `release-publish`
+(job `verdict`), before any mint. It fails the run with one of these `::error::` messages,
+checked in this order:
+
+| case | message |
+|---|---|
+| any App field and `github-token` both passed | `pass the App or github-token, not both` |
+| nothing passed | `no credentials: pass the App (client-id and its private key) or github-token` |
+| key passed, `client-id` empty | `App incomplete: missing client-id` |
+| `client-id` passed, key empty | `App incomplete: missing private key` |
+
+Either App field counts as "the App is given". So half an App plus `github-token` is refused as
+"both", and half an App alone is refused as "App incomplete". Nothing guesses which was meant.
+
+**Least privilege.** A token you pass as `github-token` gets none of our narrowing: no per-job
+`permissions`, no repository limit (one repo per publish slot), no read-only token for read jobs
+or a rehearsal, and it is not revoked at the end of the job. We do not mint or revoke it. Its
+scope is the caller's responsibility. App mode stays the least-privilege option. In token mode
+the same token goes to every job of the flow, and there is no separate read token. The jobs that
+hold it are:
+
+- `release-plan`: `resolve` (it installs PyYAML from PyPI, then runs ci-green with the token in
+  its env) and `service-gates` (it passes the token to the `check-release-gate` action). This
+  holds in a rehearsal too.
+- `release-drafts`: `drafts`.
+- `release-publish`: `publish-1` to `publish-6`.
+
+In App mode the first two hold a read-only token. Give a `github-token` only the access the whole
+flow needs: contents read/write, actions read/write and checks read on every repo in `allowed`
+and `read-only-repos`, and nothing else.
 
 **The caller's `GITHUB_TOKEN`** is used only for reads of the root repo and the PR comment. A
 called workflow's token can never have more than the calling job grants, so grant what each
@@ -420,8 +464,10 @@ body from the event payload, with no token.
 |---|---|---|---|
 | `allowed` | yes | — | comma list of the service repos the App may write. **Hard-code it** in `release.yml`. |
 | `read-only-repos` | no | `''` | comma list of extra repos the App may only read (the `consumers_only` repos) |
-| `app-id` | yes | — | the release App's id (not secret; e.g. `${{ vars.RELEASE_APP_ID }}` as a **repo/org** variable — an environment-only variable is empty here, see above) |
+| `client-id` | no | `''` | App mode: the release App's Client ID, not the numeric App ID (not secret; e.g. `${{ vars.RELEASE_APP_CLIENT_ID }}` as a **repo/org** variable — an environment-only variable is empty here, see above). Leave it out in token mode; see [Credentials](#credentials). |
 | `environment` | no | `release` | the environment holding `RELEASE_APP_KEY` |
+| secret `RELEASE_APP_KEY` | no | — | App mode: the App's private key |
+| secret `github-token` | no | — | token mode: one token used by every job instead of the App |
 | `config` | no | `releases/services.json` | |
 | `release-workflow` | no | `release.yml` | file name of the caller's release workflow (for the concurrent-run guard) |
 | `pr-check-name` | no | `release-pr / release-pr` | the check run the merged PR must carry |
@@ -448,7 +494,7 @@ Caller permissions: `contents: read`, `pull-requests: read`, `checks: read`, `ac
 | input | required | default | meaning |
 |---|---|---|---|
 | `needs` | yes | — | `${{ toJSON(needs) }}` from the calling job |
-| `allowed`, `app-id`, `environment`, `config` | as `release-plan` | | |
+| `allowed`, `client-id`, `environment`, `config`, secrets `RELEASE_APP_KEY`, `github-token` | as `release-plan` | | |
 | `contracts-job` | no | `contracts` | the caller's contract job id. It may be `skipped` only when `checks` is `[]`. |
 
 It refuses to run unless the `needs` include a job `plan` that succeeded, and every other job
@@ -461,7 +507,7 @@ in `needs` succeeded (the contract job may be skipped as above). Output: `drafts
 | input | required | default | meaning |
 |---|---|---|---|
 | `needs` | yes | — | `${{ toJSON(needs) }}`; must include `plan` and `drafts` |
-| `allowed`, `app-id`, `environment`, `config`, `contracts-job` | as above | | |
+| `allowed`, `client-id`, `environment`, `config`, `contracts-job`, secrets `RELEASE_APP_KEY`, `github-token` | as above | | |
 | `required-jobs` | no | `plan,drafts` | comma list of job ids that must be present in `needs` |
 
 Publishes up to **6** services (one job each); a manifest listing more is refused at plan. Call
@@ -505,7 +551,7 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v5.2.0
     with:
       allowed: backend,webapp,desktop
-      app-id: ${{ vars.RELEASE_APP_ID }}
+      client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
       rehearsal: ${{ github.event_name == 'workflow_dispatch' }}
       manifest: ${{ inputs.manifest || '' }}
       manifest-ref: ${{ inputs.manifest-ref || '' }}
@@ -536,7 +582,7 @@ jobs:
     with:
       needs: ${{ toJSON(needs) }}
       allowed: backend,webapp,desktop
-      app-id: ${{ vars.RELEASE_APP_ID }}
+      client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
     secrets:
       RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
 
@@ -556,9 +602,29 @@ jobs:
       needs: ${{ toJSON(needs) }}
       required-jobs: plan,drafts,smoke
       allowed: backend,webapp,desktop
-      app-id: ${{ vars.RELEASE_APP_ID }}
+      client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
     secrets:
       RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
+```
+
+Token mode for `release-plan` (a complete job; `drafts` and `publish` change the same way). Drop
+`client-id` and `RELEASE_APP_KEY`, pass `github-token`, never both. The token's scope is yours to
+set, see [Credentials](#credentials).
+
+```yaml
+# .github/workflows/release-token.yml
+name: Release (token mode)
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  plan:
+    permissions: {contents: read, pull-requests: read, checks: read, actions: read}
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.0.0
+    with:
+      allowed: backend,webapp,desktop
+    secrets:
+      github-token: ${{ secrets.RELEASE_TOKEN }}   # by name; one token for every job
 ```
 
 ## Moving from a project-local copy

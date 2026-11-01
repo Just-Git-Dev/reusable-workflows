@@ -78,14 +78,33 @@ Cloudflare through `curl --data @-`. It is never an output, an env var or a summ
 | `secret_bytes` | input | `32` | random bytes, hex-encoded (16 to 128) |
 | `force` | input | `false` | rotate now if exactly one slot exists |
 | `dry_run` | input | `true` | print the plan, write nothing |
-| `app_id` | input (req) | none | id of the org's relay GitHub App |
-| `environment` | input | `''` | job environment holding `app_key` and the Cloudflare token |
+| `client_id` | input | `''` | Client ID (not the numeric App ID) of the org's relay GitHub App; App mode |
+| `environment` | input | `''` | job environment holding `app_key` (or `github-token`) and the Cloudflare token |
 | `cloudflare_api_token` | **secret** (req) | none | Workers Scripts:Edit on `cf_account_id` |
-| `app_key` | **secret** (req) | none | private key of the App |
+| `app_key` | **secret** | none | private key of the App; App mode (with `client_id`) |
+| `github-token` | **secret** | none | token mode: a caller token used instead of the App; never together with the App |
+
+## Credential modes (v6)
+
+Pass **one** of two credentials; the first step of the job refuses anything else, before any token is
+minted. Each message is printed as an `::error::` line, checked in this order:
+
+| You pass | Result |
+|---|---|
+| any App field **and** `github-token` | `pass the App or github-token, not both` |
+| nothing | `no credentials: pass the App (client-id and its private key) or github-token` |
+| `app_key` without `client_id` | `App incomplete: missing client-id` |
+| `client_id` without `app_key` | `App incomplete: missing private key` |
+| `client_id` + `app_key` | **App mode**: a short-lived installation token narrowed as described here |
+| `github-token` only | **Token mode**: that secret is used as given |
+
+`client_id` is the App's **Client ID** (alphanumeric, shown on the App's settings page), **not** the
+numeric App ID. In token mode nothing is minted, narrowed or revoked by this workflow: the token's
+scope is the caller's responsibility, and App mode stays the least-privilege option.
 
 ## GitHub App permissions
 
-On `target_repo`: **Environments: write** (the secret) and **Actions: write** (dispatch and read the
+In App mode, on `target_repo`: **Environments: write** (the secret) and **Actions: write** (dispatch and read the
 sync run). On the project repo: **Variables: write** (the state). Metadata: read. The workflow
 mints one token scoped to exactly those two repos.
 
@@ -136,7 +155,7 @@ jobs:
       target_secret_name: FILES_SIGNING_SECRET
       sync_workflow: sync-secrets.yml
       state_variable: ROTATE_FILES_SIGNING_STATE
-      app_id: ${{ vars.RELAY_APP_ID }}
+      client_id: ${{ vars.RELAY_APP_CLIENT_ID }}
       environment: rotation
       force: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
@@ -146,7 +165,7 @@ jobs:
 ```
 
 The schedule runs with `dry_run: false`; a manual run defaults to `true`. The `rotation`
-environment holds the App key and the Cloudflare token.
+environment holds the App key (or `github-token`) and the Cloudflare token.
 
 ## Failure and recovery
 
