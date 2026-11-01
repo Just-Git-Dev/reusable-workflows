@@ -2631,7 +2631,7 @@
     "distribute-env-secrets": {
       "inputs": {
         "client_id": {
-          "default": null,
+          "default": "",
           "description": "Client id of the GitHub App that writes the environment secrets. Empty when github-token is used.",
           "required": false,
           "type": "string"
@@ -3576,7 +3576,7 @@
     "repos-create": {
       "inputs": {
         "client-id": {
-          "default": null,
+          "default": "",
           "description": "The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead",
           "required": false,
           "type": "string"
@@ -3674,7 +3674,7 @@
     "repos-environments": {
       "inputs": {
         "client_id": {
-          "default": null,
+          "default": "",
           "description": "The GitHub App client id (not secret) that creates the environments. Pass this with the App key, or github-token instead",
           "required": false,
           "type": "string"
@@ -3849,7 +3849,7 @@
     "repos-settings": {
       "inputs": {
         "client-id": {
-          "default": null,
+          "default": "",
           "description": "The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead",
           "required": false,
           "type": "string"
@@ -3893,7 +3893,7 @@
     "repos-variables": {
       "inputs": {
         "client-id": {
-          "default": null,
+          "default": "",
           "description": "The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead",
           "required": false,
           "type": "string"
