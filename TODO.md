@@ -37,10 +37,15 @@ complement cannot be written as globs. Cost of the workaround: the changed-files
 a no-op, so any commit with no run passes on its nearest green ancestor, including a commit
 whose run should have fired but never did.
 
-- [ ] `ci.py` — native `paths` (allowlist) support on a services.json `ci` entry: with no run at
+- [x] `ci.py` — native `paths` (allowlist) support on a services.json `ci` entry: with no run at
   the sha, walk back as for `paths_ignore` and require that NO changed file matches `paths`.
   Add a check that each `ci` entry's filter matches the named workflow's `on.push`
   `paths`/`paths-ignore`, so the two cannot drift. Update `docs/release-flow.md` §H8.
+  Built 2026-11-01 on branch `feat/ci-green-paths-allowlist` (owner Q1 = A: the filter is read
+  from the workflow file, not declared): `test_ci.py` `TriggerFilterTests`, DECISIONS
+  2026-11-01. Ships in v6.0.0, unreleased. Release-notes line: "remove any services.json
+  `paths_ignore` that differs from the workflow file's `on.push.paths-ignore`". Live proof is
+  consumer C's, after release (remove its `["**"]` workaround, re-run its rehearsal).
 
 ## App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)
 

@@ -171,6 +171,25 @@ merge ──► plan ──► [caller: contracts, images…] ──► drafts �
      listed sha, the sha is on `base_branch`, the version is above every existing Release and
      tag, no Release of that version exists yet, and the changelog has the version heading.
    - *ci-green*: each listed sha's own CI workflows (services.json `ci`) completed with success.
+     A workflow with a path filter has no run on a push it filters out, so when there is no
+     push run at the sha, ci-green reads the filter **from the workflow file at that sha**
+     (`.github/workflows/<file>`, keys `on.push.paths` / `on.push.paths-ignore`; needs PyYAML)
+     and walks first-parent ancestors (up to 20) to the nearest commit that has a run. That run
+     must be green, and then:
+     - `paths-ignore`: every file changed since that ancestor must match a `paths-ignore` glob.
+     - `paths`: no file changed since that ancestor may be selected by `paths`. The patterns are
+       read in order and the last one that matches a file decides, so
+       `paths: ["src/**", "!src/docs/**"]` does not select `src/docs/a.md`.
+     - no path filter: the run is `missing`.
+
+     It **fails closed**, naming the reason, and never falls back to "no filter", when it cannot
+     read the file at the sha, the YAML does not parse, PyYAML is missing, `push` is not a
+     trigger, `push` lists only `tags`/`tags-ignore`, both `paths` and `paths-ignore` are set,
+     a filter is not a list of strings, or a `paths-ignore` pattern starts with `!`. `on: push`
+     and `on: [push, ...]` are push with no filter. A `paths_ignore` that services.json still
+     declares must equal the file's `on.push.paths-ignore` exactly (same list, same order); the
+     file is then read even when a run exists, and a mismatch fails with both values. Since
+     v6.0.0; earlier versions trusted services.json and could not model `paths`.
    - *resolve*: every service's ref (the candidate sha if listed, else the **live** version) and
      image, and the contract checks for every intermediate state of the publish order. Every
      approved break must have a live-consumer check (R3); the list is the `breaking` output.
@@ -312,7 +331,7 @@ Per service:
 | `repo`, `order` | all | repo name (in `owner`) and its unique publish position |
 | `kind` | all | `image`, `pages` or `download` (below) |
 | `deploy_workflow` | all | file name of the workflow that deploys on `release: published` and sets `run-name` to `deploy_run_name` |
-| `ci` | all | `[{workflow, paths_ignore?}]`; each workflow's push run at the listed sha must be green |
+| `ci` | all | `[{workflow, paths_ignore?}]`; each workflow's push run at the listed sha must be green. The path filter is read from the workflow file (*ci-green* above); `paths_ignore` is optional and, when given, must equal the file's `on.push.paths-ignore` |
 | `image` | `image` (required) | image path under `gar_registry` |
 | `health_url` | `image` (required) | unauthenticated GET after the deploy |
 | `health` | `image` (optional) | `{"path": "data.status", "expect": "UP"}` (the default): the health response must be HTTP 200 with the JSON value at the dotted `path` equal to `expect` |

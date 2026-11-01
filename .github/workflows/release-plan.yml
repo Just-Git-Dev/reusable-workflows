@@ -112,7 +112,7 @@ env:
   # the tag. A called workflow cannot discover its own ref at runtime.
   WORKFLOW_VERSION: v5.2.0
   # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
-  RELEASE_FLOW_TREE: "a9e9029d05a7394470c543a0fe4af9fc7b4d06f6"
+  RELEASE_FLOW_TREE: "0894bc8c458e2aff9ce804a1bea9fed5f32d50e4"
 
 defaults:
   run:
@@ -411,6 +411,11 @@ jobs:
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
         run: release-flow validate "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG"
+
+      # ci-green reads a workflow's on.push path filter from its file (PyYAML); without it the
+      # check fails closed rather than guessing "no filter".
+      - name: PyYAML for ci-green
+        run: python3 -P -m pip install --quiet --disable-pip-version-check pyyaml
 
       - name: CI-green (every listed commit's own CI, before any contract work)
         env:

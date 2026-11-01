@@ -200,14 +200,16 @@ def from_dict(d) -> Config:
                               f"not {kind}")
         ci = []
         for w in raw.get("ci", []):
+            # paths_ignore absent -> None: ci-green reads the filter from the workflow file.
+            # Present -> a tuple that must equal the file's on.push.paths-ignore (ci.py).
             ign = w.get("paths_ignore", []) if isinstance(w, dict) else None
             if not isinstance(w, dict) or not isinstance(w.get("workflow"), str) \
                     or not w["workflow"] or not isinstance(ign, list) \
                     or not all(isinstance(x, str) for x in ign) \
                     or set(w) - {"workflow", "paths_ignore"}:
                 raise ConfigError(f"{where}: bad ci entry {w!r} "
-                                  "(want {workflow: file, paths_ignore: [globs]})")
-            ci.append((w["workflow"], tuple(ign)))
+                                  "(want {workflow: file, paths_ignore?: [globs]})")
+            ci.append((w["workflow"], tuple(ign) if "paths_ignore" in w else None))
         services.append(Service(repo, kind, order, wf, health_url, image, tuple(ci), health,
                                 assets))
     if not services:

@@ -2,7 +2,7 @@ name: Release flow CLI
 description: >-
   Puts the `release-flow` CLI on PATH for the rest of the job, and checks that the runner has
   Python 3.9 or newer. The CLI is stdlib-only Python (PyYAML for `spec-compat` and `ops-subset`
-  inputs only). Takes no inputs and no token. See docs/release-flow.md.
+  YAML inputs, and for `ci-green` when it must read a workflow's path filter). Takes no inputs and no token. See docs/release-flow.md.
 
 # A composite action, so a caller's own contract and smoke jobs can run `release-flow spec-compat`
 # and friends. The four shared release workflows do not use `uses:` on this action (a `./` path

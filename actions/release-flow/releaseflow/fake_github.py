@@ -8,6 +8,7 @@ request, which is how the tests prove "zero writes" and "writes in this order".
 from __future__ import annotations
 
 import base64
+import json
 import re
 from urllib.parse import parse_qs, urlsplit
 
@@ -38,6 +39,7 @@ class Repo:
         self.ci_runs = {}        # (workflow file, head sha) -> [runs]
         self.parents = {}        # commit sha -> [parent shas]
         self.compare_files = {}  # (ancestor, sha) -> [changed file names]
+        self.files = {}          # (repo path, ref) -> text, served by contents/<path>?ref=
         self.live_runs = None   # deploy-workflow runs for status=success queries (None = none)
         self.pulls = {}          # commit sha -> [PR dicts]   (root repo)
         self.check_runs = {}     # head sha -> [check-run dicts]
@@ -145,6 +147,11 @@ class FakeGitHub:
                 if text is None:
                     return nf
                 # GitHub wraps base64 at 60 columns; encodebytes does the same
+                return 200, {"content": base64.encodebytes(text.encode()).decode(),
+                             "encoding": "base64"}
+            m = re.match(r"^contents/(.+)$", rest)
+            if m and (m.group(1), q.get("ref")) in repo.files:
+                text = repo.files[(m.group(1), q.get("ref"))]
                 return 200, {"content": base64.encodebytes(text.encode()).decode(),
                              "encoding": "base64"}
             if q.get("head_sha") and re.match(r"^actions/workflows/([^/]+)/runs$", rest):
@@ -294,8 +301,19 @@ def ci_run(created="2026-10-08T00:00:00Z", status="completed", conclusion="succe
 
 
 def green_ci(fake, repo, sha, cfg_dict=None):
-    """A successful push run of every CI workflow cfg lists for `repo`, at `sha`."""
+    """A successful push run of every CI workflow cfg lists for `repo`, at `sha`, and a
+    workflow file at `sha` whose trigger agrees with cfg (paths-ignore when cfg declares it)."""
     for s in (cfg_dict or CFG_DICT)["services"]:
         if s["repo"] == repo:
             for w in s.get("ci", []):
                 fake.repo(repo).ci_runs[(w["workflow"], sha)] = [ci_run()]
+                workflow_file(fake, repo, w["workflow"], sha,
+                              {"paths-ignore": w["paths_ignore"]} if "paths_ignore" in w
+                              else None)
+
+
+def workflow_file(fake, repo, wf, sha, push=None, text=None):
+    """Serve .github/workflows/<wf> at `sha`: `on: {push: <push>}`, or the raw `text`."""
+    if text is None:
+        text = json.dumps({"name": wf, "on": {"push": push}, "jobs": {}})  # JSON is YAML
+    fake.repo(repo).files[(f".github/workflows/{wf}", sha)] = text

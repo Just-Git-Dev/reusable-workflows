@@ -2,8 +2,9 @@
 
 ## Index
 
-134 entries total — 124 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+135 entries total — 125 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-01` — [ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)](#2026-11-01--ci-green-reads-the-push-path-filter-from-the-workflow-file-models-paths-allowlists-v600-unreleased)
 - `2026-10-29` — [Re-vendor workflow-preflight: PIN_DRIFT reads strategy.matrix values](#2026-10-29--re-vendor-workflow-preflight-pin_drift-reads-strategymatrix-values)
 - `2026-10-28` — [PLATFORM.md: images build at the version tag, not on every push to main (fleet CI trigger policy)](#2026-10-28--platformmd-images-build-at-the-version-tag-not-on-every-push-to-main-fleet-ci-trigger-policy)
 - `2026-10-26` — [rotate-external-secret review fixes: phase marker, resume-put, structural test (RCA)](#2026-10-26--rotate-external-secret-review-fixes-phase-marker-resume-put-structural-test-rca)
@@ -250,6 +251,54 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-01 — ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)
+
+**Context.** H8 `ci-green` (`actions/release-flow/releaseflow/ci.py`) walked back to a green
+ancestor only when the services.json `ci` entry declared `paths_ignore`. A workflow filtered by
+an `on.push.paths:` allowlist has no run on most commits, so "no run" read as "missing".
+Consumer C hit it in a release rehearsal (peer report, recorded in TODO.md; not re-verified
+here) and worked around it with `"paths_ignore": ["**"]`, which turns the changed-files check
+into a no-op. Plan: `plans/2026-11-01-ci-green-paths-allowlist.md`.
+
+**Decision (owner, 2026-11-01, Q1-Q4 of the plan).**
+1. ci-green reads the push path filter FROM THE WORKFLOW FILE at the listed sha
+   (`on.push.paths` / `on.push.paths-ignore`), not from services.json. Why not "declare `paths`
+   in services.json plus a drift check": the drift check must parse the same YAML anyway, so a
+   second declared copy only adds something that can be wrong.
+2. Rule with no run at the sha: walk first-parent ancestors (MAX_WALK 20) to the nearest run,
+   which must be green; then `paths-ignore`: every changed file matches it; `paths`: no changed
+   file is selected by it; no filter: missing.
+3. `!` in `paths` follows GitHub: patterns in order, the last match decides. A `!` in
+   `paths-ignore` is not modelled and fails closed.
+4. Fail closed with the reason, never fall back to "no filter": file unreadable at the sha,
+   YAML error, PyYAML missing, push not a trigger, push filtered by tags only, both filters set,
+   a filter that is not a list of strings. `on: push` / `on: [push, ...]` are push with no
+   filter (GitHub defines it; the plan's test list had "list-form `on:` fails closed", narrowed
+   here because the form is fully defined, and failing it would break plain `on: [push,
+   pull_request]` workflows that have no filter to model).
+5. A services.json `paths_ignore`, when still declared, must equal the file's
+   `on.push.paths-ignore` exactly (same list, same order); the file is then read even when a
+   run exists. A mismatch fails naming both values. Consumer C's `["**"]` therefore fails.
+
+**Cost and scope.** The file is read only when it can matter: no run at the sha, or a declared
+`paths_ignore` to cross-check. A workflow with a run and nothing declared reads no file and
+needs no PyYAML (tested), so today's common case costs no extra API call. PyYAML is installed in
+the release-plan ci-green job and the release-drafts pre-check job. YAML is parsed with the
+YAML-1.2-booleans loader from `ops_subset.py`, so a bare `on:` key stays `"on"`. Known limit: an
+allowlist workflow whose files last changed more than 20 first-parent commits back fails "no run
+found within 20" (fail closed, named).
+
+**Why major (v6.0.0).** A config that passed (`paths_ignore` differing from the file) now fails,
+and an unreadable trigger now fails where it used to read "missing" or pass. By the repo's
+semver rule (semver tracks the input contract) that is breaking. Owner 2026-11-01: v6.0.0 ships
+ONCE with three breaking items: this change; `app-id` -> `client-id` plus a caller-supplied
+token as an alternative to the GitHub App; and removing the deprecated
+`rotate-worker-signing-secret`. This lands on a branch and is not released by itself.
+
+**Consumer migration (for the v6.0.0 release notes).** Remove any services.json `ci`
+`paths_ignore` that differs from the workflow file's `on.push.paths-ignore` (simplest: remove
+it; the file is read). Consumer C removes its `["**"]` workaround before upgrading.
 
 ## 2026-10-29 — Re-vendor workflow-preflight: PIN_DRIFT reads strategy.matrix values
 
