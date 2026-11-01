@@ -22,11 +22,17 @@ inputs:
     description: Cloudflare API token with Workers Scripts:Edit on cf_account_id.
     required: true
   app_key:
-    description: Private key of the org's relay GitHub App.
-    required: true
-  app_id:
-    description: Id of the org's relay GitHub App.
-    required: true
+    description: Private key of the org's relay GitHub App. Empty when github-token is used.
+    required: false
+    default: ''
+  client_id:
+    description: Client id of the org's relay GitHub App. Empty when github-token is used.
+    required: false
+    default: ''
+  github-token:
+    description: A token to use instead of the App (exactly one credential mode).
+    required: false
+    default: ''
   cf_account_id:
     description: Cloudflare account id owning the Worker script.
     required: true
@@ -108,6 +114,14 @@ runs:
         CONCURRENCY_DECLARED: ${{ inputs.concurrency_declared }}
       run: '"$GITHUB_ACTION_PATH/validate-booleans.sh"'
 
+    - name: Refuse unless exactly one credential mode
+      shell: bash
+      env:
+        CLIENT_ID: ${{ inputs.client_id }}
+        KEY_SET: ${{ inputs.app_key != '' }}
+        TOKEN_SET: ${{ inputs.github-token != '' }}
+      run: '"$GITHUB_ACTION_PATH/validate-auth.sh"'
+
     - name: Validate inputs
       id: inputs
       shell: bash
@@ -127,7 +141,7 @@ runs:
         GRACE_HOURS: ${{ inputs.grace_hours }}
         WAIT_MINUTES: ${{ inputs.wait_minutes }}
         SECRET_BYTES: ${{ inputs.secret_bytes }}
-        APP_ID: ${{ inputs.app_id }}
+        CLIENT_ID: ${{ inputs.client_id }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: '"$GITHUB_ACTION_PATH/validate-inputs.sh"'
 
@@ -141,9 +155,10 @@ runs:
 
     - name: Mint App token
       id: token
+      if: ${{ inputs.client_id != '' }}
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
-        app-id: ${{ inputs.app_id }}
+        client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_key }}
         owner: ${{ github.repository_owner }}
         repositories: ${{ steps.inputs.outputs.token_repos }}
@@ -156,7 +171,7 @@ runs:
       id: state
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         REPO: ${{ github.repository }}
         STATE_VARIABLE: ${{ inputs.state_variable }}
       run: '"$GITHUB_ACTION_PATH/read-state.sh"'
@@ -199,7 +214,7 @@ runs:
       if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'rotate'
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         REPO: ${{ github.repository }}
         STATE_VARIABLE: ${{ inputs.state_variable }}
         STATE_CURRENT: ${{ steps.decide.outputs.current }}
@@ -224,7 +239,7 @@ runs:
       if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         OWNER: ${{ github.repository_owner }}
         TARGET_REPO: ${{ inputs.target_repo }}
         TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
@@ -236,7 +251,7 @@ runs:
       if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put')
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         REPO: ${{ github.repository }}
         STATE_VARIABLE: ${{ inputs.state_variable }}
         STATE_CURRENT: ${{ steps.decide.outputs.current }}
@@ -250,7 +265,7 @@ runs:
       if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         OWNER: ${{ github.repository_owner }}
         TARGET_REPO: ${{ inputs.target_repo }}
         SYNC_WORKFLOW: ${{ inputs.sync_workflow }}
@@ -264,7 +279,7 @@ runs:
       if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         OWNER: ${{ github.repository_owner }}
         TARGET_REPO: ${{ inputs.target_repo }}
         SYNC_WORKFLOW: ${{ inputs.sync_workflow }}
@@ -276,7 +291,7 @@ runs:
       if: inputs.dry_run != 'true' && (steps.decide.outputs.action == 'rotate' || steps.decide.outputs.action == 'resume-put' || steps.decide.outputs.action == 'pending-sync')
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         REPO: ${{ github.repository }}
         STATE_VARIABLE: ${{ inputs.state_variable }}
         STATE_CURRENT: ${{ steps.decide.outputs.new_slot }}
@@ -290,7 +305,7 @@ runs:
       if: inputs.dry_run != 'true' && steps.decide.outputs.action == 'adopt'
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token || inputs.github-token }}
         REPO: ${{ github.repository }}
         STATE_VARIABLE: ${{ inputs.state_variable }}
         STATE_CURRENT: ${{ steps.decide.outputs.current }}

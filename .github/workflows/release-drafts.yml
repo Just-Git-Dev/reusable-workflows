@@ -10,8 +10,10 @@ name: Release drafts (reusable)
 #   - The write token is minted ONLY in the `drafts` job, and only when rehearsal == 'false'
 #     (never `!= 'true'`: an unknown value must not mint);
 #     a rehearsal mints a READ-ONLY token and runs `drafts --check-only`. The App key lives in the
-#     caller's `environment`, is the one declared secret (passed BY NAME), and is named ONLY as
-#     the `private-key` of a mint step.
+#     caller's `environment`, is passed BY NAME, and is named ONLY as
+#     the `private-key` of a mint step. The other credential mode is a plain `github-token`
+#     secret instead of the App; the first step of the verdict job refuses unless exactly one
+#     mode is given. Caller example: `client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}`.
 #   - The App write goes through the CLI's allowlisted client: create a Release with
 #     `draft: true`, and nothing else in this stage.
 #   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
@@ -28,10 +30,11 @@ on:
         description: 'Comma list of the service repos the App may write'
         type: string
         required: true
-      app-id:
-        description: 'The release GitHub App id (not secret)'
+      client-id:
+        description: 'The release GitHub App client id (not secret), e.g. vars.RELEASE_APP_CLIENT_ID; omit it and pass github-token instead'
         type: string
-        required: true
+        required: false
+        default: ''
       environment:
         description: 'The caller environment holding the RELEASE_APP_KEY secret'
         type: string
@@ -50,7 +53,10 @@ on:
     secrets:
       RELEASE_APP_KEY:
         description: 'The release App private key. Pass it BY NAME (inherit is same-org only)'
-        required: true
+        required: false
+      github-token:
+        description: 'A GitHub token to use instead of the App (pass the App or this, not both)'
+        required: false
     outputs:
       drafts:
         description: "JSON {repo: release_id} ({repo: 'rehearsal'} in a rehearsal)"
@@ -84,6 +90,32 @@ jobs:
       manifest_sha256: ${{ steps.v.outputs.manifest_sha256 }}
       ci_filters: ${{ steps.v.outputs.ci_filters }}
     steps:
+      - name: Refuse unless exactly one credential mode
+        shell: bash
+        env:
+          CLIENT_ID: ${{ inputs.client-id }}
+          KEY_SET: ${{ secrets.RELEASE_APP_KEY != '' }}
+          TOKEN_SET: ${{ secrets.github-token != '' }}
+        run: |
+          app=false
+          if [ -n "$CLIENT_ID" ] || [ "$KEY_SET" = "true" ]; then app=true; fi
+          if [ "$app" = "true" ] && [ "$TOKEN_SET" = "true" ]; then
+            echo "::error::pass the App or github-token, not both"
+            exit 1
+          fi
+          if [ "$app" = "false" ] && [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::no credentials: pass the App (client-id and its private key) or github-token"
+            exit 1
+          fi
+          if [ "$KEY_SET" = "true" ] && [ -z "$CLIENT_ID" ]; then
+            echo "::error::App incomplete: missing client-id"
+            exit 1
+          fi
+          if [ -n "$CLIENT_ID" ] && [ "$KEY_SET" != "true" ]; then
+            echo "::error::App incomplete: missing private key"
+            exit 1
+          fi
+
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,10 +228,10 @@ jobs:
       # A rehearsal writes nothing, so it never gets a write token.
       - name: Mint App token (READ-ONLY, rehearsal)
         id: app-ro
-        if: ${{ needs.verdict.outputs.rehearsal == 'true' }}
+        if: ${{ inputs.client-id != '' && needs.verdict.outputs.rehearsal == 'true' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ inputs.app-id }}
+          client-id: ${{ inputs.client-id }}
           private-key: ${{ secrets.RELEASE_APP_KEY }}
           owner: ${{ steps.cfg.outputs.owner }}
           repositories: ${{ steps.cfg.outputs.list }}
@@ -209,10 +241,10 @@ jobs:
 
       - name: Mint App token (draft Releases on the allowed repos only)
         id: app
-        if: ${{ needs.verdict.outputs.rehearsal == 'false' }}
+        if: ${{ inputs.client-id != '' && needs.verdict.outputs.rehearsal == 'false' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ inputs.app-id }}
+          client-id: ${{ inputs.client-id }}
           private-key: ${{ secrets.RELEASE_APP_KEY }}
           owner: ${{ steps.cfg.outputs.owner }}
           repositories: ${{ steps.cfg.outputs.list }}
@@ -226,7 +258,7 @@ jobs:
         id: dr
         if: ${{ needs.verdict.outputs.rehearsal == 'true' }}
         env:
-          RELEASE_FLOW_READ_TOKEN: ${{ steps.app-ro.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app-ro.outputs.token || secrets.github-token }}
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
@@ -243,8 +275,8 @@ jobs:
         id: d
         if: ${{ needs.verdict.outputs.rehearsal == 'false' }}
         env:
-          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token }}
-          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_WRITE_TOKEN: ${{ steps.app.outputs.token || secrets.github-token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token || secrets.github-token }}
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}

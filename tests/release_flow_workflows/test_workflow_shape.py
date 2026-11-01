@@ -213,7 +213,7 @@ class PlanTests(unittest.TestCase):
             self.assertIn(sub, runs)
         for s in steps:
             if "release-flow validate" in s.get("run", "") or "release-flow ci-green" in s.get("run", ""):
-                self.assertEqual(s["env"]["RELEASE_FLOW_READ_TOKEN"], "${{ steps.app.outputs.token }}")
+                self.assertEqual(s["env"]["RELEASE_FLOW_READ_TOKEN"], "${{ steps.app.outputs.token || secrets.github-token }}")
         self.assertNotIn("WRITE_TOKEN", wf.text("release-plan.yml"))
 
     def test_service_gates_uses_the_pinned_check_release_gate(self):
@@ -222,7 +222,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(gate["uses"], "Just-Git-Dev/reusable-workflows/actions/check-release-gate"
                                        "@14620ac3d914d99b55eb90a92495a147f29a0337")
         self.assertEqual(gate["with"]["services"], "${{ steps.s.outputs.services }}")
-        self.assertEqual(gate["with"]["token"], "${{ steps.app.outputs.token }}")
+        self.assertEqual(gate["with"]["token"], "${{ steps.app.outputs.token || secrets.github-token }}")
         _, s = wf.step_by_id(self.jobs["service-gates"], "s")
         self.assertIn("release-flow gate-services", s["run"])
 
@@ -259,7 +259,7 @@ class DraftsTests(unittest.TestCase):
         self.assertEqual({v for v in wf.perms(ro).values()}, {"read"})
         _, dr = wf.step_by_id(drafts, "dr")
         self.assertIn("--check-only", dr["run"])
-        self.assertEqual(dr["env"]["RELEASE_FLOW_READ_TOKEN"], "${{ steps.app-ro.outputs.token }}")
+        self.assertEqual(dr["env"]["RELEASE_FLOW_READ_TOKEN"], "${{ steps.app-ro.outputs.token || secrets.github-token }}")
         self.assertNotIn("RELEASE_FLOW_WRITE_TOKEN", dr["env"])
         self.assertIn("== 'true'", dr["if"])
 
@@ -285,7 +285,7 @@ class DraftsTests(unittest.TestCase):
         _, d = wf.step_by_id(drafts, "d")
         self.assertIn("== 'false'", d["if"])
         self.assertNotIn("--check-only", d["run"])
-        self.assertEqual(d["env"]["RELEASE_FLOW_WRITE_TOKEN"], "${{ steps.app.outputs.token }}")
+        self.assertEqual(d["env"]["RELEASE_FLOW_WRITE_TOKEN"], "${{ steps.app.outputs.token || secrets.github-token }}")
         # Whatever was created must be reported even when the command fails partway.
         self.assertIn('exit "$rc"', d["run"])
         self.assertIn("drafts=", d["run"])
@@ -350,7 +350,7 @@ class PublishTests(unittest.TestCase):
             self.assertIn("release-flow publish", p["run"])
             self.assertIn('--repo "$REPO"', p["run"])
             self.assertEqual(p["env"]["REPO"], "${{ steps.slot.outputs.repo }}")
-            self.assertEqual(p["env"]["RELEASE_FLOW_WRITE_TOKEN"], "${{ steps.app.outputs.token }}")
+            self.assertEqual(p["env"]["RELEASE_FLOW_WRITE_TOKEN"], "${{ steps.app.outputs.token || secrets.github-token }}")
             self.assertIn('exit "$rc"', p["run"])
 
     def test_report_job(self):
