@@ -570,8 +570,6 @@ def structural_cases():
     check("the secret is never an action output", set(doc.get("outputs", {})) == {"action"}, list(doc.get("outputs", {})))
     check("no step env carries the value and the file name is not in action.yml",
           "new-secret" not in yml and not [s["name"] for s in steps if re.search(r"SECRET_VALUE|NEW_SECRET", " ".join(s.get("env", {})))])
-    notice = (ACTIONS / "rotate-worker-signing-secret" / "deprecated.sh").read_text()
-    check("the deprecation notice names v5.2.0, the release that ships it", "deprecated since v5.2.0" in notice and "v5.1.0" not in notice, notice)
     contract_cases(ACTION / "action.yml")
     mutation_cases(doc)
 

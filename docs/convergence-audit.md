@@ -92,7 +92,7 @@ Zopsmart-Training/* (training assignments), Zopsmart-HIMS/* (already converged).
 | 1 | `deploy-cloud-run.yml` (build→push→`run deploy`, WIF, gha cache) | 🆕 build | Consumer B api+image-svc, Consumer C gateway+core, consumer A api | 5 repos / 3 orgs |
 | 2 | `ci-go.yml` + `ci-node.yml` (setup→lint→test, cache, `blocking` input) | 🆕 build | Consumer B 2, Consumer C 3, consumer A 2, consumer D 6 | ~13 repos / 4 orgs |
 | 3 | `deploy-cloudflare-pages.yml` | ✅ adopt | Consumer B 3, Consumer C 2, consumer A 2, consumer D 1 | 8 callers — quick win |
-| 4 | `sync-bundle-key` / `rotate-signing-keypair` / `rotate-worker-signing-secret` | ✅ adopt | Consumer B 4, consumer A 2 (inline today) | 6 callers |
+| 4 | `sync-bundle-key` / `rotate-signing-keypair` / `rotate-worker-signing-secret` (removed in v6.0.0) | ✅ adopt | Consumer B 4, consumer A 2 (inline today) | 6 callers |
 | 5 | `deploy-gke-service.yml` (kubectl set-image / helm, WIF) | 🆕 build *(strategic)* | Consumer D 9, quizzing 4, zop-mannai 2 | ~10 repos — retires external @main |
 | 6 | `bootstrap-cf.yml` (DNS/origin-rules/routes) | 🆕 build | Consumer B 4, consumer A 1 | worst failure rates |
 | 7 | `deploy-cloudflare-worker.yml` (`wrangler deploy`) | 🆕 build | Consumer B 2 | 2 callers |

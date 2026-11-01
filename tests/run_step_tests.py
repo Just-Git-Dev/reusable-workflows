@@ -41,7 +41,6 @@ RETIRE = ROOT / ".github" / "workflows" / "retire-gar-packages.yml"
 PAGES = ROOT / ".github" / "workflows" / "deploy-cloudflare-pages.yml"
 SYNC = ROOT / ".github" / "workflows" / "sync-bundle-key.yml"
 KEYPAIR = ROOT / ".github" / "workflows" / "rotate-signing-keypair.yml"
-WORKER = ROOT / ".github" / "workflows" / "rotate-worker-signing-secret.yml"
 SWEEP = ROOT / ".github" / "workflows" / "cleanup-secret-versions.yml"
 REVISIONS = ROOT / ".github" / "workflows" / "cleanup-cloud-run-revisions.yml"
 CFWORKER = ROOT / ".github" / "workflows" / "deploy-cloudflare-worker.yml"
@@ -53,7 +52,7 @@ BOOTSTRAP = ROOT / ".github" / "workflows" / "bootstrap-alerts.yml"
 METRICS = ROOT / ".github" / "workflows" / "verify-metrics-arrival.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
-WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")]
+WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate")]
 DISABLE_STEP = "Disable superseded bundle version(s)"
 
 FAILURES = []

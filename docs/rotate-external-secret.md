@@ -4,8 +4,8 @@ Rotates a secret that is shared with an **external system**, here a **Cloudflare
 that a backend service also holds. It runs in the org's project repo (`<Org>/project`) and needs
 **no GCP identity**: the service's own bundle sync is the only writer of its Secret Manager bundle.
 
-It replaces [`rotate-worker-signing-secret`](rotate-worker-signing-secret.md), which is deprecated
-and removed in v6. Since v5.0.0 the sync is merge-only, so the rotated key survives every other sync.
+It replaces `rotate-worker-signing-secret`, which was deprecated in v5.2.0 and removed in v6.0.0
+(callers on a v5.x tag still have it). Since v5.0.0 the sync is merge-only, so the rotated key survives every other sync.
 
 ## How it works
 

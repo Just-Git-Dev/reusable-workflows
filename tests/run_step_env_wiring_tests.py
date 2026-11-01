@@ -22,7 +22,7 @@ from action_steps import job_steps  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 WF = ROOT / ".github" / "workflows"
-V4 = ["sync-bundle-key.yml", "rotate-signing-keypair.yml", "rotate-worker-signing-secret.yml",
+V4 = ["sync-bundle-key.yml", "rotate-signing-keypair.yml",
       "rotate-external-secret.yml",
       "deploy-cloud-run.yml", "cloud-run-update.yml", "rollback-service.yml",
       "distribute-env-secrets.yml", "deploy-env-lint.yml", "repos-environments.yml"]

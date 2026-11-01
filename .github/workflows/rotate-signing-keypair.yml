@@ -5,7 +5,7 @@ name: Rotate an asymmetric signing keypair (reusable)
 # upserts the three values into the bundle, adds a new SM version, rolls the
 # Cloud Run service(s) onto it, and disables the old version.
 #
-# NO dual-slot / grace window (unlike rotate-worker-signing-secret): asymmetric
+# NO dual-slot / grace window (unlike rotate-external-secret): asymmetric
 # JWTs already carry a `kid`, and verifiers churn short-lived tokens naturally,
 # so the old key is disabled as soon as the signer is on the new one. If your
 # verifier caches a single public key with no `kid` selection, do NOT use this —
@@ -130,7 +130,7 @@ permissions:
 
 concurrency:
   # ONE lock across all three bundle writers. sync-bundle-key,
-  # rotate-signing-keypair and rotate-worker-signing-secret each read the latest
+  # rotate-signing-keypair and sync-bundle-key each read the latest
   # version of the SAME app-secrets blob, patch a key or two, and add a new
   # version — so any two of them running at once both read version N and the
   # second write silently drops the first one's keys. The group string must stay

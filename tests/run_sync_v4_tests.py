@@ -34,7 +34,6 @@ WF = ROOT / ".github" / "workflows"
 SYNC = WF / "sync-bundle-key.yml"
 ACTION = ACTIONS / "sync-bundle-key"             # the single source of truth; SYNC is a thin wrapper
 KEYPAIR = WF / "rotate-signing-keypair.yml"
-WORKER = WF / "rotate-worker-signing-secret.yml"
 
 # CONTRACT (invented names; docs describe behaviour only).
 S0_STEP = "Guard environment branch policy"      # env: ENVIRONMENT REQUIRE_BRANCH_POLICY GH_TOKEN REPO
@@ -380,7 +379,7 @@ ROLLBACK_STEP = "Roll back the new SM version on failure"
 
 def rollback_cases():
     print("\nrotators . M3 roll-back-on-failure refuses to disable a pinned version")
-    for wf in (KEYPAIR, WORKER):
+    for wf in (KEYPAIR,):
         body = extract_step(wf, "rotate", ROLLBACK_STEP)
         if body is None:
             check(f"{wf.name}: rollback step exists", False)
@@ -452,7 +451,7 @@ def round2_keep_cases():
     print("\nrotators + sync . critic round 2 keep-set (secretKeyRef pins, named traffic, regions)")
     svc = {"status": {"latestReadyRevisionName": "r3", "traffic": [{"revisionName": "r3", "percent": 100}]}}
     newest = [revision("r3", "v", "8"), revision("r2", "v", "7"), revision("r1", "v", "6")]
-    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")):
+    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate")):
         body = extract_step(wf, job, KEEP_STEP)
         if body is None:
             check(f"{wf.name}: keep step exists", False)
@@ -498,7 +497,7 @@ def unresponsive_cases():
     newest = [revision("r3", "v", "8"), revision("r2", "v", "7"), revision("r1", "v", "6")]
     warn = ('  echo "WARNING: The following regions did not respond: europe-west9. '
             'List results may be incomplete." >&2\n')
-    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate")):
+    for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate")):
         body = extract_step(wf, job, KEEP_STEP)
         if body is None:
             check(f"{wf.name}: keep step exists", False)
@@ -514,7 +513,7 @@ def unresponsive_cases():
 
 def round2_undo_cases():
     print("\nrotators . critic round 2 M3 undo (template pin, secretKeyRef, named traffic revisions)")
-    for wf in (KEYPAIR, WORKER):
+    for wf in (KEYPAIR,):
         body = extract_step(wf, "rotate", ROLLBACK_STEP)
         if body is None:
             check(f"{wf.name}: rollback step exists", False)
@@ -564,7 +563,7 @@ def identical_cases():
     print("\nsync-bundle-key v4 · the three bundle writers share roll + keep-set bodies")
     for step in (ROLL_STEP, KEEP_STEP):
         bodies = {wf.name: extract_step(wf, job, step)
-                  for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"), (WORKER, "rotate"))}
+                  for wf, job in ((SYNC, "sync"), (KEYPAIR, "rotate"))}
         missing = [n for n, b in bodies.items() if b is None]
         check(f"'{step}' exists in all three writers", not missing, f"missing in {missing}")
         distinct = {b for b in bodies.values() if b is not None}

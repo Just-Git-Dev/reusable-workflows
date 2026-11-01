@@ -65,8 +65,7 @@ removal is undone by rolling back to a revision that pins the earlier version.
 `payload_source: environment`: it names the keys to **read** from the job's environment secrets.
 A listed key the job's secrets do not hold is still refused (the sync will not build a partial
 payload). It does not describe the bundle's desired state and need not list keys that
-[`rotate-signing-keypair`](rotate-signing-keypair.md) or
-[`rotate-worker-signing-secret`](rotate-worker-signing-secret.md) write: those stay in the bundle
+[`rotate-signing-keypair`](rotate-signing-keypair.md) write: those stay in the bundle
 because the sync never drops what it was not told to. With `payload_source: caller` the file is
 not read by the sync.
 
@@ -164,7 +163,7 @@ guards make this workflow safe to be the only path into the bundle.
 
 ## Serialisation — one lock across all three bundle writers
 
-`sync-bundle-key`, `rotate-signing-keypair` and `rotate-worker-signing-secret`
+`sync-bundle-key` and `rotate-signing-keypair`
 each read the latest version of the same `app-secrets` bundle, patch one or two
 keys, and add a new version. They therefore declare an **identical**
 `concurrency.group`:

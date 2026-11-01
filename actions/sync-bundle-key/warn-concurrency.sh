@@ -6,7 +6,7 @@
 # therefore always gets a ::warning:: naming the block. Our own wrapper workflow declares the
 # group itself and passes concurrency_declared: 'true', so it gets a ::notice:: instead (a
 # warning there would be noise on every run). Without the group, two bundle writers (this action,
-# rotate-signing-keypair, rotate-worker-signing-secret) can both read version N and the second
+# rotate-signing-keypair) can both read version N and the second
 # write silently drops the first one's keys. tests/run_concurrency_tests.py pins the group string.
 #
 # Env: GCP_PROJECT, BUNDLE_SECRET, CONCURRENCY_DECLARED.

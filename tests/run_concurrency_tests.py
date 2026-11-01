@@ -33,7 +33,6 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 BUNDLE_WRITERS = [
     "sync-bundle-key.yml",
     "rotate-signing-keypair.yml",
-    "rotate-worker-signing-secret.yml",
 ]
 
 FAILURES = []
