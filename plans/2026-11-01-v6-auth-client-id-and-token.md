@@ -151,7 +151,15 @@ branch", `repos-settings.yml:60`), in the first job of each workflow (release-pl
 release-drafts `verdict`, release-publish `verdict`, the single job elsewhere). Env only, no
 `${{ }}` in `run:` (repo rule, `release-plan.yml:12`). `CLIENT_ID` from the input; `KEY_SET`
 and `TOKEN_SET` as `!= ''` booleans (Q3=A). It exits 1 with the settled text when both are passed,
-and with a clear text for neither and for the half-App cases. `distribute-env-secrets.yml` and
+and with a clear text for neither and for the half-App cases. **Exact messages (fixed by the
+dispatcher 2026-11-01 so docs, tests and code agree; generic so the body stays byte-identical;
+each is printed as a `::error::` line, checked in this order):**
+1. both (any App field set and the token set): `pass the App or github-token, not both`
+2. neither: `no credentials: pass the App (client-id and its private key) or github-token`
+3. key set, client-id empty: `App incomplete: missing client-id`
+4. client-id set, key empty: `App incomplete: missing private key`
+The env names are the same in every file: `CLIENT_ID`, `KEY_SET`, `TOKEN_SET`. If Wave 0 rejects
+the hyphen, every `github-token` here becomes `github_token` (owner ruling, §1). `distribute-env-secrets.yml` and
 `rotate-external-secret.yml` have NO `defaults: run: shell: bash` (verified by grep: only release-*
 and repos-* do), so the step there declares `shell: bash` itself, as its siblings do
 (`distribute-env-secrets.yml:72,88,153`). In the composite action the guard lives as
