@@ -60,6 +60,12 @@ Wave 0 approved by the owner 2026-11-01.
   named `github_token` everywhere and the build goes ahead.
 - **Live checks:** the dispatcher runs the three report-only `repos-settings` checks itself once
   the PR's CI is green, and records the run ids in DECISIONS.md.
+- **Live checks, revised (owner, 2026-11-01):** the three `repos-settings` runs cannot run from a
+  devops repo (no repo-admin environment, no secrets, main-only refusal), so a throwaway caller
+  instead proves on a real runner that GitHub accepts the `github-token` secret and that the
+  guard refuses "both" and "neither", with zero writes. The App-only and token-only success paths
+  rest on the unit tests and then on a consumer's rehearsal after the tag. With that, CI green and
+  no critic blocker, v6.0.0 is released.
 
 **Q1. Release flow: one `github-token` for every job, or an optional separate read token?**
 Today plan/drafts/publish mint a READ-only token in read jobs and in a rehearsal, and a WRITE token
