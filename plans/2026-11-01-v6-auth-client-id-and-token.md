@@ -19,8 +19,9 @@ the code fact is listed under "Contradictions" and the ruling is NOT silently wi
   variable; this plan proposes `vars.RELEASE_APP_CLIENT_ID` in the docs (a proposal, not a ruling).
 - **Two modes, settled:** App (`client-id` + the existing key secret) OR one secret `github-token`.
   Both passed = fail with "pass the App or github-token, not both". Neither = fail too.
-- **Mechanism (proposed):** one inline guard step, byte-identical in every workflow, in the FIRST
-  job, before any mint. Every mint gets `if: inputs.client-id != ''` (combined with any existing
+- **Mechanism (proposed):** one inline guard step, byte-identical, first in EVERY
+  job that mints (revised after the critic, §3.2: not the first job, which may lack the
+  caller's environment), before any mint. Every mint gets `if: inputs.client-id != ''` (combined with any existing
   `if:`). Every token consumer reads `${{ steps.<mint>.outputs.token || secrets.github-token }}`.
   The client-id input and the key secret become `required: false`.
 - **No new action, no CLI change:** `RELEASE_FLOW_TREE` pins `actions/release-flow` only
@@ -242,8 +243,8 @@ and_install_nothing` allows only checkout, the mint and download-artifact in a w
   required/input sets lose `app-id`, gain `client-id`.
 - NEW `tests/release_flow_workflows/test_auth_modes.py`: every mint has `client-id` and the
   client-id `if:`; no `app-id` anywhere; every token consumer uses the `|| secrets.github-token`
-  form; `secrets.github-token` appears nowhere else but the guard; the guard is first in the first
-  job; the least-privilege sentence is in the doc.
+  form; `secrets.github-token` appears nowhere else but the guard; the guard is first in every
+  minting job, each with `environment:` (revised, see §3.2); the least-privilege sentence is in the doc.
 - NEW `tests/run_auth_mode_tests.py` (stdlib runner, like its siblings) over all 9 files: the same
   structural checks; the guard body byte-identical across the 8 workflows and the composite
   script; and BEHAVIOUR: extract the guard body and run it under `bash -eo pipefail -c` for 6 env

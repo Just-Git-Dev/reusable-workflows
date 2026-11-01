@@ -13,6 +13,7 @@ Each takes EITHER the App (`client-id` input + `RELEASE_APP_KEY` secret) OR one 
 
 Behaviour of the guard body (6 env combinations) is run by tests/run_auth_mode_tests.py.
 """
+import json
 import re
 import unittest
 
@@ -119,6 +120,19 @@ class GuardTests(unittest.TestCase):
                 examined += 1
                 self.assertTrue(wf.jobs(wf.load(n))[jn].get("environment"),
                                 f"{n}:{jn}: mints or guards without environment: (caller-environment secrets are empty here)")
+        self.assertEqual(examined, 9)
+
+    def test_every_job_naming_the_caller_token_declares_environment(self):
+        # Token mode has the same trap as the key: a job that reads secrets.github-token
+        # without environment: sees an empty token, even with no mint in it.
+        examined = 0
+        for n in wf.RELEASE_NAMES:
+            for jn, job in wf.jobs(wf.load(n)).items():
+                if "secrets.github-token" not in json.dumps(job):
+                    continue
+                examined += 1
+                self.assertTrue(job.get("environment"),
+                                f"{n}:{jn}: reads secrets.github-token without environment:")
         self.assertEqual(examined, 9)
 
     def test_guard_env_is_booleans_and_the_input_only(self):

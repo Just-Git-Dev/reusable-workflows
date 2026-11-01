@@ -412,7 +412,8 @@ Pass exactly one.
 
 A guard step runs first in every job that mints a token (each declares the caller's
 environment, where a key or token is visible), before any mint. It fails the run with one of these `::error::` messages,
-checked in this order:
+checked in this order (a `release-publish` rehearsal runs no publish job, so it does not run the
+guard either; a missing `secrets:` on the publish call shows up only on the real run):
 
 | case | message |
 |---|---|
