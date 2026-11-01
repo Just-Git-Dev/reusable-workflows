@@ -59,6 +59,12 @@ class KeyConfinementTests(unittest.TestCase):
                     self.assertNotIn(KEY, str(st.get("env", "")))
         self.assertGreater(examined, 50, "examined suspiciously few steps")
 
+    def test_every_job_containing_a_mint_declares_environment(self):
+        jobs_with_mint = {(n, jn) for n, jn, _, _ in wf.mint_steps()}
+        self.assertEqual(len(jobs_with_mint), 9)
+        for n, jn in jobs_with_mint:
+            self.assertTrue(wf.jobs(wf.load(n))[jn].get("environment"), f"{n}:{jn}")
+
     def test_the_number_of_mint_steps_is_pinned(self):
         # 2 (plan) + 2 (drafts, read + write) + 6 (publish slots)
         mints = wf.mint_steps()

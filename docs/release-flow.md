@@ -410,8 +410,8 @@ Pass exactly one.
 - **Token mode:** one secret, `github-token` (for example a fine-grained PAT). Every job that
   would hold a minted token holds this one instead. No `client-id` and no `RELEASE_APP_KEY`.
 
-A guard step runs first in `release-plan` (job `plan`), `release-drafts` and `release-publish`
-(job `verdict`), before any mint. It fails the run with one of these `::error::` messages,
+A guard step runs first in every job that mints a token (each declares the caller's
+environment, where a key or token is visible), before any mint. It fails the run with one of these `::error::` messages,
 checked in this order:
 
 | case | message |

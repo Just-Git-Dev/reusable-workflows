@@ -7,7 +7,7 @@ name: Repos create (reusable)
 #     WORKFLOW_VERSION. Its vocabulary has no delete, archive, make-public or rename-without-
 #     rename_from verb; this workflow additionally refuses any action outside the allow-lists below.
 #   - The job refuses to start unless `environment` is `repo-admin` and the ref is the caller's
-#     main branch, BEFORE any token is minted. The App key is one declared secret, passed by name,
+#     main branch, BEFORE any token is minted. The App key (optional; or the `github-token` secret) is passed by name,
 #     and is named only as the `private-key` of the two mint steps and as the guard's `KEY_SET` boolean.
 #   - A READ token (metadata:read) is minted first and is all a `report` run ever holds. The
 #     administration:write token is minted only when the plan holds at least one write action.
@@ -26,6 +26,7 @@ on:
         description: 'The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead'
         type: string
         required: false
+        default: ''
       environment:
         description: 'The caller environment holding REPO_ADMIN_APP_KEY; must be repo-admin'
         type: string

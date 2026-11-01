@@ -282,8 +282,14 @@ it is an input-contract break and waits for a major; the owner bundled it with a
 - Q4: `app-id` is renamed outright, with no deprecated alias; v5.2.0 was the deprecation window.
 - Both passed or neither passed fails with a clear error (owner, away batch).
 
-**How — the guard.** One step, `Refuse unless exactly one credential mode`, byte-identical in the
-first job of every workflow and as `actions/rotate-external-secret/validate-auth.sh`. Env only
+**How — the guard.** One step, `Refuse unless exactly one credential mode`, byte-identical as
+the first step of EVERY job that mints a token (each declares the caller's environment) and as
+`actions/rotate-external-secret/validate-auth.sh`. Not in the first job: the plan's first draft
+put it in release-plan `plan` and the drafts/publish `verdict` jobs, which declare no
+`environment:`. A key or token kept only on the caller's environment is empty there (2026-10-13
+entry), so a valid App caller would have been refused as "missing private key". The pre-merge
+critic caught it; the tests now require the guard in each minting job and that each such job
+declares `environment:`. Env only
 (`CLIENT_ID`, `KEY_SET`, `TOKEN_SET` as `!= ''` booleans), so no expression reaches the shell. Four
 fixed messages, checked in order: both; neither; missing client-id; missing private key. It is
 inline rather than a shared composite action because the write jobs may run nothing but checkout,

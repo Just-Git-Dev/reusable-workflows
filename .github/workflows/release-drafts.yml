@@ -90,32 +90,6 @@ jobs:
       manifest_sha256: ${{ steps.v.outputs.manifest_sha256 }}
       ci_filters: ${{ steps.v.outputs.ci_filters }}
     steps:
-      - name: Refuse unless exactly one credential mode
-        shell: bash
-        env:
-          CLIENT_ID: ${{ inputs.client-id }}
-          KEY_SET: ${{ secrets.RELEASE_APP_KEY != '' }}
-          TOKEN_SET: ${{ secrets.github-token != '' }}
-        run: |
-          app=false
-          if [ -n "$CLIENT_ID" ] || [ "$KEY_SET" = "true" ]; then app=true; fi
-          if [ "$app" = "true" ] && [ "$TOKEN_SET" = "true" ]; then
-            echo "::error::pass the App or github-token, not both"
-            exit 1
-          fi
-          if [ "$app" = "false" ] && [ "$TOKEN_SET" != "true" ]; then
-            echo "::error::no credentials: pass the App (client-id and its private key) or github-token"
-            exit 1
-          fi
-          if [ "$KEY_SET" = "true" ] && [ -z "$CLIENT_ID" ]; then
-            echo "::error::App incomplete: missing client-id"
-            exit 1
-          fi
-          if [ -n "$CLIENT_ID" ] && [ "$KEY_SET" != "true" ]; then
-            echo "::error::App incomplete: missing private key"
-            exit 1
-          fi
-
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -178,6 +152,32 @@ jobs:
     outputs:
       drafts: ${{ steps.d.outputs.drafts || steps.dr.outputs.drafts }}
     steps:
+      - name: Refuse unless exactly one credential mode
+        shell: bash
+        env:
+          CLIENT_ID: ${{ inputs.client-id }}
+          KEY_SET: ${{ secrets.RELEASE_APP_KEY != '' }}
+          TOKEN_SET: ${{ secrets.github-token != '' }}
+        run: |
+          app=false
+          if [ -n "$CLIENT_ID" ] || [ "$KEY_SET" = "true" ]; then app=true; fi
+          if [ "$app" = "true" ] && [ "$TOKEN_SET" = "true" ]; then
+            echo "::error::pass the App or github-token, not both"
+            exit 1
+          fi
+          if [ "$app" = "false" ] && [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::no credentials: pass the App (client-id and its private key) or github-token"
+            exit 1
+          fi
+          if [ "$KEY_SET" = "true" ] && [ -z "$CLIENT_ID" ]; then
+            echo "::error::App incomplete: missing client-id"
+            exit 1
+          fi
+          if [ -n "$CLIENT_ID" ] && [ "$KEY_SET" != "true" ]; then
+            echo "::error::App incomplete: missing private key"
+            exit 1
+          fi
+
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

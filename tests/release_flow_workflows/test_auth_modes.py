@@ -7,8 +7,8 @@ Each takes EITHER the App (`client-id` input + `RELEASE_APP_KEY` secret) OR one 
     with any existing `if:`); `app-id` appears nowhere;
   - every consumer of a mint's output reads `steps.<mint>.outputs.token || secrets.github-token`;
   - `secrets.github-token` appears nowhere else but there and in the guard;
-  - the guard is one byte-identical step, the first step of the FIRST job (after any refusal),
-    with the four settled messages in the settled order, and no `${{ }}` inside its `run:`;
+  - the guard is one byte-identical step, the first step (after any refusal) of EVERY job that
+    mints, each such job declaring `environment:`, and in no job without a mint; it has the four settled messages in the settled order, and no `${{ }}` inside its `run:`;
   - docs/release-flow.md states the least-privilege consequence of token mode.
 
 Behaviour of the guard body (6 env combinations) is run by tests/run_auth_mode_tests.py.
@@ -28,10 +28,15 @@ GATE = "inputs.client-id != ''"
 CONSUMER = re.compile(r"^\$\{\{ steps\.[\w-]+\.outputs\.token \|\| secrets\.github-token \}\}$")
 
 
-def first_job(name):
-    w = wf.load(name)
-    jn = next(iter(wf.jobs(w)))
-    return jn, wf.jobs(w)[jn]
+def mint_jobs(name):
+    """(job name, job) for every job of the workflow that contains a mint."""
+    return [(jn, j) for jn, j in wf.jobs(wf.load(name)).items()
+            if any(str(st.get("uses", "")).startswith(wf.MINT) for st in j.get("steps") or [])]
+
+
+def guards(name):
+    """(job name, guard step) for every guard of the workflow."""
+    return [(jn, wf.guard_step(j)[1]) for jn, j in wf.jobs(wf.load(name)).items() if wf.guard_step(j)[1]]
 
 
 def values(step):
@@ -88,39 +93,55 @@ class ConsumerTests(unittest.TestCase):
 
 
 class GuardTests(unittest.TestCase):
-    def test_guard_is_the_first_step_of_the_first_job_after_any_refusal(self):
+    def test_guard_is_the_first_step_of_every_minting_job_and_only_there(self):
+        examined = 0
         for n in wf.RELEASE_NAMES:
-            jn, job = first_job(n)
-            i, g = wf.guard_step(job)
-            self.assertIsNotNone(g, f"{n}:{jn}: no credentials guard")
-            for st in job["steps"][:i]:
-                self.assertTrue(str(st.get("name", "")).startswith("Refuse"),
-                                f"{n}:{jn}: {st.get('name')!r} runs before the guard")
-            for other, oj in wf.jobs(wf.load(n)).items():
-                if other != jn:
-                    self.assertIsNone(wf.guard_step(oj)[1], f"{n}:{other}: a second guard")
+            minting = dict(mint_jobs(n))
+            self.assertTrue(minting, n)
+            for jn, job in wf.jobs(wf.load(n)).items():
+                i, g = wf.guard_step(job)
+                if jn not in minting:
+                    self.assertIsNone(g, f"{n}:{jn}: a guard in a job without a mint")
+                    continue
+                examined += 1
+                self.assertIsNotNone(g, f"{n}:{jn}: mints but has no credentials guard")
+                for st in job["steps"][:i]:
+                    self.assertTrue(str(st.get("name", "")).startswith("Refuse"),
+                                    f"{n}:{jn}: {st.get('name')!r} runs before the guard")
+                self.assertEqual(sum(1 for st in job["steps"] if "KEY_SET" in (st.get("env") or {})), 1, f"{n}:{jn}")
+        self.assertEqual(examined, 2 + 1 + 6, "minting jobs: resolve, service-gates, drafts, publish-1..6")
+
+    def test_every_job_with_a_mint_or_a_guard_declares_environment(self):
+        examined = 0
+        for n in wf.RELEASE_NAMES:
+            held = {jn for jn, _ in mint_jobs(n)} | {jn for jn, _ in guards(n)}
+            for jn in held:
+                examined += 1
+                self.assertTrue(wf.jobs(wf.load(n))[jn].get("environment"),
+                                f"{n}:{jn}: mints or guards without environment: (caller-environment secrets are empty here)")
+        self.assertEqual(examined, 9)
 
     def test_guard_env_is_booleans_and_the_input_only(self):
         for n in wf.RELEASE_NAMES:
-            _, g = wf.guard_step(first_job(n)[1])
-            self.assertIsNotNone(g, n)
-            self.assertEqual(g["env"], {"CLIENT_ID": "${{ inputs.client-id }}",
-                                        "KEY_SET": "${{ secrets.RELEASE_APP_KEY != '' }}",
-                                        "TOKEN_SET": "${{ secrets.github-token != '' }}"}, n)
-            self.assertNotIn("${{", g["run"], f"{n}: expression in the guard's run body")
+            self.assertTrue(guards(n), n)
+            for jn, g in guards(n):
+                self.assertEqual(g["env"], {"CLIENT_ID": "${{ inputs.client-id }}",
+                                            "KEY_SET": "${{ secrets.RELEASE_APP_KEY != '' }}",
+                                            "TOKEN_SET": "${{ secrets.github-token != '' }}"}, f"{n}:{jn}")
+                self.assertNotIn("${{", g["run"], f"{n}:{jn}: expression in the guard's run body")
 
     def test_guard_states_the_four_settled_messages_in_order(self):
         for n in wf.RELEASE_NAMES:
-            _, g = wf.guard_step(first_job(n)[1])
-            self.assertIsNotNone(g, n)
-            at = [g["run"].find(m) for m in MESSAGES]
-            self.assertNotIn(-1, at, f"{n}: a settled message is missing")
-            self.assertEqual(at, sorted(at), f"{n}: messages out of the settled order")
-            self.assertEqual(g["run"].count("::error::"), 4, n)
+            self.assertTrue(guards(n), n)
+            for jn, g in guards(n):
+                at = [g["run"].find(m) for m in MESSAGES]
+                self.assertNotIn(-1, at, f"{n}:{jn}: a settled message is missing")
+                self.assertEqual(at, sorted(at), f"{n}:{jn}: messages out of the settled order")
+                self.assertEqual(g["run"].count("::error::"), 4, f"{n}:{jn}")
 
-    def test_guard_body_is_byte_identical_in_all_three(self):
-        bodies = {n: (wf.guard_step(first_job(n)[1])[1] or {}).get("run") for n in wf.RELEASE_NAMES}
-        self.assertNotIn(None, bodies.values(), bodies.keys())
+    def test_guard_body_is_byte_identical_in_every_occurrence(self):
+        bodies = {f"{n}:{jn}": g.get("run") for n in wf.RELEASE_NAMES for jn, g in guards(n)}
+        self.assertEqual(len(bodies), 9)
         self.assertEqual(len(set(bodies.values())), 1, "guard bodies differ")
 
 

@@ -147,8 +147,10 @@ Inputs cited: `release-plan.yml:33-36`, `release-publish.yml:34-37,59-61`, `repo
 ### 3.2 The guard (one body, byte-identical everywhere; a test asserts it)
 
 The first step after any existing refusal (repos-*: after "Refuse unless repo-admin on the main
-branch", `repos-settings.yml:60`), in the first job of each workflow (release-plan `plan`,
-release-drafts `verdict`, release-publish `verdict`, the single job elsewhere). Env only, no
+branch", `repos-settings.yml:60`), in EVERY job that mints a token (REVISED 2026-11-01 after
+the critic: release-plan `resolve` + `service-gates`, release-drafts `drafts`, release-publish
+`publish-1..6`, the single job elsewhere; NOT `plan`/`verdict`, which declare no environment, so
+an environment-only secret reads empty there). Env only, no
 `${{ }}` in `run:` (repo rule, `release-plan.yml:12`). `CLIENT_ID` from the input; `KEY_SET`
 and `TOKEN_SET` as `!= ''` booleans (Q3=A). It exits 1 with the settled text when both are passed,
 and with a clear text for neither and for the half-App cases. **Exact messages (fixed by the

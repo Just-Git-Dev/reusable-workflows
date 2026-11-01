@@ -110,9 +110,12 @@ def guard_bodies():
     out = {}
     for wf in WORKFLOWS:
         doc = load(WF / f"{wf}.yml")
-        first = next(iter(doc["jobs"].values()))
-        g = guard_in(first["steps"])
-        out[wf] = g[0].get("run") if g else None
+        for jn, job in doc["jobs"].items():
+            g = guard_in(job.get("steps", []))
+            if g:
+                out[f"{wf}:{jn}"] = g[0].get("run")
+        if not any(k.startswith(wf + ":") for k in out):
+            out[wf] = None
     out["validate-auth.sh"] = None
     if VALIDATE_AUTH.is_file() and ACTION_YML.is_file():
         try:
@@ -168,22 +171,39 @@ def workflow_cases():
                 bare.append(text[max(0, m.start() - 40):m.end() + 40].replace("\n", " "))
         check(f"{wf}: every mint-token consumer falls back to `|| secrets.{TOKEN}`", not bare, bare[:2])
 
-        first_job = next(iter(doc["jobs"].values()))
-        g = guard_in(first_job["steps"])
-        total = sum(len(guard_in(j.get("steps", []))) for j in doc["jobs"].values())
-        check(f"{wf}: exactly one guard step '{GUARD}', in the first job", len(g) == 1 and total == 1, (len(g), total))
-        if len(g) == 1:
-            gi = first_job["steps"].index(g[0])
-            before = [s.get("name", "") for s in first_job["steps"][:gi]]
-            check(f"{wf}: no mint runs before the guard",
-                  not mint_steps(first_job["steps"][:gi]), before)
-            check(f"{wf}: guard declares shell: bash", g[0].get("shell") == "bash" or
+        # guard placement: the guard is the first step (only "Refuse*" may precede) of EVERY job
+        # that mints, each such job declares `environment:`, and no job without a mint has one.
+        n_mint_jobs = n_guards = 0
+        for jn, job in doc["jobs"].items():
+            steps = job.get("steps", [])
+            g = guard_in(steps)
+            has_mint = bool(mint_steps(steps))
+            tag = f"{wf}:{jn}"
+            if not has_mint:
+                check(f"{tag}: no guard in a job without a mint", not g, len(g))
+                continue
+            n_mint_jobs += 1
+            n_guards += len(g)
+            check(f"{tag}: exactly one guard step '{GUARD}'", len(g) == 1, len(g))
+            if len(g) != 1:
+                continue
+            gi = steps.index(g[0])
+            before = [s.get("name", "") for s in steps[:gi]]
+            check(f"{tag}: guard is first (only Refuse* before it)",
+                  all(str(n).startswith("Refuse") for n in before), before)
+            check(f"{tag}: no mint runs before the guard", not mint_steps(steps[:gi]), before)
+            if wf.startswith("release-"):
+                check(f"{tag}: job with a mint and guard declares environment:", bool(job.get("environment")),
+                      job.get("environment"))
+            check(f"{tag}: guard declares shell: bash", g[0].get("shell") == "bash" or
                   (doc.get("defaults", {}).get("run", {}).get("shell") == "bash"), g[0])
             env = {k: norm(v) for k, v in (g[0].get("env") or {}).items()}
             want = {"CLIENT_ID": "${{inputs.%s}}" % idname, "KEY_SET": "${{secrets.%s!=''}}" % keyname,
                     "TOKEN_SET": "${{secrets.%s!=''}}" % TOKEN}
-            check(f"{wf}: guard env is exactly CLIENT_ID / KEY_SET / TOKEN_SET", env == want, env)
-            check(f"{wf}: guard run has no ${{{{ }}}} expression", "${{" not in g[0].get("run", ""))
+            check(f"{tag}: guard env is exactly CLIENT_ID / KEY_SET / TOKEN_SET", env == want, env)
+            check(f"{tag}: guard run has no ${{{{ }}}} expression", "${{" not in g[0].get("run", ""))
+        check(f"{wf}: examined {n_mint_jobs} minting job(s), each with its own guard",
+              n_mint_jobs >= 1 and n_guards == n_mint_jobs, (n_mint_jobs, n_guards))
 
 
 def wrapper_cases():
@@ -256,13 +276,13 @@ def body_cases():
     print("\nguard body: byte-identical across the 8 workflows and validate-auth.sh")
     check("validate-auth.sh exists", VALIDATE_AUTH.is_file(), "actions/rotate-external-secret/validate-auth.sh is missing")
     bodies = guard_bodies()
-    check("every one of the 9 guard bodies was found",
+    check("every workflow has guard bodies and validate-auth.sh was found",
           all(b is not None for b in bodies.values()), sorted(k for k, b in bodies.items() if b is None))
     found = {k: b.rstrip("\n") for k, b in bodies.items() if b is not None}
     check("guard body is non-empty and mentions the four messages",
           bool(found) and all(m in b for b in found.values() for m in (MSG_BOTH, MSG_NEITHER, MSG_NO_ID, MSG_NO_KEY)),
           "bodies missing a settled message")
-    check("all found guard bodies are identical", len(set(found.values())) == 1 and len(found) == 9, f"{len(found)} found, {len(set(found.values()))} distinct")
+    check("all found guard bodies are identical", len(set(found.values())) == 1 and len(found) >= 9, f"{len(found)} found, {len(set(found.values()))} distinct")
     return bodies
 
 
