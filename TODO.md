@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-34 open across 13 live sections. 46 closed items archived.
+35 open across 14 live sections. 46 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)](#release-flow--ci-green-cannot-model-an-onpushpaths-allowlist-opened-2026-11-01) — 1 open
 - **ACTIVE** — [App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)](#app-token-mint--app-id-input-is-deprecated-upstream-opened-2026-10-28) — 1 open
 - **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 3 open
 - **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
@@ -20,6 +21,26 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 6 open
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 2 open
+
+## Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)
+
+Reported by consumer C's session for triage (not yet built). Failure class: a gate goes red
+wrongly because of a trigger filter it does not model. The H8 ci-green check
+(`actions/release-flow/releaseflow/ci.py`, v3.8.1) walks back to a green ancestor only when the
+services.json `ci` entry declares `paths_ignore` (module docstring, checked 2026-11-01). A
+workflow filtered by an `on.push.paths:` allowlist has no run on most commits, so "no run" reads
+as "missing". It hit consumer C's release rehearsal: a per-service changelog-hygiene workflow
+runs only when its own few files change, and the release shas were CI-only commits.
+
+Consumer workaround: `"paths_ignore": ["**"]` on those entries, because an allowlist's
+complement cannot be written as globs. Cost of the workaround: the changed-files check becomes
+a no-op, so any commit with no run passes on its nearest green ancestor, including a commit
+whose run should have fired but never did.
+
+- [ ] `ci.py` — native `paths` (allowlist) support on a services.json `ci` entry: with no run at
+  the sha, walk back as for `paths_ignore` and require that NO changed file matches `paths`.
+  Add a check that each `ci` entry's filter matches the named workflow's `on.push`
+  `paths`/`paths-ignore`, so the two cannot drift. Update `docs/release-flow.md` §H8.
 
 ## App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)
 
