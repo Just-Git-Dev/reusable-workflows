@@ -52,6 +52,13 @@ whose run should have fired but never did.
   different value — so this changes the input contract: plan it for the next major, with a
   deprecation window. No step here passes `permission-actions-variables` (an input that action
   does not define; a consumer found it ignored as "Unexpected input"), checked 2026-10-28.
+  **Owner 2026-11-01:** the same major must support BOTH auth modes on every workflow that needs
+  a GitHub credential beyond `GITHUB_TOKEN`: a GitHub App (`client-id` + private key, minted in
+  the run) OR a caller-supplied token secret. Our own fleet will use the App everywhere. Checked
+  2026-11-01: 8 workflows mint an App token today (`distribute-env-secrets`, `release-{plan,
+  drafts,publish}`, `repos-{create,environments,settings,variables}`) and all are App-only, with
+  no token input; the "23 files" above is stale. `ci-go` `go_private_token` and `ci-node`
+  `npm_auth_token` already take a plain token.
 
 ## Owner rulings to build (opened 2026-10-21)
 
