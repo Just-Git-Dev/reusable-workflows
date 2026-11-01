@@ -12,13 +12,15 @@ import wf
 
 
 class EveryWorkflowTests(unittest.TestCase):
-    def test_four_workflows_are_reusable_and_declare_only_the_app_key(self):
+    def test_four_workflows_are_reusable_and_declare_only_the_two_credential_secrets(self):
         # The exact secret set is pinned in test_workflow_tokens (key confinement).
         for n in wf.NAMES:
             w = wf.load(n)
             call = wf.on_block(w).get("workflow_call")
             self.assertIsNotNone(call, f"{n}: not a workflow_call")
-            self.assertLessEqual(set(call.get("secrets") or {}), {"RELEASE_APP_KEY"}, n)
+            self.assertLessEqual(set(call.get("secrets") or {}), {"RELEASE_APP_KEY", "github-token"}, n)
+            if n != "release-pr-check.yml":
+                self.assertIn("github-token", call.get("secrets") or {}, n)
             self.assertEqual(set(wf.on_block(w)), {"workflow_call"}, n)
 
     def test_every_run_is_bash_via_default_or_explicit_shell(self):
@@ -134,8 +136,8 @@ class PlanTests(unittest.TestCase):
         call = wf.on_block(self.w)["workflow_call"]
         ins = call["inputs"]
         required = {k for k, v in ins.items() if v.get("required")}
-        self.assertEqual(required, {"allowed", "app-id"})
-        self.assertEqual(set(ins), {"allowed", "read-only-repos", "app-id", "environment", "config",
+        self.assertEqual(required, {"allowed"})
+        self.assertEqual(set(ins), {"allowed", "read-only-repos", "client-id", "environment", "config",
                                     "release-workflow", "pr-check-name", "pr-check-workflow",
                                     "rehearsal", "manifest", "manifest-ref"})
         self.assertEqual(ins["environment"]["default"], "release")
@@ -233,7 +235,8 @@ class DraftsTests(unittest.TestCase):
     def test_shape(self):
         self.assertEqual(list(self.jobs), ["verdict", "drafts"])
         call = wf.on_block(self.w)["workflow_call"]
-        self.assertEqual({k for k, v in call["inputs"].items() if v.get("required")}, {"needs", "allowed", "app-id"})
+        self.assertEqual({k for k, v in call["inputs"].items() if v.get("required")}, {"needs", "allowed"})
+        self.assertIn("client-id", call["inputs"])
         self.assertEqual(call["inputs"]["contracts-job"]["default"], "contracts")
         self.assertEqual(set(call["outputs"]), {"drafts"})
         self.assertEqual(self.jobs["drafts"]["needs"], "verdict")
@@ -299,7 +302,8 @@ class PublishTests(unittest.TestCase):
 
     def test_inputs(self):
         ins = wf.on_block(self.w)["workflow_call"]["inputs"]
-        self.assertEqual({k for k, v in ins.items() if v.get("required")}, {"needs", "allowed", "app-id"})
+        self.assertEqual({k for k, v in ins.items() if v.get("required")}, {"needs", "allowed"})
+        self.assertIn("client-id", ins)
         self.assertEqual(ins["required-jobs"]["default"], "plan,drafts")
         self.assertEqual(ins["contracts-job"]["default"], "contracts")
         self.assertNotIn("outputs", wf.on_block(self.w)["workflow_call"])

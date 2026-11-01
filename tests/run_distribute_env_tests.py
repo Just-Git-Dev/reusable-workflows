@@ -144,14 +144,16 @@ def workflow_declares_the_documented_inputs_and_secrets():
     on = doc.get("on", doc.get(True))
     call = on["workflow_call"]
     ins, secs = call["inputs"], call["secrets"]
-    for k in ("mapping_file", "environment", "app_id", "dry_run", "only"):
+    for k in ("mapping_file", "environment", "client_id", "dry_run", "only"):
         assert k in ins, "missing input %s" % k
     assert ins["dry_run"]["default"] is True, "dry_run must default to true"
     assert ins["mapping_file"]["default"] == ".github/distribute-env-secrets.yaml"
     assert ins["environment"]["default"] == "repo-admin"
-    assert ins["app_id"].get("required") is True
-    for k in ("app_key", "sources_json"):
-        assert k in secs and secs[k].get("required") is True, "secret %s missing/not required" % k
+    assert "app_id" not in ins, "app_id was renamed to client_id in v6"
+    assert ins["client_id"].get("required") is not True, "client_id must be optional (token mode)"
+    assert "sources_json" in secs and secs["sources_json"].get("required") is True, "secret sources_json missing/not required"
+    for k in ("app_key", "github-token"):
+        assert k in secs and secs[k].get("required") is not True, "secret %s missing or required (must be optional)" % k
     assert doc["jobs"][JOB]["environment"] == "${{ inputs.environment }}"
 
 

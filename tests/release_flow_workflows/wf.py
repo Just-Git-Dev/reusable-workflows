@@ -12,7 +12,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 NAMES = ["release-pr-check.yml", "release-plan.yml", "release-drafts.yml", "release-publish.yml"]
-MINT = "actions/create-github-app-token@"
+RELEASE_NAMES = ["release-plan.yml", "release-drafts.yml", "release-publish.yml"]  # the three that hold credentials
+MINT ="actions/create-github-app-token@"
 CHECKOUT = "actions/checkout@"
 SHA_RE = re.compile(r"@[0-9a-f]{40}$")
 SLOTS = 6
@@ -53,6 +54,13 @@ def all_steps():
 
 def mint_steps():
     return [t for t in all_steps() if str(t[3].get("uses", "")).startswith(MINT)]
+
+
+def guard_step(job):
+    """The v6 credentials guard of a job: the step whose env carries CLIENT_ID, KEY_SET, TOKEN_SET."""
+    found = [(i, st) for i, st in enumerate(job.get("steps") or [])
+             if {"CLIENT_ID", "KEY_SET", "TOKEN_SET"} <= set(st.get("env") or {})]
+    return found[0] if found else (None, None)
 
 
 def perms(step):
