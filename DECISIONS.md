@@ -316,7 +316,16 @@ rotate-external 17/196 failed. Green (PR #175): `make release-flow` 504/0,
 41332572887 passed and the called workflow received it (length 377). The negative control, a
 secret named `github_token`, was refused at parse ("workflow file issue"), run 41332572557. So
 the hyphen name stands. **Live guard check (owner substitute for the three `repos-settings`
-runs, which cannot run from a devops repo):** recorded below once run.
+runs, which cannot run from a devops repo):** passed against v6.0.0 (tag 3dd44ec), run
+41336548857 on throwaway branch `probe/v6-guard-live` (0b3341d, deleted after). Two matrix
+legs called `actions/rotate-external-secret` with dummy inputs. "both" (client-id + key +
+github-token) was refused with `pass the App or github-token, not both`; "neither" was refused
+with `no credentials: pass the App (client-id and its private key) or github-token`. In each leg
+4 of 20 steps ran (boolean check, the guard failing, and the `if: always()` shred and summary)
+and 16 were skipped, Mint App token among them. The probe branch was pushed with `--no-verify`
+(owner approved): the pre-push gate treats every workflow file as a catalog workflow that needs
+README/docs coverage, and repo CI runs only on `main`, tags and PRs, so nothing went unchecked
+on a path to `main`.
 
 ## 2026-11-01 — ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)
 
