@@ -302,7 +302,9 @@ and an unreadable trigger now fails where it used to read "missing" or pass. By 
 semver rule (semver tracks the input contract) that is breaking. Owner 2026-11-01: v6.0.0 ships
 ONCE with three breaking items: this change; `app-id` -> `client-id` plus a caller-supplied
 token as an alternative to the GitHub App; and removing the deprecated
-`rotate-worker-signing-secret`. This lands on a branch and is not released by itself.
+`rotate-worker-signing-secret`. This is not released by itself. Owner 2026-11-01: v6 work merges
+into main as each item is done (no long-lived v6 branch); a v5.x patch needed before v6.0.0 is
+cut from a branch off the v5.2.0 tag.
 
 **Consumer migration (for the v6.0.0 release notes).** Remove any services.json `ci`
 `paths_ignore` that differs from the workflow file's `on.push.paths-ignore` (simplest: remove

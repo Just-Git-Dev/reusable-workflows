@@ -64,6 +64,11 @@ whose run should have fired but never did.
   drafts,publish}`, `repos-{create,environments,settings,variables}`) and all are App-only, with
   no token input; the "23 files" above is stale. `ci-go` `go_private_token` and `ci-node`
   `npm_auth_token` already take a plain token.
+  **Owner 2026-11-01 (away batch):** the caller-supplied token is one secret named
+  `github-token` on all 8 workflows. A caller that passes BOTH the App (`client-id` + key) and
+  `github-token` is refused with a clear error ("pass the App or github-token, not both");
+  nothing guesses which was meant. This lands in v6.0.0 with ci-green and the
+  `rotate-worker-signing-secret` removal; plan it in its own plan file.
 
 ## Owner rulings to build (opened 2026-10-21)
 
