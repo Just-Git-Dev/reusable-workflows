@@ -1,7 +1,7 @@
 # TODO — reusable-workflows
 
 ## Index
-36 open across 15 live sections. 46 closed items archived.
+35 open across 15 live sections. 46 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
@@ -9,7 +9,7 @@ section opens or closes. Closed sections live in
 
 - **ACTIVE** — [rotate-cloudflare-token — the verify error blames the token for a header-format failure (opened 2026-11-01)](#rotate-cloudflare-token--the-verify-error-blames-the-token-for-a-header-format-failure-opened-2026-11-01) — 1 open
 - **ACTIVE** — [Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)](#release-flow--ci-green-cannot-model-an-onpushpaths-allowlist-opened-2026-11-01) — 1 open
-- **ACTIVE** — [App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)](#app-token-mint--app-id-input-is-deprecated-upstream-opened-2026-10-28) — 1 open
+- **ACTIVE** — [App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)](#app-token-mint--app-id-input-is-deprecated-upstream-opened-2026-10-28) — 0 open (built for v6.0.0)
 - **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 3 open
 - **ACTIVE** — [zizmor findings ignored at adoption (opened 2026-10-21)](#zizmor-findings-ignored-at-adoption-opened-2026-10-21) — 2 open
 - **ACTIVE** — [Release flow — `spec-compat` has no way to acknowledge a deliberate removal (opened 2026-10-15)](#release-flow--spec-compat-has-no-way-to-acknowledge-a-deliberate-removal-opened-2026-10-15) — 1 open
@@ -58,7 +58,11 @@ whose run should have fired but never did.
 
 ## App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)
 
-- [ ] move every `actions/create-github-app-token` step from `app-id:` to `client-id:`
+- [x] move every `actions/create-github-app-token` step from `app-id:` to `client-id:`
+  **Built 2026-11-01** on `feat/v6-auth-client-id-and-token` for v6.0.0: 20 mints in 9 places
+  (rotate-external-secret is the 9th, owner Q2) take `client-id`, and a caller may pass
+  `github-token` instead; `tests/run_auth_mode_tests.py` (233 cases) and
+  `tests/release_flow_workflows/test_auth_modes.py`; DECISIONS 2026-11-01 "v6 auth".
   The pinned v3.3.0 `action.yml` marks `app-id` with `deprecationMessage: "Use 'client-id'
   instead."` — a warning today, not a failure. 23 files use it (`release-publish.yml`,
   `release-drafts.yml`, `repos-*.yml`, `distribute-env-secrets.yml`, …). Our own `app-id`/`app_id`
@@ -95,7 +99,8 @@ whose run should have fired but never did.
   receive the App private key (workflow, secret input name, required caller environment) with rw,
   and have workflow-preflight check every caller against it, so projects stop hand-maintaining
   their own key-recipient guards (owner, 2026-10-21; a consumer's guard needed a hand exception
-  to adopt `repos-environments`).
+  to adopt `repos-environments`). Since v6 the same list must also name each workflow's
+  `github-token` secret, the other credential a caller can hand over.
 
 ## zizmor findings ignored at adoption (opened 2026-10-21)
 
@@ -149,11 +154,12 @@ has no environment, so the input arrived empty. The fix shipped as a doc correct
 (`docs/release-flow.md` §Inputs: define a repo/org variable). The consumer chose that route, so
 no release was needed.
 
-- [ ] `.github/workflows/release-{plan,drafts,publish}.yml` — optional: make `app-id` not
-  required and fall back to `vars.RELEASE_APP_ID` inside the environment-scoped mint jobs, so the
-  id can sit beside `RELEASE_APP_KEY` on the environment. This is an additive input-contract
-  change, so it means a minor release and a new `RELEASE_FLOW_TREE`, and every caller re-pins.
-  Only worth doing when a second consumer hits the same thing.
+- [ ] `.github/workflows/release-{plan,drafts,publish}.yml` — optional: fall back to
+  `vars.RELEASE_APP_CLIENT_ID` inside the environment-scoped mint jobs when `client-id` is empty,
+  so the Client ID can sit beside `RELEASE_APP_KEY` on the environment. Since v6 an empty
+  `client-id` means token mode, so the fallback must not change what the guard sees. An additive
+  input-contract change (a minor; `RELEASE_FLOW_TREE` does not move, it pins only
+  `actions/release-flow`). Only worth doing when a second consumer hits the same thing.
 - [ ] `docs/release-flow.md` §Contract checks/Smoke (L46) — say which ref the smoke SPECS come
   from. "Against the resolved refs and images" is silent on it, and a consumer whose e2e specs
   track its umbrella `main` failed an api-only rehearsal on 2026-10-13: the UI resolved to its
