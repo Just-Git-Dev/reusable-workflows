@@ -283,8 +283,16 @@ into a no-op. Plan: `plans/2026-11-01-ci-green-paths-allowlist.md`.
 
 **Cost and scope.** The file is read only when it can matter: no run at the sha, or a declared
 `paths_ignore` to cross-check. A workflow with a run and nothing declared reads no file and
-needs no PyYAML (tested), so today's common case costs no extra API call. PyYAML is installed in
-the release-plan ci-green job and the release-drafts pre-check job. YAML is parsed with the
+needs no PyYAML (tested), so today's common case costs no extra API call. PyYAML is installed only
+in the release-plan resolve job (read-only token). The drafts job re-runs ci-green before the
+first write but holds a WRITE token, and `test_workflow_tokens` forbids any install there (a
+compromised PyPI package must not reach Releases). Owner 2026-11-01 chose: plan hands its
+filters to drafts as the `ci-filters` output (inside the `needs` JSON drafts already gets, so
+callers change nothing); drafts uses only those and fails closed on a missing one. Sound because
+a file at a fixed sha cannot change between plan and drafts. Rejected: relying on the runner
+image's own PyYAML (unverified, an invisible dependency on image contents) and skipping the
+filter re-check in drafts (weaker write-time check). The plan's step 5 ("add PyYAML to
+release-drafts") missed this control; `make ci` caught it. YAML is parsed with the
 YAML-1.2-booleans loader from `ops_subset.py`, so a bare `on:` key stays `"on"`. Known limit: an
 allowlist workflow whose files last changed more than 20 first-parent commits back fails "no run
 found within 20" (fail closed, named).

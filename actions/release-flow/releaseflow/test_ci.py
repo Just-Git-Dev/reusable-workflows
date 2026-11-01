@@ -270,6 +270,35 @@ class TriggerFilterTests(unittest.TestCase):
             out = self.run_check(f)[0]
         self.assertTrue(out and "PyYAML" in out[0], out)
 
+    def test_plan_records_and_drafts_uses_handed_filter_without_the_file(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.compare_files[(P1, P3)] = ["src/a.go"]
+        read = {}
+        self.assertEqual(ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], read=read)[0], [])
+        key = ci.filter_key("core", self.WF, P3)
+        self.assertEqual(read[key], {"kind": "paths", "globs": ["CHANGELOG.md"]})
+        r.files.clear()  # drafts: the file is never read, so its absence cannot matter
+        f.requests.clear()
+        handed = json.loads(json.dumps(read))
+        with mock.patch.dict(sys.modules, {"yaml": None}):  # and PyYAML is not installed
+            out = ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], handed=handed)
+        self.assertEqual(out[0], [])
+        self.assertFalse(any("contents/" in q[1] for q in f.requests))
+        r.compare_files[(P1, P3)] = ["CHANGELOG.md"]  # the handed filter is really applied
+        self.assertTrue(ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], handed=handed)[0])
+
+    def test_drafts_missing_or_bad_handed_filter_fails_closed(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.compare_files[(P1, P3)] = ["src/a.go"]
+        key = ci.filter_key("core", self.WF, P3)
+        tests = {ci.filter_key("core", "tests.yml", P3):  # declared in services.json: needed too
+                 {"kind": "paths-ignore", "globs": ["**.md", "docs/**"]}}
+        for bad in ({}, {key: {"kind": "allow", "globs": []}}, {key: {"kind": "paths"}}):
+            handed = {**tests, **bad}
+            out = ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], handed=handed)[0]
+            self.assertEqual(len(out), 1, (handed, out))
+            self.assertIn("plan handed over no usable filter", out[0])
+
     def test_declared_paths_ignore_must_equal_the_file(self):
         f = FakeGitHub()
         green_ci(f, "core", SHA_A)  # runs exist; the file agrees with services.json
@@ -310,6 +339,36 @@ class CommandTests(unittest.TestCase):
             rc, err = self.call(argv, f)
             self.assertEqual(rc, 1)
             self.assertIn("missing", err)
+
+    def test_ci_green_filters_out_feeds_drafts_check_only(self):
+        root = Path(__file__).resolve().parents[3] / ".scratch" / "test-tmp"
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as d:
+            d = Path(d)
+            (d / "c.json").write_text(json.dumps(CFG_DICT))
+            (d / "m.yaml").write_text(
+                f"services:\n  - {{repo: gateway, version: v0.38.0, sha: {SHA_B}}}\n")
+            common = [str(d / "m.yaml"), "--config", str(d / "c.json"),
+                      "--allowed", ",".join(ALLOWED)]
+            f = FakeGitHub()
+            f.repo("gateway").parents = {SHA_B: [P1]}
+            f.repo("gateway").ci_runs[("ci.yml", P1)] = [ci_run()]
+            f.repo("gateway").compare_files[(P1, SHA_B)] = ["README.md"]
+            workflow_file(f, "gateway", "ci.yml", SHA_B, {"paths": ["src/**"]})
+            rc, err = self.call(["ci-green", *common, "--filters-out", str(d / "f.json")], f)
+            self.assertEqual(rc, 0, err)
+            got = json.loads((d / "f.json").read_text())
+            self.assertEqual(got, {ci.filter_key("gateway", "ci.yml", SHA_B):
+                                   {"kind": "paths", "globs": ["src/**"]}})
+            # drafts --check-only with the handed file: no contents read
+            f.repo("gateway").files.clear()
+            with mock.patch("drafts.validate.validate_manifest", return_value=[]):  # H8 only
+                rc, err = self.call(["drafts", *common, "--check-only",
+                                     "--ci-filters-file", str(d / "f.json")], f)
+                self.assertEqual(rc, 0, err)
+                rc, err = self.call(["drafts", *common, "--check-only"], f)  # nothing handed
+                self.assertEqual(rc, 1)
+                self.assertIn("plan handed over no usable filter", err)
 
 
 class ConfigCiTests(unittest.TestCase):

@@ -142,7 +142,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(ins["pr-check-name"]["default"], "release-pr / release-pr")
         self.assertEqual(ins["rehearsal"]["type"], "boolean")
         self.assertEqual(set(call["outputs"]), {"manifest", "manifest-sha256", "pr", "order", "rehearsal", "resolved", "breaking",
-                                           "checks"})
+                                           "checks", "ci-filters"})
 
     def test_jobs_and_needs(self):
         self.assertEqual(list(self.jobs), ["plan", "resolve", "service-gates"])
@@ -259,6 +259,19 @@ class DraftsTests(unittest.TestCase):
         self.assertEqual(dr["env"]["RELEASE_FLOW_READ_TOKEN"], "${{ steps.app-ro.outputs.token }}")
         self.assertNotIn("RELEASE_FLOW_WRITE_TOKEN", dr["env"])
         self.assertIn("== 'true'", dr["if"])
+
+    def test_both_drafts_steps_recheck_ci_with_plans_filters(self):
+        # The drafts job holds a write token and installs nothing, so it never parses a workflow
+        # file: ci-green's filters come from plan's `ci-filters` output via the verdict job.
+        self.assertEqual(self.jobs["verdict"]["outputs"]["ci_filters"], "${{ steps.v.outputs.ci_filters }}")
+        for sid in ("dr", "d"):
+            _, st = wf.step_by_id(self.jobs["drafts"], sid)
+            self.assertEqual(st["env"]["CI_FILTERS"], "${{ needs.verdict.outputs.ci_filters }}", sid)
+            self.assertIn('--ci-filters-file "$RUNNER_TEMP/ci-filters.json"', st["run"], sid)
+        plan = wf.jobs(wf.load("release-plan.yml"))
+        self.assertEqual(plan["resolve"]["outputs"]["ci_filters"], "${{ steps.ci.outputs.filters }}")
+        _, ci = wf.step_by_id(plan["resolve"], "ci")
+        self.assertIn('--filters-out "$RUNNER_TEMP/ci-filters.json"', ci["run"])
 
     def test_write_mint_and_step_exclude_rehearsal(self):
         drafts = self.jobs["drafts"]

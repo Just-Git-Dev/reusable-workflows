@@ -312,6 +312,20 @@ def green_ci(fake, repo, sha, cfg_dict=None):
                               else None)
 
 
+def plan_ci_filters(fake):
+    """What plan's ci-green would hand drafts (`ci-filters`) for every workflow file the fake
+    serves via workflow_file(push=...): {repo/workflow@sha: {kind, globs}}."""
+    out = {}
+    for name, repo in fake.repos.items():
+        for (path, sha), text in repo.files.items():
+            if path.startswith(".github/workflows/"):
+                push = json.loads(text)["on"]["push"] or {}
+                kind = next((k for k in ("paths", "paths-ignore") if k in push), None)
+                out[f"{name}/{path.rsplit('/', 1)[1]}@{sha}"] = {
+                    "kind": kind, "globs": list(push.get(kind, [])) if kind else []}
+    return out
+
+
 def workflow_file(fake, repo, wf, sha, push=None, text=None):
     """Serve .github/workflows/<wf> at `sha`: `on: {push: <push>}`, or the raw `text`."""
     if text is None:

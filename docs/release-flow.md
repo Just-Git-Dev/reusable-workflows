@@ -190,6 +190,13 @@ merge ──► plan ──► [caller: contracts, images…] ──► drafts �
      declares must equal the file's `on.push.paths-ignore` exactly (same list, same order); the
      file is then read even when a run exists, and a mismatch fails with both values. Since
      v6.0.0; earlier versions trusted services.json and could not model `paths`.
+
+     The drafts job re-runs ci-green just before the first write, but it holds a write token
+     and installs nothing, so it never parses a workflow file. Plan's ci-green writes every
+     filter it read to the `ci-filters` output (JSON `{repo/workflow@sha: {kind, globs}}`);
+     drafts receives it inside `needs` and re-checks the runs with those filters. A file at a
+     fixed sha cannot change, so plan's reading still holds. A filter drafts needs that plan
+     did not hand over fails closed. Callers pass `toJSON(needs)` as before and change nothing.
    - *resolve*: every service's ref (the candidate sha if listed, else the **live** version) and
      image, and the contract checks for every intermediate state of the publish order. Every
      approved break must have a live-consumer check (R3); the list is the `breaking` output.

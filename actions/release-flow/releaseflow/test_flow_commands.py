@@ -21,7 +21,7 @@ import manifest  # noqa: E402
 import publish  # noqa: E402
 import release_flow  # noqa: E402
 from fake_github import (ALLOWED, CFG_DICT, FakeClock, FakeGitHub, SHA_A, SHA_B,  # noqa: E402
-                         SHA_C, green_ci)
+                         SHA_C, green_ci, plan_ci_filters)
 
 TMP_ROOT = HERE.parents[2] / ".scratch" / "test-tmp"
 AL = ",".join(ALLOWED)
@@ -398,7 +398,8 @@ class DraftsCheckOnlyTests(unittest.TestCase):
     def go(self, d, f, env=None, *extra):
         env = {"RELEASE_FLOW_READ_TOKEN": "r"} if env is None else env
         argv = ["drafts", mfile(d, ("core", "v0.132.0", SHA_A)), "--check-only",
-                "--config", write(d, "c.json", cfg_dict()), "--allowed", AL, *extra]
+                "--config", write(d, "c.json", cfg_dict()), "--allowed", AL,
+                "--ci-filters-file", write(d, "ci-filters.json", plan_ci_filters(f)), *extra]
         with mock.patch.object(release_flow.gh, "Writer",
                                side_effect=AssertionError("a Writer was built")):
             return call(argv, env, {"transport": f})
@@ -443,7 +444,8 @@ class DraftsCheckOnlyTests(unittest.TestCase):
         with tmpdir() as d:
             f = self.world()
             argv = ["drafts", mfile(d, ("core", "v0.132.0", SHA_A)),
-                    "--config", write(d, "c.json", cfg_dict()), "--allowed", AL]
+                    "--config", write(d, "c.json", cfg_dict()), "--allowed", AL,
+                    "--ci-filters-file", write(d, "ci-filters.json", plan_ci_filters(f))]
             rc, out, err = call(argv, {"RELEASE_FLOW_READ_TOKEN": "r",
                                        "RELEASE_FLOW_WRITE_TOKEN": "w"}, {"transport": f})
             self.assertEqual(rc, 0, err)
@@ -518,10 +520,17 @@ class VerdictTests(unittest.TestCase):
         rc, j, out, err = self.v(needs())
         self.assertEqual(rc, 0, err)
         self.assertEqual(j, {"ok": True, "rehearsal": False, "manifest": MANIFEST, "pr": "7",
-                             "manifest_sha256": "", "order": ["core", "gateway"],
+                             "manifest_sha256": "", "ci_filters": "", "order": ["core", "gateway"],
                              "failed_stage": "", "failures": []})
         self.assertEqual(out.strip(), json.dumps(j, separators=(",", ":")))
         self.assertEqual(len(out.strip().splitlines()), 1)
+
+    def test_ci_filters_pass_through_from_plan(self):
+        nd = needs()
+        nd["plan"]["outputs"]["ci-filters"] = '{"core/t.yml@x":{"kind":null,"globs":[]}}'
+        rc, j, _, err = self.v(nd)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(j["ci_filters"], nd["plan"]["outputs"]["ci-filters"])
 
     def with_sha(self, sha, **kw):
         nd = needs(**kw)

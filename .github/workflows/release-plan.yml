@@ -103,6 +103,9 @@ on:
       breaking:
         description: "JSON [{consumer, provider, finding}] approved by the breaking-approved label ([] without it); pass to spec-compat as RELEASE_BREAKING"
         value: ${{ jobs.resolve.outputs.breaking }}
+      ci-filters:
+        description: "JSON {repo/workflow@sha: {kind, globs}}: the push path filters ci-green read; release-drafts re-checks with them (its write job parses no YAML)"
+        value: ${{ jobs.resolve.outputs.ci_filters }}
 
 permissions:
   contents: read
@@ -112,7 +115,7 @@ env:
   # the tag. A called workflow cannot discover its own ref at runtime.
   WORKFLOW_VERSION: v5.2.0
   # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
-  RELEASE_FLOW_TREE: "0894bc8c458e2aff9ce804a1bea9fed5f32d50e4"
+  RELEASE_FLOW_TREE: "3b6ca6d23f9e19ba4f8e855c1a24284a41460240"
 
 defaults:
   run:
@@ -341,6 +344,7 @@ jobs:
       resolved: ${{ steps.r.outputs.resolved }}
       checks: ${{ steps.r.outputs.checks }}
       breaking: ${{ steps.brk.outputs.breaking }}
+      ci_filters: ${{ steps.ci.outputs.filters }}
     steps:
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -418,12 +422,17 @@ jobs:
         run: python3 -P -m pip install --quiet --disable-pip-version-check pyyaml
 
       - name: CI-green (every listed commit's own CI, before any contract work)
+        id: ci
         env:
           RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
-        run: release-flow ci-green "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG"
+        run: |
+          set -uo pipefail
+          release-flow ci-green "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG" --filters-out "$RUNNER_TEMP/ci-filters.json"; rc=$?
+          [ "$rc" -eq 0 ] || exit "$rc"
+          echo "filters=$(jq -c . "$RUNNER_TEMP/ci-filters.json")" >> "$GITHUB_OUTPUT"
 
       - name: Resolve refs, images and contract states
         id: r

@@ -13,7 +13,8 @@ sys.path.insert(0, str(HERE))
 import ops_subset  # noqa: E402
 import release_flow  # noqa: E402
 import report  # noqa: E402
-from fake_github import ALLOWED, CFG_DICT, FakeClock, FakeGitHub, SHA_A, SHA_B, green_ci, make_live  # noqa: E402
+from fake_github import (ALLOWED, CFG_DICT, FakeClock, FakeGitHub, SHA_A, SHA_B,  # noqa: E402
+                         green_ci, make_live, plan_ci_filters)
 
 TMP_ROOT = HERE.parents[2] / ".scratch" / "test-tmp"
 
@@ -133,6 +134,12 @@ class ReleaseFlowTests(unittest.TestCase):
     def base(self, d):
         return ["--config", cfg_file(d), "--allowed", AL]
 
+    def dbase(self, d, f):
+        """drafts args: base plus the ci-filters plan would hand over for `f`'s workflows."""
+        p = Path(d) / "ci-filters.json"
+        p.write_text(json.dumps(plan_ci_filters(f)))
+        return [*self.base(d), "--ci-filters-file", str(p)]
+
     def fake(self):
         f = FakeGitHub()
         i = f.repo("core")
@@ -187,7 +194,7 @@ class ReleaseFlowTests(unittest.TestCase):
     def test_drafts_requires_write_token(self):
         with tmpdir() as d:
             f = self.fake()
-            rc, _, err = call(["drafts", manifest_file(d), *self.base(d)],
+            rc, _, err = call(["drafts", manifest_file(d), *self.dbase(d, f)],
                               {"RELEASE_FLOW_READ_TOKEN": "t"}, {"transport": f})
             self.assertEqual(rc, 2)
             self.assertIn("RELEASE_FLOW_WRITE_TOKEN", err)
@@ -196,7 +203,7 @@ class ReleaseFlowTests(unittest.TestCase):
     def test_drafts_ok_prints_json(self):
         with tmpdir() as d:
             f = self.fake()
-            rc, out, err = call(["drafts", manifest_file(d), *self.base(d)],
+            rc, out, err = call(["drafts", manifest_file(d), *self.dbase(d, f)],
                                 {"RELEASE_FLOW_READ_TOKEN": "r", "RELEASE_FLOW_WRITE_TOKEN": "w"},
                                 {"transport": f})
             self.assertEqual(rc, 0, err)
@@ -206,7 +213,7 @@ class ReleaseFlowTests(unittest.TestCase):
         with tmpdir() as d:
             f = self.fake()
             f.repo("core").compare[SHA_A] = "diverged"
-            rc, out, err = call(["drafts", manifest_file(d), *self.base(d)],
+            rc, out, err = call(["drafts", manifest_file(d), *self.dbase(d, f)],
                                 {"RELEASE_FLOW_READ_TOKEN": "r", "RELEASE_FLOW_WRITE_TOKEN": "w"},
                                 {"transport": f})
             self.assertEqual(rc, 1)
@@ -216,7 +223,7 @@ class ReleaseFlowTests(unittest.TestCase):
     def test_drafts_creates_no_tag_and_no_ref(self):
         with tmpdir() as d:
             f = self.fake()
-            rc, _, err = call(["drafts", manifest_file(d), *self.base(d)],
+            rc, _, err = call(["drafts", manifest_file(d), *self.dbase(d, f)],
                               {"RELEASE_FLOW_READ_TOKEN": "r", "RELEASE_FLOW_WRITE_TOKEN": "w"}, {"transport": f})
             self.assertEqual(rc, 0, err)
             self.assertEqual([(m, p.split("/", 2)[2]) for m, p, _ in f.writes()],
@@ -226,7 +233,7 @@ class ReleaseFlowTests(unittest.TestCase):
         with tmpdir() as d:
             f = self.fake()
             del f.repo("core").refs["v0.132.0"]
-            rc, out, err = call(["drafts", manifest_file(d), *self.base(d)],
+            rc, out, err = call(["drafts", manifest_file(d), *self.dbase(d, f)],
                                 {"RELEASE_FLOW_READ_TOKEN": "r", "RELEASE_FLOW_WRITE_TOKEN": "w"}, {"transport": f})
             self.assertEqual(rc, 1)
             self.assertIn("does not exist", err)
@@ -236,7 +243,7 @@ class ReleaseFlowTests(unittest.TestCase):
         with tmpdir() as d:
             f = self.fake()
             f.fail.append(("POST", "core/releases", 0))  # response lost: the draft may exist
-            rc, out, err = call(["drafts", manifest_file(d), *self.base(d)],
+            rc, out, err = call(["drafts", manifest_file(d), *self.dbase(d, f)],
                                 {"RELEASE_FLOW_READ_TOKEN": "r", "RELEASE_FLOW_WRITE_TOKEN": "w"},
                                 {"transport": f})
             self.assertEqual(rc, 1)

@@ -24,20 +24,22 @@ class DraftsError(Exception):
         self.created = created
 
 
-def precheck(reader, cfg, entries):
+def precheck(reader, cfg, entries, ci_filters=None):
     """Every read-only check that guards the first write (validate, tag re-assertion, CI).
     -> list of failures; empty means drafts may be created. Takes a Reader only, so a rehearsal
-    (`drafts --check-only`) can run it with no write token at all."""
+    (`drafts --check-only`) can run it with no write token at all. `ci_filters`: the push path
+    filters plan's ci-green read (ci.check `handed`); the drafts job installs nothing, so it
+    never parses a workflow file itself."""
     failures = validate.validate_manifest(reader, cfg, entries)
-    ci_failures, examined = ci.check(reader, cfg, entries)
+    ci_failures, examined = ci.check(reader, cfg, entries, handed=ci_filters or {})
     failures += ci_failures
     if examined == 0:
         failures.append("CI check examined 0 workflows; refusing to proceed on no evidence")
     return failures
 
 
-def create_drafts(reader, writer, cfg, entries):
-    failures = precheck(reader, cfg, entries)
+def create_drafts(reader, writer, cfg, entries, ci_filters=None):
+    failures = precheck(reader, cfg, entries, ci_filters)
     if failures:
         raise DraftsError(failures, {})
     created = {}

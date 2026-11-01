@@ -131,14 +131,18 @@ def _verdict(run, label):
     return None
 
 
-def _check_one(reader, base, repo, sha, wf, declared):
+def filter_key(repo, wf, sha):
+    return f"{repo}/{wf}@{sha}"
+
+
+def _check_one(reader, base, repo, sha, wf, declared, get_filter):
     """`declared` is services.json's paths_ignore (a tuple), or None when it declares none."""
     label = f"{repo}@{sha[:8]} {wf}"
     run = _newest_run(reader, base, wf, sha)
     if run and declared is None:
         return _verdict(run, label)  # the filter cannot matter: no file read
     try:
-        kind, globs = _push_filter(reader, base, wf, sha)
+        kind, globs = get_filter(wf)
     except TriggerError as ex:
         return f"{label}: cannot use the push trigger: {ex}"
     if declared is not None:
@@ -178,8 +182,29 @@ def _check_one(reader, base, repo, sha, wf, declared):
     return f"{label}: no run found within {MAX_WALK} first-parent ancestors"
 
 
-def check(reader, cfg, entries):
-    """-> (failures, examined)."""
+def _filter_source(reader, base, repo, sha, handed, read):
+    """-> get_filter(wf). With `handed` (drafts: {filter_key: {kind, globs}} from plan) the
+    filter comes only from it and a missing key fails closed, so a write job never parses YAML.
+    Otherwise it is read from the file and recorded in `read` (plan hands it on). A file at a
+    fixed sha cannot change, so plan's reading is still the truth at drafts time."""
+    def get_filter(wf):
+        key = filter_key(repo, wf, sha)
+        if handed is not None:
+            f = handed.get(key)
+            if not isinstance(f, dict) or f.get("kind") not in ("paths", "paths-ignore", None) \
+                    or not isinstance(f.get("globs"), list) \
+                    or not all(isinstance(g, str) for g in f["globs"]):
+                raise TriggerError(f"plan handed over no usable filter for {key}")
+            return f["kind"], tuple(f["globs"])
+        kind, globs = _push_filter(reader, base, wf, sha)
+        if read is not None:
+            read[key] = {"kind": kind, "globs": list(globs)}
+        return kind, globs
+    return get_filter
+
+
+def check(reader, cfg, entries, handed=None, read=None):
+    """-> (failures, examined). `handed` / `read`: see _filter_source."""
     failures, examined = [], 0
     for e in entries:
         svc = cfg.service(e.repo)
@@ -187,10 +212,11 @@ def check(reader, cfg, entries):
             failures.append(f"{e.repo}: no CI workflows configured in services.json")
             continue
         base = f"repos/{cfg.owner}/{e.repo}"
+        get_filter = _filter_source(reader, base, e.repo, e.sha, handed, read)
         for wf, ignore in svc.ci:
             examined += 1
             try:
-                bad = _check_one(reader, base, e.repo, e.sha, wf, ignore)
+                bad = _check_one(reader, base, e.repo, e.sha, wf, ignore, get_filter)
             except gh.GitHubError as ex:
                 bad = f"{e.repo}@{e.sha[:8]} {wf}: cannot read CI state: {ex}"
             if bad:
