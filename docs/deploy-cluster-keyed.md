@@ -64,7 +64,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cluster-keyed.yml@v5.2.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cluster-keyed.yml@v6.0.0
     with:
       registry_type: ecr
       image_registry: 1234567890.dkr.ecr.us-east-1.amazonaws.com

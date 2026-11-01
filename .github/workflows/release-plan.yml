@@ -8,7 +8,10 @@ name: Release plan (reusable)
 # EVERY EDIT TO THIS FILE IS A SECURITY CHANGE. What bounds it:
 #   - Tokens are minted per job from a GitHub App, READ-ONLY here, for the repos in `allowed` and
 #     `read-only-repos` only. The App key lives in the caller's `environment` (RELEASE_APP_KEY)
-#     and is named ONLY as the `private-key` of a mint step. It is the one declared secret, and the caller passes it BY NAME (`inherit` passes nothing across orgs; an unpassed environment secret is EMPTY here; docs/release-flow.md).
+#     and is named ONLY as the `private-key` of a mint step, and the caller passes it BY NAME (`inherit` passes nothing across orgs; an unpassed environment secret is EMPTY here; docs/release-flow.md).
+#     The other credential mode is a plain `github-token` secret instead of the App; the first
+#     step of the first job refuses unless exactly one mode is given. Caller example:
+#     `client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}` with `RELEASE_APP_KEY`, or `github-token` alone.
 #   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
 #   - The plan job holds no App token: it reads with the caller's GITHUB_TOKEN. The CLI it runs is
 #     checked out from this repo and pinned by content (RELEASE_FLOW_TREE), then self-tested.
@@ -30,10 +33,11 @@ on:
         type: string
         required: false
         default: ''
-      app-id:
-        description: 'The release GitHub App id (not secret), e.g. vars.RELEASE_APP_ID'
+      client-id:
+        description: 'The release GitHub App client id (not secret), e.g. vars.RELEASE_APP_CLIENT_ID; omit it and pass github-token instead'
         type: string
-        required: true
+        required: false
+        default: ''
       environment:
         description: 'The caller environment holding the RELEASE_APP_KEY secret'
         type: string
@@ -77,7 +81,10 @@ on:
     secrets:
       RELEASE_APP_KEY:
         description: 'The release App private key. Pass it BY NAME (inherit is same-org only)'
-        required: true
+        required: false
+      github-token:
+        description: 'A GitHub token to use instead of the App (pass the App or this, not both)'
+        required: false
     outputs:
       manifest:
         description: 'The manifest path'
@@ -113,7 +120,7 @@ permissions:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v5.2.0
+  WORKFLOW_VERSION: v6.0.0
   # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
   RELEASE_FLOW_TREE: "3b6ca6d23f9e19ba4f8e855c1a24284a41460240"
 
@@ -346,6 +353,32 @@ jobs:
       breaking: ${{ steps.brk.outputs.breaking }}
       ci_filters: ${{ steps.ci.outputs.filters }}
     steps:
+      - name: Refuse unless exactly one credential mode
+        shell: bash
+        env:
+          CLIENT_ID: ${{ inputs.client-id }}
+          KEY_SET: ${{ secrets.RELEASE_APP_KEY != '' }}
+          TOKEN_SET: ${{ secrets.github-token != '' }}
+        run: |
+          app=false
+          if [ -n "$CLIENT_ID" ] || [ "$KEY_SET" = "true" ]; then app=true; fi
+          if [ "$app" = "true" ] && [ "$TOKEN_SET" = "true" ]; then
+            echo "::error::pass the App or github-token, not both"
+            exit 1
+          fi
+          if [ "$app" = "false" ] && [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::no credentials: pass the App (client-id and its private key) or github-token"
+            exit 1
+          fi
+          if [ "$KEY_SET" = "true" ] && [ -z "$CLIENT_ID" ]; then
+            echo "::error::App incomplete: missing client-id"
+            exit 1
+          fi
+          if [ -n "$CLIENT_ID" ] && [ "$KEY_SET" != "true" ]; then
+            echo "::error::App incomplete: missing private key"
+            exit 1
+          fi
+
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -398,9 +431,10 @@ jobs:
 
       - name: Mint App token (READ-ONLY, allowed + read-only repos)
         id: app
+        if: ${{ inputs.client-id != '' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ inputs.app-id }}
+          client-id: ${{ inputs.client-id }}
           private-key: ${{ secrets.RELEASE_APP_KEY }}
           owner: ${{ needs.plan.outputs.owner }}
           repositories: ${{ steps.repos.outputs.list }}
@@ -410,7 +444,7 @@ jobs:
 
       - name: Validate (tag exists, annotated, peels to the sha; sha on base; changelog; no Release yet)
         env:
-          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token || secrets.github-token }}
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
@@ -424,7 +458,7 @@ jobs:
       - name: CI-green (every listed commit's own CI, before any contract work)
         id: ci
         env:
-          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token || secrets.github-token }}
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
@@ -437,7 +471,7 @@ jobs:
       - name: Resolve refs, images and contract states
         id: r
         env:
-          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_FLOW_READ_TOKEN: ${{ steps.app.outputs.token || secrets.github-token }}
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
@@ -476,6 +510,32 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Refuse unless exactly one credential mode
+        shell: bash
+        env:
+          CLIENT_ID: ${{ inputs.client-id }}
+          KEY_SET: ${{ secrets.RELEASE_APP_KEY != '' }}
+          TOKEN_SET: ${{ secrets.github-token != '' }}
+        run: |
+          app=false
+          if [ -n "$CLIENT_ID" ] || [ "$KEY_SET" = "true" ]; then app=true; fi
+          if [ "$app" = "true" ] && [ "$TOKEN_SET" = "true" ]; then
+            echo "::error::pass the App or github-token, not both"
+            exit 1
+          fi
+          if [ "$app" = "false" ] && [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::no credentials: pass the App (client-id and its private key) or github-token"
+            exit 1
+          fi
+          if [ "$KEY_SET" = "true" ] && [ -z "$CLIENT_ID" ]; then
+            echo "::error::App incomplete: missing client-id"
+            exit 1
+          fi
+          if [ -n "$CLIENT_ID" ] && [ "$KEY_SET" != "true" ]; then
+            echo "::error::App incomplete: missing private key"
+            exit 1
+          fi
+
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -534,9 +594,10 @@ jobs:
 
       - name: Mint App token (READ-ONLY checks + contents, allowed repos)
         id: app
+        if: ${{ inputs.client-id != '' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ inputs.app-id }}
+          client-id: ${{ inputs.client-id }}
           private-key: ${{ secrets.RELEASE_APP_KEY }}
           owner: ${{ needs.plan.outputs.owner }}
           repositories: ${{ steps.repos.outputs.list }}
@@ -546,5 +607,5 @@ jobs:
       - name: Every listed service's release gate is green on its tagged sha
         uses: Just-Git-Dev/reusable-workflows/actions/check-release-gate@14620ac3d914d99b55eb90a92495a147f29a0337 # v3.7.0
         with:
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.app.outputs.token || secrets.github-token }}
           services: ${{ steps.s.outputs.services }}

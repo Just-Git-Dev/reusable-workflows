@@ -614,8 +614,8 @@ secret to rotate and no isolation. What bounds admin actions is the environment 
 narrowed tokens and the planner's allow-list, not which key is used.
 
 - In `<org>/project`: environment **`repo-admin`**, deployment branches **`main` only**, secret
-  **`RELEASE_APP_KEY`** (a copy of the release key, as an environment secret). The App id is the
-  existing repo variable **`RELEASE_APP_ID`**.
+  **`RELEASE_APP_KEY`** (a copy of the release key, as an environment secret). The App's **Client ID** (not its numeric
+  App ID) is the repo variable **`RELEASE_APP_CLIENT_ID`**.
 - **Why `repo-admin` is separate from `release` when both hold the same key.** On the GitHub side
   they are equivalent: the same key mints the same tokens. The split is load-bearing on the GCP side.
   The project's GCP `repo-admin` service account (create service accounts, set IAM on them, on Cloud
@@ -634,6 +634,10 @@ narrowed tokens and the planner's allow-list, not which key is used.
   the environment is `repo-admin` and `github.ref` is `refs/heads/main`.
 - Pass the key **by name** into the workflows' `REPO_ADMIN_APP_KEY` input
   (`REPO_ADMIN_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}`); `secrets: inherit` is same-org only.
+  Instead of the App, a caller may pass one secret `github-token`, never both; the key and the
+  `client-id` input are then omitted. A call with neither, both or half the App is refused (see
+  [repos-settings.md](repos-settings.md)). In token mode the caller token is present in report runs
+  too, and we never mint or revoke it.
 - **The write token is narrowed to the repos it writes to.** F3, F4 and F9 mint the write token with
   the action's `repositories:` input set to exactly the repos the plan has write actions for
   (unique, plan order, comma separated; every one exists, because the planner only plans writes
@@ -645,8 +649,8 @@ narrowed tokens and the planner's allow-list, not which key is used.
 
 ### F9 (environments) credential
 
-F9 takes the App id (`app_id`, an input) and the private key (`app_key`, a secret passed by name)
-as inputs, so the workflow does not depend on which App the project uses. It follows this
+F9 takes the App's Client ID (`client_id`, an input) and the private key (`app_key`, a secret passed
+by name) as inputs, or the secret `github-token` instead (never both), so the workflow does not depend on which App the project uses. It follows this
 section's shape: the job runs in the `repo-admin` environment on `main` only; `report` mints a
 read token (`actions: read`, `metadata: read`); `enforce` mints `administration: write` narrowed
 to exactly the repos the plan has write actions for, and mints nothing when that list is empty.
@@ -683,7 +687,7 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-settings.yml@vX.Y.Z
     with:
       register: repos.yaml
-      app-id: ${{ vars.RELEASE_APP_ID }}
+      client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
       environment: repo-admin
     secrets:
       REPO_ADMIN_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}

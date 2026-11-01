@@ -7,8 +7,8 @@ name: Repos settings (reusable)
 #     WORKFLOW_VERSION. Its vocabulary has no delete, archive, make-public or rename-without-
 #     rename_from verb; this workflow additionally refuses any action outside the allow-lists below.
 #   - The job refuses to start unless `environment` is `repo-admin` and the ref is the caller's
-#     main branch, BEFORE any token is minted. The App key is one declared secret, passed by name,
-#     and is named only as the `private-key` of the two mint steps.
+#     main branch, BEFORE any token is minted. The App key (optional; or the `github-token` secret) is passed by name,
+#     and is named only as the `private-key` of the two mint steps and as the guard's `KEY_SET` boolean.
 #   - A READ token (metadata:read) is minted first and is all a `report` run ever holds. The
 #     administration:write token is minted only when the plan holds at least one write action.
 #   - Inputs reach shell only through `env:`, never `${{ }}` inside `run:`.
@@ -22,10 +22,11 @@ on:
         type: string
         required: false
         default: repos.yaml
-      app-id:
-        description: 'The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID'
+      client-id:
+        description: 'The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead'
         type: string
-        required: true
+        required: false
+        default: ''
       environment:
         description: 'The caller environment holding REPO_ADMIN_APP_KEY; must be repo-admin'
         type: string
@@ -34,7 +35,10 @@ on:
     secrets:
       REPO_ADMIN_APP_KEY:
         description: 'The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)'
-        required: true
+        required: false
+      github-token:
+        description: 'A token to use instead of the App (exactly one credential mode: this or client-id plus the App key)'
+        required: false
 
 permissions:
   contents: read
@@ -42,7 +46,7 @@ permissions:
 env:
   # Stamped by scripts/stamp_version.py at release time; CI asserts it matches
   # the tag. A called workflow cannot discover its own ref at runtime.
-  WORKFLOW_VERSION: v5.2.0
+  WORKFLOW_VERSION: v6.0.0
 
 defaults:
   run:
@@ -67,6 +71,31 @@ jobs:
           [ "$ENVIRONMENT" = "repo-admin" ] || { echo "::error::environment is '$ENVIRONMENT', this workflow runs only in repo-admin"; exit 1; }
           [ "$REF" = "refs/heads/main" ] || { echo "::error::ref is '$REF'; repos-as-code runs only on refs/heads/main"; exit 1; }
           [[ "$REGISTER" =~ ^[A-Za-z0-9._/-]+$ && "$REGISTER" != *..* && "$REGISTER" != /* ]] || { echo "::error::register '$REGISTER' is not a plain relative path"; exit 1; }
+
+      - name: Refuse unless exactly one credential mode
+        env:
+          CLIENT_ID: ${{ inputs.client-id }}
+          KEY_SET: ${{ secrets.REPO_ADMIN_APP_KEY != '' }}
+          TOKEN_SET: ${{ secrets.github-token != '' }}
+        run: |
+          app=false
+          if [ -n "$CLIENT_ID" ] || [ "$KEY_SET" = "true" ]; then app=true; fi
+          if [ "$app" = "true" ] && [ "$TOKEN_SET" = "true" ]; then
+            echo "::error::pass the App or github-token, not both"
+            exit 1
+          fi
+          if [ "$app" = "false" ] && [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::no credentials: pass the App (client-id and its private key) or github-token"
+            exit 1
+          fi
+          if [ "$KEY_SET" = "true" ] && [ -z "$CLIENT_ID" ]; then
+            echo "::error::App incomplete: missing client-id"
+            exit 1
+          fi
+          if [ -n "$CLIENT_ID" ] && [ "$KEY_SET" != "true" ]; then
+            echo "::error::App incomplete: missing private key"
+            exit 1
+          fi
 
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,9 +140,10 @@ jobs:
 
       - name: Mint App token (READ-ONLY)
         id: app-ro
+        if: ${{ inputs.client-id != '' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ inputs.app-id }}
+          client-id: ${{ inputs.client-id }}
           private-key: ${{ secrets.REPO_ADMIN_APP_KEY }}
           owner: ${{ steps.reg.outputs.org }}
           # Read-only. administration:read so the merge-setting fields of GET /repos are returned
@@ -123,7 +153,7 @@ jobs:
 
       - name: Fetch live state
         env:
-          GH_TOKEN: ${{ steps.app-ro.outputs.token }}
+          GH_TOKEN: ${{ steps.app-ro.outputs.token || secrets.github-token }}
           ORG: ${{ steps.reg.outputs.org }}
         run: |
           set -euo pipefail
@@ -184,10 +214,10 @@ jobs:
 
       - name: Mint App token (administration:write)
         id: app-rw
-        if: ${{ steps.targets.outputs.targets != '' }}
+        if: ${{ inputs.client-id != '' && steps.targets.outputs.targets != '' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ inputs.app-id }}
+          client-id: ${{ inputs.client-id }}
           private-key: ${{ secrets.REPO_ADMIN_APP_KEY }}
           owner: ${{ steps.reg.outputs.org }}
           repositories: ${{ steps.targets.outputs.targets }}
@@ -197,7 +227,7 @@ jobs:
       - name: Apply the write actions in order
         if: ${{ steps.targets.outputs.targets != '' }}
         env:
-          GH_TOKEN: ${{ steps.app-rw.outputs.token }}
+          GH_TOKEN: ${{ steps.app-rw.outputs.token || secrets.github-token }}
           ORG: ${{ steps.reg.outputs.org }}
         run: |
           set -euo pipefail

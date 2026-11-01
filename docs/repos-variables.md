@@ -32,13 +32,26 @@ cannot touch any other repo. With no write targets no write token is minted and 
 | Input | Required | Default | Meaning |
 |---|---|---|---|
 | `register` | no | `repos.yaml` | Plain relative path of the register |
-| `app-id` | yes | | The GitHub App id (not secret), e.g. `vars.RELEASE_APP_ID` |
+| `client-id` | no | | The GitHub App's Client ID (not secret; not the numeric App ID), e.g. `vars.RELEASE_APP_CLIENT_ID` |
 | `environment` | no | `repo-admin` | Must be `repo-admin`; holds the secret |
 
-Secret `REPO_ADMIN_APP_KEY` (required, pass it by name). The job refuses to start unless the
+Secrets: `REPO_ADMIN_APP_KEY` (optional) and `github-token` (optional). The job refuses to start unless the
 environment is `repo-admin` and the ref is `refs/heads/main`. The job summary lists every repo
 examined with the count; enforce stops at the first failed write.
 See [section 9 of the contract](repos-register.md#9-the-repo-admin-environment).
+
+Credentials: pass the App (`client-id` plus the secret `REPO_ADMIN_APP_KEY`, by name) OR the
+secret `github-token`, never both. All three are optional; the guard step refuses a call that
+gets neither, both, or half the App, before any token is minted. It prints one of:
+
+- `pass the App or github-token, not both`
+- `no credentials: pass the App (client-id and its private key) or github-token`
+- `App incomplete: missing client-id`
+- `App incomplete: missing private key`
+
+In token mode the one caller token is present in `report` runs too (App mode mints a read-only
+token there), and this workflow never mints or revokes it: its scope and lifetime are the caller's
+responsibility.
 
 ## Caller
 
@@ -48,7 +61,19 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-variables.yml@vX.Y.Z
     with:
       register: repos.yaml
-      app-id: ${{ vars.RELEASE_APP_ID }}
+      client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
     secrets:
       REPO_ADMIN_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
+```
+
+Token mode (no App): drop `client-id` and the key, pass one token instead.
+
+```yaml
+jobs:
+  variables:
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-variables.yml@vX.Y.Z
+    with:
+      register: repos.yaml
+    secrets:
+      github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
 ```

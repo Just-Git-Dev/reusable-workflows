@@ -8,7 +8,7 @@ register, the live-state JSON and the action list are defined in
 [repos-register.md](repos-register.md) (sections 2, 3, 7 and 8).
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v5.2.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v6.0.0
 ```
 
 ## Why it exists
@@ -84,8 +84,9 @@ exactly as it is; retiring it is a decision for a human, after checking what it 
 |---|---|---|---|
 | `register` | input | `repos.yaml` | path of the register |
 | `environment` | input | `repo-admin` | the project repo's environment the job runs in; `main` only |
-| `app_id` | input (req) | — | id of the GitHub App that creates the environments |
-| `app_key` | secret (req) | — | the App private key, passed by name |
+| `client_id` | input (opt) | — | Client ID of the GitHub App that creates the environments (not the numeric App ID) |
+| `app_key` | secret (opt) | — | the App private key, passed by name |
+| `github-token` | secret (opt) | — | a caller token, instead of the App |
 
 Whether the run is `report` or `enforce` comes from each repo's `mode` in the register, as for the
 other GitHub-side features. In `report` the workflow mints a read token (`actions: read`,
@@ -96,7 +97,19 @@ empty. The job fails before minting a token unless it runs in the configured env
 
 ## Credential
 
-The App id and key are inputs, so the workflow does not assume which App is used.
+The App's Client ID and key are inputs, so the workflow does not assume which App is used.
+
+Two modes: the App (`client_id` plus `app_key`) OR the secret `github-token`, never both. The guard
+step refuses a call that gets neither, both, or half the App, before any token is minted. It prints one of:
+
+- `pass the App or github-token, not both`
+- `no credentials: pass the App (client-id and its private key) or github-token`
+- `App incomplete: missing client-id`
+- `App incomplete: missing private key`
+
+In token mode the one caller token is present in `report` runs too (App mode mints a read-only
+token there), and this workflow never mints or revokes it: its scope and lifetime are the caller's
+responsibility.
 
 **Ruling Q1 (owner, 2026-10-21):** the credential is the org's automation App (`<org>-automation`, formerly the release App). It holds
 `Administration: write` for `enforce` (and `Actions: read` for `report`), alongside the
@@ -115,9 +128,17 @@ permissions:
 
 jobs:
   environments:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v5.2.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v6.0.0
     with:
-      app_id: ${{ vars.RELEASE_APP_ID }}
+      client_id: ${{ vars.RELEASE_APP_CLIENT_ID }}
     secrets:
       app_key: ${{ secrets.RELEASE_APP_KEY }}
+```
+
+Token mode (no App): drop `client_id` and `app_key`, pass one token instead.
+
+```yaml
+    with: {}
+    secrets:
+      github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
 ```

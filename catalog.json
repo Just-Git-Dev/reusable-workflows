@@ -91,20 +91,20 @@
     "rotate-external-secret": {
       "action": "actions/rotate-external-secret",
       "inputs": {
-        "app_id": {
-          "default": null,
-          "description": "Id of the org's relay GitHub App.",
-          "required": true
-        },
         "app_key": {
-          "default": null,
-          "description": "Private key of the org's relay GitHub App.",
-          "required": true
+          "default": "",
+          "description": "Private key of the org's relay GitHub App. Empty when github-token is used.",
+          "required": false
         },
         "cf_account_id": {
           "default": null,
           "description": "Cloudflare account id owning the Worker script.",
           "required": true
+        },
+        "client_id": {
+          "default": "",
+          "description": "Client id of the org's relay GitHub App. Empty when github-token is used.",
+          "required": false
         },
         "cloudflare_api_token": {
           "default": null,
@@ -124,6 +124,11 @@
         "force": {
           "default": "false",
           "description": "'true' = rotate now when exactly one slot exists.",
+          "required": false
+        },
+        "github-token": {
+          "default": "",
+          "description": "A token to use instead of the App (exactly one credential mode).",
           "required": false
         },
         "grace_hours": {
@@ -2625,10 +2630,10 @@
     },
     "distribute-env-secrets": {
       "inputs": {
-        "app_id": {
-          "default": null,
-          "description": "Id of the GitHub App that writes the environment secrets.",
-          "required": true,
+        "client_id": {
+          "default": "",
+          "description": "Client id of the GitHub App that writes the environment secrets. Empty when github-token is used.",
+          "required": false,
           "type": "string"
         },
         "dry_run": {
@@ -2667,8 +2672,12 @@
       "path": ".github/workflows/distribute-env-secrets.yml",
       "secrets": {
         "app_key": {
-          "description": "The GitHub App private key.",
-          "required": true
+          "description": "The GitHub App private key. Empty when github-token is used.",
+          "required": false
+        },
+        "github-token": {
+          "description": "A token to use instead of the App (exactly one credential mode).",
+          "required": false
         },
         "sources_json": {
           "description": "The source secrets as a JSON object (caller passes toJSON(secrets)).",
@@ -3245,10 +3254,10 @@
           "required": true,
           "type": "string"
         },
-        "app-id": {
-          "default": null,
-          "description": "The release GitHub App id (not secret)",
-          "required": true,
+        "client-id": {
+          "default": "",
+          "description": "The release GitHub App client id (not secret), e.g. vars.RELEASE_APP_CLIENT_ID; omit it and pass github-token instead",
+          "required": false,
           "type": "string"
         },
         "config": {
@@ -3298,7 +3307,11 @@
       "secrets": {
         "RELEASE_APP_KEY": {
           "description": "The release App private key. Pass it BY NAME (inherit is same-org only)",
-          "required": true
+          "required": false
+        },
+        "github-token": {
+          "description": "A GitHub token to use instead of the App (pass the App or this, not both)",
+          "required": false
         }
       },
       "workflow": "release-drafts.yml"
@@ -3311,10 +3324,10 @@
           "required": true,
           "type": "string"
         },
-        "app-id": {
-          "default": null,
-          "description": "The release GitHub App id (not secret), e.g. vars.RELEASE_APP_ID",
-          "required": true,
+        "client-id": {
+          "default": "",
+          "description": "The release GitHub App client id (not secret), e.g. vars.RELEASE_APP_CLIENT_ID; omit it and pass github-token instead",
+          "required": false,
           "type": "string"
         },
         "config": {
@@ -3411,7 +3424,11 @@
       "secrets": {
         "RELEASE_APP_KEY": {
           "description": "The release App private key. Pass it BY NAME (inherit is same-org only)",
-          "required": true
+          "required": false
+        },
+        "github-token": {
+          "description": "A GitHub token to use instead of the App (pass the App or this, not both)",
+          "required": false
         }
       },
       "workflow": "release-plan.yml"
@@ -3453,10 +3470,10 @@
           "required": true,
           "type": "string"
         },
-        "app-id": {
-          "default": null,
-          "description": "The release GitHub App id (not secret)",
-          "required": true,
+        "client-id": {
+          "default": "",
+          "description": "The release GitHub App client id (not secret), e.g. vars.RELEASE_APP_CLIENT_ID; omit it and pass github-token instead",
+          "required": false,
           "type": "string"
         },
         "config": {
@@ -3547,17 +3564,21 @@
       "secrets": {
         "RELEASE_APP_KEY": {
           "description": "The release App private key. Pass it BY NAME (inherit is same-org only)",
-          "required": true
+          "required": false
+        },
+        "github-token": {
+          "description": "A GitHub token to use instead of the App (pass the App or this, not both)",
+          "required": false
         }
       },
       "workflow": "release-publish.yml"
     },
     "repos-create": {
       "inputs": {
-        "app-id": {
-          "default": null,
-          "description": "The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID",
-          "required": true,
+        "client-id": {
+          "default": "",
+          "description": "The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead",
+          "required": false,
           "type": "string"
         },
         "environment": {
@@ -3587,7 +3608,11 @@
       "secrets": {
         "REPO_ADMIN_APP_KEY": {
           "description": "The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)",
-          "required": true
+          "required": false
+        },
+        "github-token": {
+          "description": "A token to use instead of the App (exactly one credential mode: this or client-id plus the App key)",
+          "required": false
         }
       },
       "workflow": "repos-create.yml"
@@ -3648,10 +3673,10 @@
     },
     "repos-environments": {
       "inputs": {
-        "app_id": {
-          "default": null,
-          "description": "The GitHub App id (not secret) that creates the environments",
-          "required": true,
+        "client_id": {
+          "default": "",
+          "description": "The GitHub App client id (not secret) that creates the environments. Pass this with the App key, or github-token instead",
+          "required": false,
           "type": "string"
         },
         "environment": {
@@ -3681,7 +3706,11 @@
       "secrets": {
         "app_key": {
           "description": "The private key of the App. Pass it BY NAME (inherit is same-org only)",
-          "required": true
+          "required": false
+        },
+        "github-token": {
+          "description": "A token to use instead of the App (exactly one credential mode: this or client_id plus the App key)",
+          "required": false
         }
       },
       "workflow": "repos-environments.yml"
@@ -3819,10 +3848,10 @@
     },
     "repos-settings": {
       "inputs": {
-        "app-id": {
-          "default": null,
-          "description": "The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID",
-          "required": true,
+        "client-id": {
+          "default": "",
+          "description": "The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead",
+          "required": false,
           "type": "string"
         },
         "environment": {
@@ -3852,17 +3881,21 @@
       "secrets": {
         "REPO_ADMIN_APP_KEY": {
           "description": "The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)",
-          "required": true
+          "required": false
+        },
+        "github-token": {
+          "description": "A token to use instead of the App (exactly one credential mode: this or client-id plus the App key)",
+          "required": false
         }
       },
       "workflow": "repos-settings.yml"
     },
     "repos-variables": {
       "inputs": {
-        "app-id": {
-          "default": null,
-          "description": "The GitHub App id (not secret); the caller passes vars.RELEASE_APP_ID",
-          "required": true,
+        "client-id": {
+          "default": "",
+          "description": "The GitHub App client id (not secret); the caller passes vars.RELEASE_APP_CLIENT_ID. Pass this with the App key, or github-token instead",
+          "required": false,
           "type": "string"
         },
         "environment": {
@@ -3892,7 +3925,11 @@
       "secrets": {
         "REPO_ADMIN_APP_KEY": {
           "description": "The App private key, the same one releases use. Pass it BY NAME (inherit is same-org only)",
-          "required": true
+          "required": false
+        },
+        "github-token": {
+          "description": "A token to use instead of the App (exactly one credential mode: this or client-id plus the App key)",
+          "required": false
         }
       },
       "workflow": "repos-variables.yml"
@@ -4295,16 +4332,16 @@
     },
     "rotate-external-secret": {
       "inputs": {
-        "app_id": {
-          "default": null,
-          "description": "Id of the org relay GitHub App.",
-          "required": true,
-          "type": "string"
-        },
         "cf_account_id": {
           "default": null,
           "description": "Cloudflare account id owning the Worker script.",
           "required": true,
+          "type": "string"
+        },
+        "client_id": {
+          "default": "",
+          "description": "Client id of the org relay GitHub App. Empty when github-token is used.",
+          "required": false,
           "type": "string"
         },
         "dry_run": {
@@ -4421,12 +4458,16 @@
       "path": ".github/workflows/rotate-external-secret.yml",
       "secrets": {
         "app_key": {
-          "description": "Private key of the org relay GitHub App.",
-          "required": true
+          "description": "Private key of the org relay GitHub App. Empty when github-token is used.",
+          "required": false
         },
         "cloudflare_api_token": {
           "description": "Cloudflare API token with Workers Scripts:Edit on cf_account_id.",
           "required": true
+        },
+        "github-token": {
+          "description": "A token to use instead of the App (exactly one credential mode).",
+          "required": false
         }
       },
       "workflow": "rotate-external-secret.yml"

@@ -84,7 +84,7 @@ Composite actions under `actions/`, used as a **step** (`uses: Just-Git-Dev/reus
 | [`sync-bundle-key.yml`](docs/sync-bundle-key.md) | Upsert key(s) into a Secret Manager bundle → roll Cloud Run → disable the old version |
 | [`actions/sync-bundle-key`](docs/sync-bundle-key-action.md) | The same sync as a **composite action** for a caller's own `environment:` job, so environment secrets reach it across an org boundary. The workflow above is a thin wrapper around it |
 | [`rotate-signing-keypair.yml`](docs/rotate-signing-keypair.md) | Rotate an RS256 (JWT) signing keypair in a bundle → roll Cloud Run → disable the old version |
-| [`rotate-external-secret.yml`](docs/rotate-external-secret.md) | Rotate a secret shared with an **external system** (a Cloudflare Worker secret) from the org's project repo with two alternating Worker slots: write the service's environment secret, dispatch its own sync, wait, retire the old slot after a grace period. No GCP identity. Replaces `rotate-worker-signing-secret`, removed in v6.0.0 |
+| [`rotate-external-secret.yml`](docs/rotate-external-secret.md) | Rotate a secret shared with an **external system** (a Cloudflare Worker secret) from the org's project repo with two alternating Worker slots: write the service's environment secret, dispatch its own sync, wait, retire the old slot after a grace period. No GCP identity. Replaces `rotate-worker-signing-secret`, removed in v6.0.0. From v6.0.0 auth is the App (`client_id` + `app_key`) **or** a `github-token` secret, never both |
 | [`actions/rotate-external-secret`](docs/rotate-external-secret.md) | The same rotation as a **composite action** for a caller's own `environment:` job. The workflow above is a thin wrapper around it |
 | [`rotate-cloudflare-token.yml`](docs/rotate-cloudflare-token.md) | Verify the Cloudflare API token is active + print a rotation runbook |
 
@@ -104,7 +104,7 @@ a pure planner. Contract: [repos-register](docs/repos-register.md).
 | [`repos-deploy-scope.yml`](docs/repos-deploy-scope.md) | F7: each repo may deploy only its own service (resource-level IAM). Report or enforce |
 | [`repos-secrets.yml`](docs/repos-secrets.md) | F8: one `<service>-env` secret per service, its whole IAM policy written here only (runtime reads, own deployer syncs). Report or enforce, prune opt-in |
 | [`repos-environments`](docs/repos-environments.md) | F9 (v4.0.0): GitHub environments per repo declared in `repos.yaml` (branch rules, never deletes) |
-| [`distribute-env-secrets`](docs/distribute-env-secrets.md) | v4.0.0: copy a project-repo secret into the environment of service repos |
+| [`distribute-env-secrets`](docs/distribute-env-secrets.md) | v4.0.0: copy a project-repo secret into the environment of service repos. From v6.0.0 auth is the App (`client_id` + `app_key`) **or** a `github-token` secret, never both |
 | [`deploy-env-lint`](docs/deploy-env-lint.md) | v4.0.0: lint `deploy/env.<stage>.yaml` and `deploy/secret-keys.txt` before deploy |
 
 ### Backups, alerts & housekeeping
@@ -151,7 +151,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v5.2.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v6.0.0
     with:
       go_version_file: go.mod
       coverage_threshold: 50
@@ -169,7 +169,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v5.2.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/deploy-cloud-run.yml@v6.0.0
     with:
       gcp_project: my-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

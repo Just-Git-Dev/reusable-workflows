@@ -3,12 +3,14 @@
 ONE GitHub App serves every cross-repo read and every release write. Its key can mint a WRITE
 token that publishes a release, and publishing deploys. So the key is confined:
 
-  - it appears ONLY as `with.private-key` of an `actions/create-github-app-token` step, never in
-    an `env:` (workflow, job or step), never passed onward by a job;
-  - plan, drafts and publish declare exactly ONE workflow_call secret, `RELEASE_APP_KEY`
-    (required), and callers pass it BY NAME: `secrets: inherit` passes nothing when the caller is
-    in another org (GitHub: inherit works only within one organization or enterprise), and an
-    environment secret the caller does not pass resolves to an empty string;
+  - it appears ONLY as `with.private-key` of an `actions/create-github-app-token` step, or as the
+    one `KEY_SET: ${{ secrets.RELEASE_APP_KEY != '' }}` boolean of the credentials guard (v6); it
+    is never in an `env:` otherwise (workflow, job or step), never passed onward by a job;
+  - plan, drafts and publish declare exactly TWO optional workflow_call secrets, `RELEASE_APP_KEY`
+    (App mode) and `github-token` (token mode; v6), and callers pass them BY NAME: `secrets:
+    inherit` passes nothing when the caller is in another org (GitHub: inherit works only within
+    one organization or enterprise), and an environment secret the caller does not pass resolves
+    to an empty string;
   - every job that mints runs under `environment: ${{ inputs.environment }}`;
   - only the `drafts` job (non-rehearsal mint) and the six `publish-N` jobs mint a write
     permission; every other mint is read-only; a rehearsal never gets a write token;
@@ -23,6 +25,7 @@ import wf
 
 KEY = "RELEASE_APP_KEY"
 KEY_REF = "${{ secrets.RELEASE_APP_KEY }}"
+KEY_SET_REF = "${{ secrets.RELEASE_APP_KEY != '' }}"
 
 
 class KeyConfinementTests(unittest.TestCase):
@@ -35,8 +38,9 @@ class KeyConfinementTests(unittest.TestCase):
             if n == "release-pr-check.yml":
                 self.assertNotIn("secrets", call, f"{n}: declares a secret")
             else:
-                self.assertEqual(list(call.get("secrets") or {}), [KEY], f"{n}: declared secrets")
-                self.assertIs(call["secrets"][KEY].get("required"), True, f"{n}: {KEY} not required")
+                self.assertEqual(set(call.get("secrets") or {}), {KEY, "github-token"}, f"{n}: declared secrets")
+                for s in (KEY, "github-token"):
+                    self.assertIs(call["secrets"][s].get("required"), False, f"{n}: {s} must be optional")
             self.assertFalse([k for k in call["inputs"] if "key" in k.lower()], f"{n}: an input carries a key")
             for jn, job in wf.jobs(w).items():
                 self.assertNotIn(KEY, str(job.get("env", "")), f"{n}:{jn}: job env")
@@ -45,10 +49,21 @@ class KeyConfinementTests(unittest.TestCase):
                     examined += 1
                     if KEY not in str(st):
                         continue
+                    if {"CLIENT_ID", "KEY_SET", "TOKEN_SET"} <= set(st.get("env") or {}):
+                        # the guard: the key's PRESENCE as one boolean, never its value
+                        self.assertEqual(st["env"]["KEY_SET"], KEY_SET_REF, f"{n}:{jn}")
+                        self.assertEqual(str(st).count(KEY), 1, f"{n}:{jn}: guard names the key more than once")
+                        continue
                     self.assertTrue(str(st.get("uses", "")).startswith(wf.MINT), f"{n}:{jn}: key in {st.get('name')}")
                     self.assertEqual(st["with"]["private-key"], KEY_REF)
                     self.assertNotIn(KEY, str(st.get("env", "")))
         self.assertGreater(examined, 50, "examined suspiciously few steps")
+
+    def test_every_job_containing_a_mint_declares_environment(self):
+        jobs_with_mint = {(n, jn) for n, jn, _, _ in wf.mint_steps()}
+        self.assertEqual(len(jobs_with_mint), 9)
+        for n, jn in jobs_with_mint:
+            self.assertTrue(wf.jobs(wf.load(n))[jn].get("environment"), f"{n}:{jn}")
 
     def test_the_number_of_mint_steps_is_pinned(self):
         # 2 (plan) + 2 (drafts, read + write) + 6 (publish slots)
@@ -76,6 +91,10 @@ class KeyConfinementTests(unittest.TestCase):
 
 
 class WriteScopeTests(unittest.TestCase):
+    """These read only the mint steps' `with:`, so they cover App mode only. Token mode is not
+    scope-checked: the caller's token scope is the caller's responsibility
+    (docs/release-flow.md §Credentials)."""
+
     def test_only_drafts_and_publish_slots_mint_a_write_permission(self):
         writers = []
         for n, jn, _, st in wf.mint_steps():
@@ -92,12 +111,16 @@ class WriteScopeTests(unittest.TestCase):
 
     def test_the_drafts_write_mint_is_excluded_in_a_rehearsal(self):
         job = wf.jobs(wf.load("release-drafts.yml"))["drafts"]
-        for sid in ("app", "d"):
+        # v6: the two mints are also skipped in token mode (client-id empty); the consumers `d`/`dr`
+        # keep the bare rehearsal condition.
+        for sid, want in (("app", "${{ inputs.client-id != '' && needs.verdict.outputs.rehearsal == 'false' }}"),
+                          ("d", "${{ needs.verdict.outputs.rehearsal == 'false' }}")):
             _, st = wf.step_by_id(job, sid)
-            self.assertEqual(st["if"], "${{ needs.verdict.outputs.rehearsal == 'false' }}", sid)
-        for sid in ("app-ro", "dr"):
+            self.assertEqual(st["if"], want, sid)
+        for sid, want in (("app-ro", "${{ inputs.client-id != '' && needs.verdict.outputs.rehearsal == 'true' }}"),
+                          ("dr", "${{ needs.verdict.outputs.rehearsal == 'true' }}")):
             _, st = wf.step_by_id(job, sid)
-            self.assertEqual(st["if"], "${{ needs.verdict.outputs.rehearsal == 'true' }}", sid)
+            self.assertEqual(st["if"], want, sid)
         _, ro = wf.step_by_id(job, "app-ro")
         self.assertEqual(set(wf.perms(ro).values()), {"read"})
 
@@ -170,9 +193,10 @@ class MintArgumentTests(unittest.TestCase):
         self.assertIn("release-flow config-check", cfg["run"])
         self.assertEqual(plan["outputs"]["owner"], "${{ steps.cfg.outputs.owner }}")
 
-    def test_app_id_is_an_input_not_a_secret(self):
+    def test_client_id_is_an_input_not_a_secret(self):
         for n, jn, _, st in wf.mint_steps():
-            self.assertEqual(st["with"]["app-id"], "${{ inputs.app-id }}", f"{n}:{jn}")
+            self.assertEqual(st["with"]["client-id"], "${{ inputs.client-id }}", f"{n}:{jn}")
+            self.assertNotIn("app-id", st["with"], f"{n}:{jn}")
 
 
 class PrCheckCheckoutTests(unittest.TestCase):
@@ -199,9 +223,17 @@ class DocCallerExampleTests(unittest.TestCase):
                 body = m.group(2)
                 if m.group(1) == "release-pr-check":
                     self.assertNotIn("secrets", body, m.group(1))
+                elif "github-token:" in body:
+                    # the one token-mode example: no App fields at all
+                    self.assertNotIn("RELEASE_APP_KEY", body)
+                    self.assertNotIn("client-id", body)
+                    self.assertRegex(body, r"\n    secrets:\n      github-token: \$\{\{ secrets\.\w+ \}\}")
                 else:
                     self.assertRegex(body, r"\n    secrets:\n      RELEASE_APP_KEY: \$\{\{ secrets\.RELEASE_APP_KEY \}\}", m.group(1))
-        self.assertEqual(examined, 4, "expected one caller example each for pr-check, plan, drafts, publish")
+                    self.assertIn("client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}", body, m.group(1))
+                    self.assertNotIn("app-id", body, m.group(1))
+        self.assertEqual(examined, 5, "expected one caller example each for pr-check, plan, drafts, publish, "
+                                      "plus one token-mode example")
 
     def test_doc_pr_check_triggers_on_manifests_only_like_the_release(self):
         # `releases/**` also fires on a config-only PR (services.json, README), which the

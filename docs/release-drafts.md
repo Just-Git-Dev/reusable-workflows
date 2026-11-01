@@ -8,3 +8,8 @@ runs `drafts --check-only`, so nothing is written.
 
 Inputs, the `drafts` output and the caller example: see
 [release-flow.md, `release-drafts.yml`](release-flow.md#release-draftsyml).
+
+Credentials: either the App (`client-id`, the App's Client ID, plus the optional secret
+`RELEASE_APP_KEY`) or the optional secret `github-token`, never both. In token mode the `drafts`
+job holds that token, in a rehearsal too, and its scope is the caller's responsibility. See
+[Credentials](release-flow.md#credentials).

@@ -4,7 +4,7 @@
 #
 # Env (never interpolated): CF_ACCOUNT_ID WORKER_SCRIPT SLOT_A SLOT_B TARGET_REPO TARGET_ENVIRONMENT
 # TARGET_SECRET_NAME SYNC_WORKFLOW SYNC_REF SYNC_INPUTS_JSON STATE_VARIABLE ROTATE_EVERY_DAYS
-# GRACE_HOURS WAIT_MINUTES SECRET_BYTES APP_ID GITHUB_REPOSITORY.
+# GRACE_HOURS WAIT_MINUTES SECRET_BYTES CLIENT_ID GITHUB_REPOSITORY.
 set -eo pipefail
 
 BAD=0
@@ -29,7 +29,7 @@ match sync_workflow "$SYNC_WORKFLOW" '^[A-Za-z0-9_-][A-Za-z0-9._-]*\.ya?ml$'
 match sync_ref "$SYNC_REF" '^[A-Za-z0-9._/-]+$'
 match state_variable "$STATE_VARIABLE" '^[A-Za-z_][A-Za-z0-9_]*$'
 case "$STATE_VARIABLE" in GITHUB_*) bad "state_variable must not start with GITHUB_" ;; esac
-match app_id "$APP_ID" '^[0-9]+$'
+[ -z "$CLIENT_ID" ] || match client_id "$CLIENT_ID" '^[A-Za-z0-9.]+$'
 int_between rotate_every_days "$ROTATE_EVERY_DAYS" 1 3650
 int_between grace_hours "$GRACE_HOURS" 1 8760
 int_between wait_minutes "$WAIT_MINUTES" 1 30

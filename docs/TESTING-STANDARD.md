@@ -711,7 +711,7 @@ jobs:
       - uses: actions/create-github-app-token@<sha>
         id: app
         with:
-          app-id: ${{ vars.ROOT_APP_ID }}
+          client-id: ${{ vars.ROOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.ROOT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 

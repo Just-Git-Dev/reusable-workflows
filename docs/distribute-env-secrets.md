@@ -5,7 +5,7 @@ Runs in the project repo (`<org>/project`) only. It never creates a repo or an e
 prints a value, and fails loudly on an empty source or a missing target.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v5.2.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v6.0.0
 ```
 
 ## When to use it, and when not
@@ -44,10 +44,11 @@ The file holds names only, never values.
 |---|---|---|---|
 | `mapping_file` | input | `.github/distribute-env-secrets.yaml` | see above |
 | `environment` | input | `repo-admin` | the project repo's environment the job runs in (holds the App key); `main` only |
-| `app_id` | input (req) | — | id of the GitHub App that writes the secrets |
+| `client_id` | input | `''` | the Client ID (not the numeric App ID) of the GitHub App that writes the secrets; App mode |
 | `dry_run` | input | `true` | print what would be written; write nothing |
 | `only` | input | `''` | optional: distribute only this `source` |
-| `app_key` | secret (req) | — | the App private key, passed by name |
+| `app_key` | secret | — | the App private key, passed by name; App mode (with `client_id`) |
+| `github-token` | secret | — | token mode: a caller token used instead of the App; never together with the App |
 | `sources_json` | secret (req) | — | the source secrets as a JSON object; the caller passes `${{ toJSON(secrets) }}` |
 
 ## What it does
@@ -57,7 +58,7 @@ The file holds names only, never values.
    `refs/heads/main`.
 3. Refuses an **empty** source value (same rule as `strict_values` in
    [sync-bundle-key](sync-bundle-key.md)).
-4. Mints an App installation token narrowed to the target repos, with `environments: write`,
+4. In App mode, mints an App installation token narrowed to the target repos, with `environments: write`,
    `actions: read` and `metadata: read`.
 5. For each target, `GET` the environment. A `404` fails the run: `missing environment
    <repo>/<env>; run repos-environments first`. This workflow **never creates** an environment;
@@ -71,9 +72,27 @@ The file holds names only, never values.
 `dry_run` is `true` by default: a first run prints the plan and writes nothing. Set it to `false`
 to write.
 
+## Credential modes (v6)
+
+Pass **one** of two credentials; the first step of the job refuses anything else, before any token is
+minted. Each message is printed as an `::error::` line, checked in this order:
+
+| You pass | Result |
+|---|---|
+| any App field **and** `github-token` | `pass the App or github-token, not both` |
+| nothing | `no credentials: pass the App (client-id and its private key) or github-token` |
+| `app_key` without `client_id` | `App incomplete: missing client-id` |
+| `client_id` without `app_key` | `App incomplete: missing private key` |
+| `client_id` + `app_key` | **App mode**: a short-lived installation token narrowed as described here |
+| `github-token` only | **Token mode**: that secret is used as given |
+
+`client_id` is the App's **Client ID** (alphanumeric, shown on the App's settings page), **not** the
+numeric App ID. In token mode nothing is minted, narrowed or revoked by this workflow: the token's
+scope is the caller's responsibility, and App mode stays the least-privilege option.
+
 ## Credential
 
-The token needs `Environments: write` on the target repos, not `Administration`.
+In App mode the token needs `Environments: write` on the target repos, not `Administration`.
 
 **Ruling Q2 (owner, 2026-10-21):** the token comes from the org's automation App (`<org>-automation`, formerly the release App), which gains
 `Environments: write` for this workflow (the same App also holds `Administration: write` for
@@ -94,9 +113,9 @@ permissions:
 
 jobs:
   distribute:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v5.2.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v6.0.0
     with:
-      app_id: ${{ vars.RELEASE_APP_ID }}
+      client_id: ${{ vars.RELEASE_APP_CLIENT_ID }}
       dry_run: ${{ inputs.dry_run }}
     secrets:
       app_key: ${{ secrets.RELEASE_APP_KEY }}

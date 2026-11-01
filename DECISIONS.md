@@ -2,8 +2,9 @@
 
 ## Index
 
-136 entries total — 126 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+137 entries total — 127 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-01` — [v6 auth: client-id replaces app-id, and a caller github-token as the alternative to the App (v6.0.0)](#2026-11-01--v6-auth-client-id-replaces-app-id-and-a-caller-github-token-as-the-alternative-to-the-app-v600)
 - `2026-11-01` — [ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)](#2026-11-01--ci-green-reads-the-push-path-filter-from-the-workflow-file-models-paths-allowlists-v600-unreleased)
 - `2026-11-01` — [Remove rotate-worker-signing-secret (replaced by rotate-external-secret, ships in v6.0.0)](#2026-11-01--remove-rotate-worker-signing-secret-replaced-by-rotate-external-secret-ships-in-v600)
 - `2026-10-29` — [Re-vendor workflow-preflight: PIN_DRIFT reads strategy.matrix values](#2026-10-29--re-vendor-workflow-preflight-pin_drift-reads-strategymatrix-values)
@@ -252,6 +253,70 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-01 — v6 auth: client-id replaces app-id, and a caller github-token as the alternative to the App (v6.0.0)
+
+**What.** v6.0.0 (breaking). Nine workflows that need a GitHub credential beyond `GITHUB_TOKEN`
+(`release-plan`, `release-drafts`, `release-publish`, `repos-create`, `repos-environments`,
+`repos-settings`, `repos-variables`, `distribute-env-secrets`, `rotate-external-secret` and its
+composite action) take EITHER a GitHub App (`client-id` + its private key, minted in the run) OR
+one caller secret `github-token`. The `app-id`/`app_id` input is gone; `client-id`/`client_id`
+replaces it and takes the App's Client ID, not its numeric ID. Plan:
+`plans/2026-11-01-v6-auth-client-id-and-token.md`.
+
+**Why.** The pinned `actions/create-github-app-token` v3.3.0 marks `app-id` deprecated in favour of
+`client-id` (TODO §"App-token mint", 2026-10-28). Renaming changes the value a caller passes, so
+it is an input-contract break and waits for a major; the owner bundled it with a token mode
+(owner 2026-11-01) so a caller without an App can still use these workflows.
+
+**Owner rulings, 2026-11-01, as sentences.**
+- Q1: token mode uses one `github-token` for every job of the release flow; there is no separate
+  read token. A caller token gets none of our narrowing (no per-job permissions, no repository
+  limit, not revoked at job end); its scope is the caller's responsibility, and App mode remains
+  the least-privilege option. The docs say so, and a doc-pin test keeps that sentence.
+- Q2: `rotate-external-secret` is the 9th workflow with both modes; `validate-inputs.sh` no longer
+  demands a numeric App ID (it accepts an empty value or `^[A-Za-z0-9.]+$`; the Client ID format
+  is not verified against a GitHub spec).
+- Q3: any App field set counts as "App given". Half an App plus `github-token` is refused as
+  "both"; half an App alone is refused as "App incomplete: missing <field>". Nothing is guessed.
+- Q4: `app-id` is renamed outright, with no deprecated alias; v5.2.0 was the deprecation window.
+- Both passed or neither passed fails with a clear error (owner, away batch).
+
+**How — the guard.** One step, `Refuse unless exactly one credential mode`, byte-identical as
+the first step of EVERY job that mints a token (each declares the caller's environment) and as
+`actions/rotate-external-secret/validate-auth.sh`. Not in the first job: the plan's first draft
+put it in release-plan `plan` and the drafts/publish `verdict` jobs, which declare no
+`environment:`. A key or token kept only on the caller's environment is empty there (2026-10-13
+entry), so a valid App caller would have been refused as "missing private key". The pre-merge
+critic caught it; the tests now require the guard in each minting job and that each such job
+declares `environment:`. Env only
+(`CLIENT_ID`, `KEY_SET`, `TOKEN_SET` as `!= ''` booleans), so no expression reaches the shell. Four
+fixed messages, checked in order: both; neither; missing client-id; missing private key. It is
+inline rather than a shared composite action because the write jobs may run nothing but checkout,
+the mint and download-artifact (`test_write_jobs_run_nothing_third_party_and_install_nothing`),
+and a shared action would be one more remote ref for `stamp_version.py` to rewrite.
+
+**How — mints and consumers.** Every mint is skipped unless the client id is set (the action's
+`private-key` is required, so it cannot be called empty). Every consumer reads
+`steps.<mint>.outputs.token || secrets.github-token`; the guard ensures only one is non-empty.
+
+**Scope tests are App-mode only.** `WriteScopeTests` and the read-scope test check the mint
+steps' `with:`; they keep their meaning for App mode. Token mode is not scope-checked, by design:
+the token's scope is the caller's.
+
+**Supersedes in part.** 2026-10-13 "the App key is a declared secret … `RELEASE_APP_KEY`
+(required)": the key is now optional (required only in App mode, enforced by the guard).
+2026-10-21 "one App key": unchanged.
+
+**Evidence.** Red first (commit 5f99772): `make release-flow` 501 run, 15 failed, all v6
+assertions; `tests/run_auth_mode_tests.py` 135 examined, 125 failed; distribute 1/14 and
+rotate-external 17/196 failed. Green (PR #175): `make release-flow` 504/0,
+`tests/run_auth_mode_tests.py` 346/0, rotate-external 196/0, distribute 14/0, 14 of 14 PR checks.
+**Wave 0 (live, 2026-11-01):** GitHub accepts a `workflow_call` secret named `github-token`: run
+41332572887 passed and the called workflow received it (length 377). The negative control, a
+secret named `github_token`, was refused at parse ("workflow file issue"), run 41332572557. So
+the hyphen name stands. **Live guard check (owner substitute for the three `repos-settings`
+runs, which cannot run from a devops repo):** recorded below once run.
 
 ## 2026-11-01 — ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)
 

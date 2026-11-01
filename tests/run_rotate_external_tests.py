@@ -381,7 +381,7 @@ def inputs_cases():
     good = {"CF_ACCOUNT_ID": "0123abcd", "WORKER_SCRIPT": "svc-cdn", "SLOT_A": "SIG_A", "SLOT_B": "SIG_B", "TARGET_REPO": "svc",
             "TARGET_ENVIRONMENT": "prod", "TARGET_SECRET_NAME": "FILES_SECRET", "SYNC_WORKFLOW": "sync.yml", "SYNC_REF": "main",
             "SYNC_INPUTS_JSON": '{"dry_run":"false"}', "STATE_VARIABLE": "ST", "ROTATE_EVERY_DAYS": "30", "GRACE_HOURS": "24",
-            "WAIT_MINUTES": "30", "SECRET_BYTES": "32", "APP_ID": "123", "GITHUB_REPOSITORY": "Org/project"}
+            "WAIT_MINUTES": "30", "SECRET_BYTES": "32", "CLIENT_ID": "Iv23liAbCdEf", "GITHUB_REPOSITORY": "Org/project"}
     if b is not None:
         r = run(b, good)
         check("valid inputs pass and the token repos are target + this repo",
@@ -553,7 +553,7 @@ def structural_cases():
     for var in ("dry_run",):
         check(f"{var} defaults to 'true'", doc["inputs"].get(var, {}).get("default") == "true")
     check("force defaults to 'false'", doc["inputs"].get("force", {}).get("default") == "false")
-    for k in ("cloudflare_api_token", "app_key", "app_id", "cf_account_id", "worker_script", "slot_a", "slot_b", "target_repo",
+    for k in ("cloudflare_api_token", "cf_account_id", "worker_script", "slot_a", "slot_b", "target_repo",
               "target_secret_name", "sync_workflow", "state_variable"):
         check(f"input {k} is required", doc["inputs"].get(k, {}).get("required") is True)
     defaults = {"target_environment": "prod", "sync_ref": "main", "sync_inputs_json": '{"dry_run":"false"}', "rotate_every_days": "30",
@@ -564,6 +564,12 @@ def structural_cases():
     check("the App token is minted for target + this repo with environments, actions, variables write",
           mint.get("with", {}).get("permission-environments") == "write" and mint.get("with", {}).get("permission-actions") == "write"
           and mint.get("with", {}).get("permission-variables") == "write", mint)
+    for k in ("client_id", "app_key", "github-token"):
+        check(f"input {k} is optional (App or token mode)", k in doc["inputs"] and doc["inputs"][k].get("required") is not True, doc["inputs"].get(k))
+    check("input app_id is gone (renamed client_id)", "app_id" not in doc["inputs"])
+    check("the mint passes client-id from inputs.client_id (no app-id)",
+          mint.get("with", {}).get("client-id") == "${{ inputs.client_id }}" and "app-id" not in mint.get("with", {}), mint.get("with"))
+    check("the mint is skipped when client_id is empty", "inputs.client_id != ''" in str(mint.get("if", "")), mint.get("if"))
     check("the shred step runs always", next((s for s in steps if s.get("name") == "Shred secret"), {}).get("if") == "always()")
     check("the summary step runs always", next((s for s in steps if s.get("name") == "Summary"), {}).get("if") == "always()")
     yml = (ACTION / "action.yml").read_text()
@@ -593,8 +599,11 @@ def wrapper_cases():
     check("timeout-minutes = wait_minutes default (30) + 10", job.get("timeout-minutes") == inputs["wait_minutes"]["default"] + 10 == 40, job.get("timeout-minutes"))
     check("environment comes from the environment input", job.get("environment") == "${{ inputs.environment }}", job.get("environment"))
     check("WORKFLOW_VERSION is stamped", "WORKFLOW_VERSION" in doc.get("env", {}))
-    check("secrets cloudflare_api_token and app_key are required",
-          all(on["workflow_call"]["secrets"].get(k, {}).get("required") is True for k in ("cloudflare_api_token", "app_key")))
+    secs = on["workflow_call"]["secrets"]
+    check("secret cloudflare_api_token is required", secs.get("cloudflare_api_token", {}).get("required") is True)
+    check("secrets app_key and github-token are optional",
+          all(k in secs and secs[k].get("required") is not True for k in ("app_key", "github-token")), secs)
+    check("input client_id is optional; app_id is gone", inputs.get("client_id", {}).get("required") is not True and "app_id" not in inputs, sorted(inputs))
     check("dry_run defaults to true; force to false", inputs["dry_run"]["default"] is True and inputs["force"]["default"] is False)
     if len(calls) != 1:
         return
@@ -606,7 +615,7 @@ def wrapper_cases():
     same = [k for k in inputs if k in with_ and with_[k] != "${{ inputs.%s }}" % k]
     check("each input is passed through unchanged", not same, same)
     check("secrets are forwarded by static name", with_.get("cloudflare_api_token") == "${{ secrets.cloudflare_api_token }}"
-          and with_.get("app_key") == "${{ secrets.app_key }}", with_)
+          and with_.get("app_key") == "${{ secrets.app_key }}" and with_.get("github-token") == "${{ secrets.github-token }}", with_)
     check("the wrapper sets concurrency_declared: 'true'", str(with_.get("concurrency_declared")).lower() == "true")
 
 
