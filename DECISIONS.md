@@ -310,8 +310,13 @@ the token's scope is the caller's.
 
 **Evidence.** Red first (commit 5f99772): `make release-flow` 501 run, 15 failed, all v6
 assertions; `tests/run_auth_mode_tests.py` 135 examined, 125 failed; distribute 1/14 and
-rotate-external 17/196 failed. Green: see the PR. Live: the three report-only `repos-settings`
-runs (App, token, both) are recorded below once run.
+rotate-external 17/196 failed. Green (PR #175): `make release-flow` 504/0,
+`tests/run_auth_mode_tests.py` 346/0, rotate-external 196/0, distribute 14/0, 14 of 14 PR checks.
+**Wave 0 (live, 2026-11-01):** GitHub accepts a `workflow_call` secret named `github-token`: run
+41332572887 passed and the called workflow received it (length 377). The negative control, a
+secret named `github_token`, was refused at parse ("workflow file issue"), run 41332572557. So
+the hyphen name stands. **Live guard check (owner substitute for the three `repos-settings`
+runs, which cannot run from a devops repo):** recorded below once run.
 
 ## 2026-11-01 — ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)
 

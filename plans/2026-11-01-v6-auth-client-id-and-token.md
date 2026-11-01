@@ -281,6 +281,8 @@ Before Wave 1: commit a `wip/` checkpoint if the tree is dirty. Every brief says
 declaring `on.workflow_call.secrets.github-token`, and a caller passing it, on a sandbox branch.
 GitHub's parse result is the only evidence (actionlint cannot see it). Needs a push + a run: the
 owner approves. Record the run id. A rejection stops the plan here.
+**DONE 2026-11-01: accepted.** Hyphen run 41332572887 passed (secret arrived, length 377);
+negative control `github_token` refused at parse, run 41332572557.
 
 **Wave 1: docs** (after Q1-Q4 are answered)
 | Agent | Type | Files owned | Brief | Return |
