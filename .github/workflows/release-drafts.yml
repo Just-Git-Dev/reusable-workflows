@@ -64,7 +64,7 @@ env:
   # the tag. A called workflow cannot discover its own ref at runtime.
   WORKFLOW_VERSION: v5.2.0
   # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
-  RELEASE_FLOW_TREE: "a9e9029d05a7394470c543a0fe4af9fc7b4d06f6"
+  RELEASE_FLOW_TREE: "3b6ca6d23f9e19ba4f8e855c1a24284a41460240"
 
 defaults:
   run:
@@ -82,6 +82,7 @@ jobs:
       rehearsal: ${{ steps.v.outputs.rehearsal }}
       manifest: ${{ steps.v.outputs.manifest }}
       manifest_sha256: ${{ steps.v.outputs.manifest_sha256 }}
+      ci_filters: ${{ steps.v.outputs.ci_filters }}
     steps:
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,6 +131,7 @@ jobs:
             echo "rehearsal=$(jq -r .rehearsal <<<"$out")"
             echo "manifest=$(jq -r .manifest <<<"$out")"
             echo "manifest_sha256=$(jq -r .manifest_sha256 <<<"$out")"
+            echo "ci_filters=$(jq -r .ci_filters <<<"$out")"
           } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------- drafts
@@ -218,6 +220,8 @@ jobs:
           permission-actions: read   # drafts re-runs ci-green in its pre-check
           permission-checks: read
 
+      # The pre-check re-runs ci-green with the push path filters plan read (a file at a fixed
+      # sha cannot change), so this write job installs and parses nothing; a missing one fails.
       - name: Rehearsal - every pre-check, no write
         id: dr
         if: ${{ needs.verdict.outputs.rehearsal == 'true' }}
@@ -226,9 +230,11 @@ jobs:
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
+          CI_FILTERS: ${{ needs.verdict.outputs.ci_filters }}
         run: |
           set -uo pipefail
-          out=$(release-flow drafts "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG" --check-only); rc=$?
+          printf '%s' "$CI_FILTERS" > "$RUNNER_TEMP/ci-filters.json"
+          out=$(release-flow drafts "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG" --check-only --ci-filters-file "$RUNNER_TEMP/ci-filters.json"); rc=$?
           echo "$out"
           echo "drafts=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
           exit "$rc"
@@ -242,11 +248,13 @@ jobs:
           MANIFEST: release-manifest/manifest.yaml
           ALLOWED: ${{ inputs.allowed }}
           CONFIG: ${{ inputs.config }}
+          CI_FILTERS: ${{ needs.verdict.outputs.ci_filters }}
         run: |
           set -uo pipefail
+          printf '%s' "$CI_FILTERS" > "$RUNNER_TEMP/ci-filters.json"
           # Always publish whatever was created, even on a failure partway: the report must list
           # the drafts (burned versions) that now exist.
-          out=$(release-flow drafts "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG"); rc=$?
+          out=$(release-flow drafts "$MANIFEST" --allowed "$ALLOWED" --config "$CONFIG" --ci-filters-file "$RUNNER_TEMP/ci-filters.json"); rc=$?
           echo "$out"
           echo "drafts=$(printf '%s' "$out" | jq -c . 2>/dev/null || echo '{}')" >> "$GITHUB_OUTPUT"
           exit "$rc"

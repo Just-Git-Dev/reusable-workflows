@@ -12,7 +12,7 @@ import manifest  # noqa: E402
 import resolve  # noqa: E402
 import validate  # noqa: E402
 from fake_github import (CFG_DICT, FakeGitHub, OWNER, SHA_A, SHA_B, SHA_C,  # noqa: E402
-                         green_ci)
+                         green_ci, plan_ci_filters)
 
 CFG = config.from_dict(CFG_DICT)
 
@@ -231,7 +231,7 @@ class ValidateTests(unittest.TestCase):
 
 
 def make_drafts(f, es):
-    return drafts.create_drafts(gh.Reader(f), gh.Writer(f), CFG, es)
+    return drafts.create_drafts(gh.Reader(f), gh.Writer(f), CFG, es, plan_ci_filters(f))
 
 
 def tag_writes(f):
@@ -312,7 +312,7 @@ class DraftsTests(unittest.TestCase):
                 super().create_draft(owner, repo, tag)
                 return {"tag_name": tag}  # malformed: no id
         with self.assertRaises(drafts.DraftsError) as cm:
-            drafts.create_drafts(gh.Reader(f), NoId(f), CFG, es)
+            drafts.create_drafts(gh.Reader(f), NoId(f), CFG, es, plan_ci_filters(f))
         self.assertIn("core", cm.exception.created)
         self.assertIn("unknown", cm.exception.created["core"])  # the release may exist
 

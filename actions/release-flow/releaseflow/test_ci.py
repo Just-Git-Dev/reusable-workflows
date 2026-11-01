@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci  # noqa: E402
@@ -15,7 +16,7 @@ import release_flow  # noqa: E402
 import gh  # noqa: E402
 import manifest  # noqa: E402
 from fake_github import (ALLOWED, CFG_DICT, FakeGitHub, SHA_A, SHA_B, SHA_C, ci_run,  # noqa: E402
-                         green_ci)
+                         green_ci, workflow_file)
 
 CFG = config.from_dict(CFG_DICT)
 E = manifest.Entry
@@ -78,11 +79,17 @@ class CheckTests(unittest.TestCase):
             out = check(f, [E("gateway", "v1.0.0", SHA_B)])[0]
             self.assertTrue(out and "actions/runs/9" in out[0], concl)
 
-    def test_missing_run_without_paths_ignore(self):
+    def test_missing_run_without_path_filter(self):
         f = FakeGitHub()
-        f.repo("gateway")
+        workflow_file(f, "gateway", "ci.yml", SHA_B, {"branches": ["main"]})  # no path filter
         out = check(f, [E("gateway", "v1.0.0", SHA_B)])[0]
-        self.assertTrue(any("missing" in m and "ci.yml" in m for m in out))
+        self.assertTrue(any("missing" in m and "ci.yml" in m for m in out), out)
+
+    def test_run_present_and_nothing_declared_reads_no_file(self):
+        f = FakeGitHub()
+        f.repo("gateway").ci_runs[("ci.yml", SHA_B)] = [ci_run()]  # no workflow file served
+        self.assertEqual(check(f, [E("gateway", "v1.0.0", SHA_B)]), ([], 1))
+        self.assertFalse(any("contents/" in r[1] for r in f.requests))
 
     def docs_only_commit(self):
         """P3's tests.yml never ran (docs-only push); P3 -> P2 -> P1 -> root."""
@@ -152,6 +159,161 @@ class CheckTests(unittest.TestCase):
         self.assertTrue(any("500" in m for m in check(f, [E("gateway", "v1.0.0", SHA_B)])[0]))
 
 
+class TriggerFilterTests(unittest.TestCase):
+    """The push path filter is read from the workflow file at the listed sha (v6.0.0).
+
+    core's changelog-hygiene.yml declares nothing in services.json, so it exercises the
+    file-sourced filter; core's tests.yml declares paths_ignore ["**.md", "docs/**"]."""
+
+    WF = "changelog-hygiene.yml"
+
+    def filtered(self, push=None, text=None):
+        """P3 has no changelog-hygiene run; P1 (two back) has a green one."""
+        f = FakeGitHub()
+        green_ci(f, "core", P3)
+        r = f.repo("core")
+        del r.ci_runs[(self.WF, P3)]
+        r.parents = {P3: [P2], P2: [P1], P1: ["0" * 40]}
+        r.ci_runs[(self.WF, P1)] = [ci_run(n=21)]
+        workflow_file(f, "core", self.WF, P3, push, text)
+        return f, r
+
+    def run_check(self, f):
+        return check(f, [E("core", "v1.0.0", P3)])
+
+    def test_allowlist_unselected_changes_walk_to_green_ancestor(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.compare_files[(P1, P3)] = ["src/a.go", "docs/x.md", "sub/CHANGELOG.md"]
+        self.assertEqual(self.run_check(f), ([], 2))  # positive control: both workflows counted
+        self.assertTrue(any(f"workflows/{self.WF}/runs?head_sha={P1}" in q[1]
+                            for q in f.requests), "the walk reached the ancestor")
+
+    def test_allowlist_selected_change_fails_and_names_file(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.compare_files[(P1, P3)] = ["src/a.go", "CHANGELOG.md"]
+        out = self.run_check(f)[0]
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("CHANGELOG.md", out[0])
+        self.assertIn("paths", out[0])
+
+    def test_allowlist_still_requires_green_ancestor(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.ci_runs[(self.WF, P1)] = [ci_run(conclusion="failure", n=22)]
+        r.compare_files[(P1, P3)] = ["src/a.go"]
+        out = self.run_check(f)[0]
+        self.assertTrue(out and "actions/runs/22" in out[0], out)
+
+    def test_negation_last_match_wins(self):
+        push = {"paths": ["src/**", "!src/docs/**", "src/docs/keep.md"]}
+        for changed, bad in ((["src/docs/a.md", "README.md"], None),
+                             (["src/docs/a.md", "src/b.go"], "src/b.go"),
+                             (["src/docs/keep.md"], "src/docs/keep.md")):
+            f, r = self.filtered(push)
+            r.compare_files[(P1, P3)] = changed
+            out = self.run_check(f)[0]
+            if bad is None:
+                self.assertEqual(out, [], changed)
+            else:
+                self.assertTrue(out and bad in out[0], (changed, out))
+
+    def test_paths_ignore_read_from_the_file(self):
+        f, r = self.filtered({"paths-ignore": ["**.md"]})
+        r.compare_files[(P1, P3)] = ["README.md", "a/b.md"]
+        self.assertEqual(self.run_check(f)[0], [])
+        r.compare_files[(P1, P3)] = ["README.md", "x.go"]
+        out = self.run_check(f)[0]
+        self.assertTrue(out and "x.go" in out[0], out)
+
+    def test_unquoted_on_key_in_raw_yaml(self):
+        # YAML 1.1 (PyYAML's default) reads a bare `on:` key as True; the 1.2 loader keeps "on"
+        text = "name: hygiene\non:\n  push:\n    paths: [CHANGELOG.md]\njobs: {}\n"
+        f, r = self.filtered(text=text)
+        r.compare_files[(P1, P3)] = ["src/a.go"]
+        self.assertEqual(self.run_check(f)[0], [])
+        r.compare_files[(P1, P3)] = ["CHANGELOG.md"]
+        self.assertTrue(self.run_check(f)[0])
+
+    def test_string_and_list_on_are_push_without_filter(self):
+        for text in ("on: push\njobs: {}\n", "on: [push, pull_request]\njobs: {}\n"):
+            f, r = self.filtered(text=text)
+            r.compare_files[(P1, P3)] = ["README.md"]
+            out = self.run_check(f)[0]
+            self.assertTrue(out and "missing" in out[0], (text, out))
+
+    def test_unreadable_or_unmodelled_trigger_fails_closed(self):
+        cases = {
+            "not served": None,
+            "yaml error": "on: [push\njobs: {}\n",
+            "no push": "on:\n  workflow_dispatch:\njobs: {}\n",
+            "push not in list": "on: [pull_request]\njobs: {}\n",
+            "tags only": "on:\n  push:\n    tags: ['v*']\n    paths: [a]\njobs: {}\n",
+            "both filters": "on:\n  push:\n    paths: [a]\n    paths-ignore: [b]\njobs: {}\n",
+            "filter not a list": "on:\n  push:\n    paths: CHANGELOG.md\njobs: {}\n",
+            "negated paths-ignore": "on:\n  push:\n    paths-ignore: ['**', '!src/**']\n"
+                                    "jobs: {}\n",
+            "not a mapping": "- just\n- a list\n",
+        }
+        for why, text in cases.items():
+            f, r = self.filtered(text=text or "x")
+            if text is None:
+                del r.files[(f".github/workflows/{self.WF}", P3)]
+            r.compare_files[(P1, P3)] = ["README.md"]
+            out = self.run_check(f)[0]
+            self.assertEqual(len(out), 1, (why, out))
+            self.assertIn("trigger", out[0], (why, out))
+            self.assertIn(self.WF, out[0], why)
+
+    def test_pyyaml_missing_fails_closed(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.compare_files[(P1, P3)] = ["src/a.go"]
+        with mock.patch.dict(sys.modules, {"yaml": None}):
+            out = self.run_check(f)[0]
+        self.assertTrue(out and "PyYAML" in out[0], out)
+
+    def test_plan_records_and_drafts_uses_handed_filter_without_the_file(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.compare_files[(P1, P3)] = ["src/a.go"]
+        read = {}
+        self.assertEqual(ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], read=read)[0], [])
+        key = ci.filter_key("core", self.WF, P3)
+        self.assertEqual(read[key], {"kind": "paths", "globs": ["CHANGELOG.md"]})
+        r.files.clear()  # drafts: the file is never read, so its absence cannot matter
+        f.requests.clear()
+        handed = json.loads(json.dumps(read))
+        with mock.patch.dict(sys.modules, {"yaml": None}):  # and PyYAML is not installed
+            out = ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], handed=handed)
+        self.assertEqual(out[0], [])
+        self.assertFalse(any("contents/" in q[1] for q in f.requests))
+        r.compare_files[(P1, P3)] = ["CHANGELOG.md"]  # the handed filter is really applied
+        self.assertTrue(ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], handed=handed)[0])
+
+    def test_drafts_missing_or_bad_handed_filter_fails_closed(self):
+        f, r = self.filtered({"paths": ["CHANGELOG.md"]})
+        r.compare_files[(P1, P3)] = ["src/a.go"]
+        key = ci.filter_key("core", self.WF, P3)
+        tests = {ci.filter_key("core", "tests.yml", P3):  # declared in services.json: needed too
+                 {"kind": "paths-ignore", "globs": ["**.md", "docs/**"]}}
+        for bad in ({}, {key: {"kind": "allow", "globs": []}}, {key: {"kind": "paths"}}):
+            handed = {**tests, **bad}
+            out = ci.check(gh.Reader(f), CFG, [E("core", "v1.0.0", P3)], handed=handed)[0]
+            self.assertEqual(len(out), 1, (handed, out))
+            self.assertIn("plan handed over no usable filter", out[0])
+
+    def test_declared_paths_ignore_must_equal_the_file(self):
+        f = FakeGitHub()
+        green_ci(f, "core", SHA_A)  # runs exist; the file agrees with services.json
+        self.assertEqual(check(f, [E("core", "v1.0.0", SHA_A)])[0], [])
+        for push in ({"paths-ignore": ["**.md"]},                    # differs
+                     {"paths-ignore": ["docs/**", "**.md"]},         # same set, other order
+                     {"paths": ["CHANGELOG.md"]},                    # consumer C's workaround
+                     None):                                          # no filter at all
+            workflow_file(f, "core", "tests.yml", SHA_A, push)
+            out = check(f, [E("core", "v1.0.0", SHA_A)])[0]
+            self.assertEqual(len(out), 1, (push, out))
+            self.assertIn("services.json", out[0])
+            self.assertIn("'docs/**'", out[0], "names the declared value")
+
+
 class CommandTests(unittest.TestCase):
     def call(self, argv, f):
         err = io.StringIO()
@@ -178,15 +340,46 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertIn("missing", err)
 
+    def test_ci_green_filters_out_feeds_drafts_check_only(self):
+        root = Path(__file__).resolve().parents[3] / ".scratch" / "test-tmp"
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as d:
+            d = Path(d)
+            (d / "c.json").write_text(json.dumps(CFG_DICT))
+            (d / "m.yaml").write_text(
+                f"services:\n  - {{repo: gateway, version: v0.38.0, sha: {SHA_B}}}\n")
+            common = [str(d / "m.yaml"), "--config", str(d / "c.json"),
+                      "--allowed", ",".join(ALLOWED)]
+            f = FakeGitHub()
+            f.repo("gateway").parents = {SHA_B: [P1]}
+            f.repo("gateway").ci_runs[("ci.yml", P1)] = [ci_run()]
+            f.repo("gateway").compare_files[(P1, SHA_B)] = ["README.md"]
+            workflow_file(f, "gateway", "ci.yml", SHA_B, {"paths": ["src/**"]})
+            rc, err = self.call(["ci-green", *common, "--filters-out", str(d / "f.json")], f)
+            self.assertEqual(rc, 0, err)
+            got = json.loads((d / "f.json").read_text())
+            self.assertEqual(got, {ci.filter_key("gateway", "ci.yml", SHA_B):
+                                   {"kind": "paths", "globs": ["src/**"]}})
+            # drafts --check-only with the handed file: no contents read
+            f.repo("gateway").files.clear()
+            with mock.patch("drafts.validate.validate_manifest", return_value=[]):  # H8 only
+                rc, err = self.call(["drafts", *common, "--check-only",
+                                     "--ci-filters-file", str(d / "f.json")], f)
+                self.assertEqual(rc, 0, err)
+                rc, err = self.call(["drafts", *common, "--check-only"], f)  # nothing handed
+                self.assertEqual(rc, 1)
+                self.assertIn("plan handed over no usable filter", err)
+
 
 class ConfigCiTests(unittest.TestCase):
     def test_real_file_ci(self):
         cfg = config.load(Path(__file__).resolve().parent / "testdata" / "services.json")
-        got = {s.repo: [(w, tuple(p)) for w, p in s.ci] for s in cfg.services}
+        got = {s.repo: list(s.ci) for s in cfg.services}
+        # None = not declared (the workflow file decides); a tuple = declared, checked against it
         self.assertEqual(got["core"], [("tests.yml", ("**.md", "docs/**")),
-                                         ("deploy.yml", ()),
-                                         ("changelog-hygiene.yml", ()),
-                                         ("workflow-hygiene.yml", ())])
+                                         ("deploy.yml", None),
+                                         ("changelog-hygiene.yml", None),
+                                         ("workflow-hygiene.yml", None)])
         self.assertEqual([w for w, _ in cfg.service("gateway").ci],
                          ["ci.yml", "deploy.yml", "changelog-hygiene.yml"])
         self.assertEqual([w for w, _ in cfg.service("web").ci],
@@ -202,6 +395,8 @@ class ConfigCiTests(unittest.TestCase):
         d["services"][0]["ci"] = [{"paths_ignore": []}]
         with self.assertRaises(config.ConfigError):
             config.from_dict(d)
+        d["services"][0]["ci"] = [{"workflow": "t.yml", "paths_ignore": []}]
+        self.assertEqual(config.from_dict(d).service("core").ci, (("t.yml", ()),))
 
 
 if __name__ == "__main__":

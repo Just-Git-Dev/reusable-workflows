@@ -190,9 +190,12 @@ def build_parser():
     s = sub.add_parser("concurrent")
     s.add_argument("--workflow", required=True)
     s.add_argument("--run-id", required=True)
-    for n in ("validate", "ci-green", "order", "gate-services"):
+    for n in ("validate", "order", "gate-services"):
         with_manifest(n)
-    with_manifest("drafts").add_argument("--check-only", action="store_true")
+    with_manifest("ci-green").add_argument("--filters-out", default="")
+    s = with_manifest("drafts")
+    s.add_argument("--check-only", action="store_true")
+    s.add_argument("--ci-filters-file", default="")
     for n in ("resolve", "contract-states"):
         with_manifest(n).add_argument("--drafts-proof", metavar="REPO:TAG")
     s = with_manifest("publish")
@@ -235,6 +238,21 @@ def _token(env, *names):
         if env.get(n):
             return env[n]
     raise Usage(f"{' or '.join(names)} is not set")
+
+
+def _ci_filters(path):
+    """The push path filters plan's ci-green read (`--filters-out`); {} when not given, so a
+    filter drafts needs then fails closed in ci.check."""
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise Usage(f"cannot read --ci-filters-file {path}: {e}") from e
+    if not isinstance(data, dict):
+        raise Usage(f"--ci-filters-file {path} is not a JSON object")
+    return data
 
 
 def _load(args):
@@ -322,8 +340,8 @@ def _verdict(args):
             raise Usage(f"cannot read the manifest {path}: {ex}") from ex
         manifest_mod.check_allowed(entries, config_mod.parse_allowed(args.allowed))
         res["order"] = publish_mod.order(cfg, entries)
-    out = {k: res[k] for k in ("ok", "rehearsal", "manifest", "manifest_sha256", "pr", "order",
-                               "failed_stage", "failures")}
+    out = {k: res[k] for k in ("ok", "rehearsal", "manifest", "manifest_sha256", "ci_filters",
+                               "pr", "order", "failed_stage", "failures")}
     print(json.dumps(out, separators=(",", ":")))
     return 0 if res["ok"] else 1
 
@@ -451,7 +469,11 @@ def run(args, env, deps):
     if cmd in ("validate", "ci-green", "resolve", "contract-states"):
         reader = gh.Reader(transport(_token(env, "RELEASE_FLOW_READ_TOKEN")))
         if cmd == "ci-green":
-            failures, examined = ci_mod.check(reader, cfg, entries)
+            read = {}
+            failures, examined = ci_mod.check(reader, cfg, entries, read=read)
+            if args.filters_out:  # handed to drafts, whose write job parses no YAML
+                with open(args.filters_out, "w", encoding="utf-8") as fh:
+                    json.dump(read, fh, separators=(",", ":"), sort_keys=True)
             if examined == 0:
                 failures.append("examined 0 CI workflows: nothing was checked")
             for f in failures:
@@ -492,7 +514,7 @@ def run(args, env, deps):
         # Rehearsal: every pre-check `drafts` runs, with the READ token only. No Writer is
         # built, so nothing in this branch can write.
         reader = gh.Reader(transport(_token(env, "RELEASE_FLOW_READ_TOKEN")))
-        failures = drafts_mod.precheck(reader, cfg, entries)
+        failures = drafts_mod.precheck(reader, cfg, entries, _ci_filters(args.ci_filters_file))
         if failures:
             for f in failures:
                 _err(f"FAIL: {f}")
@@ -510,7 +532,9 @@ def run(args, env, deps):
     writer = gh.Writer(transport(wtok))
     if cmd == "drafts":
         try:
-            print(json.dumps(drafts_mod.create_drafts(reader, writer, cfg, entries), indent=2))
+            print(json.dumps(drafts_mod.create_drafts(reader, writer, cfg, entries,
+                                                      _ci_filters(args.ci_filters_file)),
+                             indent=2))
         except drafts_mod.DraftsError as ex:
             for f in ex.failures:
                 _err(f"FAIL: {f}")
