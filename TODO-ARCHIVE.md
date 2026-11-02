@@ -14,6 +14,7 @@ closed items from live sections are archived too, under a dated heading at the e
 - [Two items rehomed from the inflight tracker (opened 2026-09-08)](#two-items-rehomed-from-the-inflight-tracker-opened-2026-09-08) — 1 closed
 - [Secret Manager](#secret-manager) — 4 closed
 - [Archived 2026-10-29 (closed items from live sections)](#archived-2026-10-29-closed-items-from-live-sections) — 30 closed
+- [rotate-cloudflare-token — the verify error blames the token for a header-format failure — ✅ DONE 2026-11-02 (opened 2026-11-01)](#rotate-cloudflare-token--the-verify-error-blames-the-token-for-a-header-format-failure---done-2026-11-02-opened-2026-11-01) — 1 closed
 
 ## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
 
@@ -558,3 +559,12 @@ its original `TODO.md` section. Text is verbatim.
   no overlap observed in run history (not checked), the exposure is a scheduled quarterly/annual
   rotation landing on a manual sync. Fixing it in the reusables covers every caller at once —
   consumer B's caller-level `group: secrets-rotation` only papers over two of the four.
+
+## rotate-cloudflare-token — the verify error blames the token for a header-format failure — ✅ DONE 2026-11-02 (opened 2026-11-01)
+
+- [x] `.github/workflows/rotate-cloudflare-token.yml` verify step: a non-200 from
+  `/user/tokens/verify` always printed "Token may be expired or revoked", even for Cloudflare's
+  6003/6111 "Invalid format for Authorization header" (reported by a consumer's session,
+  2026-11-01). Closed 2026-11-02: the step names the empty-secret / malformed-header / other
+  causes and lists Cloudflare's own codes. Spec `docs/rotate-cloudflare-token.md` "When the verify
+  step fails"; test `cf_token_verify_cases` in `tests/run_step_tests.py`.

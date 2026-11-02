@@ -70,23 +70,35 @@ jobs:
           CF_API_TOKEN:     ${{ secrets.cloudflare_api_token }}
           EXPIRY_WARN_DAYS: ${{ inputs.expiry_warn_days }}
         run: |
-          STATUS=$(curl -sS -o /tmp/verify.json -w '%{http_code}' \
+          if [ -z "$CF_API_TOKEN" ]; then
+            echo "::error::The cloudflare_api_token secret is empty — it is unset or not passed to this call."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o "${RUNNER_TEMP}/verify.json" -w '%{http_code}' \
             "https://api.cloudflare.com/client/v4/user/tokens/verify" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" || echo "000")
           if [ "$STATUS" != "200" ]; then
-            echo "::error::CF token verify returned HTTP $STATUS. Token may be expired or revoked."
-            cat /tmp/verify.json || true
+            # Cloudflare's own codes, error_chain included; empty when the body is not JSON.
+            CODES=$(jq -r '[.errors[]? | ., .error_chain[]?] | map("\(.code): \(.message)") | join("; ")' \
+              "${RUNNER_TEMP}/verify.json" 2>/dev/null || true)
+            case "; ${CODES}" in
+              *"; 6003:"*|*"; 6111:"*)
+                CAUSE="Cloudflare rejected the Authorization header as malformed: the secret has stray whitespace or a newline, or is not a scoped API token (a Global API Key cannot be sent as Bearer)." ;;
+              *)
+                CAUSE="The token may be expired, revoked or invalid." ;;
+            esac
+            echo "::error::CF token verify returned HTTP ${STATUS}. ${CAUSE} Cloudflare said: ${CODES:-<no error codes>}"
             exit 1
           fi
 
-          TOKEN_STATUS=$(jq -r '.result.status // ""' /tmp/verify.json)
+          TOKEN_STATUS=$(jq -r '.result.status // ""' "${RUNNER_TEMP}/verify.json")
           if [ "$TOKEN_STATUS" != "active" ]; then
             echo "::error::CF token status is '${TOKEN_STATUS}' (expected 'active')."
             exit 1
           fi
           echo "CF token is active."
 
-          EXPIRES_ON=$(jq -r '.result.expires_on // ""' /tmp/verify.json)
+          EXPIRES_ON=$(jq -r '.result.expires_on // ""' "${RUNNER_TEMP}/verify.json")
           if [ -n "$EXPIRES_ON" ]; then
             NOW_S=$(date -u +%s)
             EXP_S=$(date -u -d "$EXPIRES_ON" +%s)

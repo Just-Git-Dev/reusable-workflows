@@ -1,13 +1,12 @@
 # TODO — reusable-workflows
 
 ## Index
-35 open across 15 live sections. 46 closed items archived.
+34 open across 14 live sections. 47 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
-- **ACTIVE** — [rotate-cloudflare-token — the verify error blames the token for a header-format failure (opened 2026-11-01)](#rotate-cloudflare-token--the-verify-error-blames-the-token-for-a-header-format-failure-opened-2026-11-01) — 1 open
 - **ACTIVE** — [Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)](#release-flow--ci-green-cannot-model-an-onpushpaths-allowlist-opened-2026-11-01) — 1 open
 - **ACTIVE** — [App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)](#app-token-mint--app-id-input-is-deprecated-upstream-opened-2026-10-28) — 0 open (built for v6.0.0)
 - **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 3 open
@@ -22,14 +21,6 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 6 open
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 2 open
-
-## rotate-cloudflare-token — the verify error blames the token for a header-format failure (opened 2026-11-01)
-
-- [ ] `.github/workflows/rotate-cloudflare-token.yml` verify step: a non-200 from
-  `/user/tokens/verify` always prints "Token may be expired or revoked". Cloudflare's 6003/6111
-  "Invalid format for Authorization header" means a Global API Key was sent as a Bearer token,
-  not that a scoped token is bad (reported by a consumer's session, 2026-11-01; not re-verified
-  against Cloudflare here). Read the error code from the response and name that cause.
 
 ## Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)
 

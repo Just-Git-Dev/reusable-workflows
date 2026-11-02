@@ -23,6 +23,20 @@ escalation. Rotation stays a human action in the Cloudflare dashboard.
 
 `token_status`, `expires_on` (empty when the token never expires).
 
+## When the verify step fails
+
+The `check` job fails, and its message names the cause it can tell apart:
+
+| What the step sees | Message says |
+|---|---|
+| the `cloudflare_api_token` secret is empty | the secret is empty or not passed to the call (nothing is sent to Cloudflare) |
+| HTTP non-200 with Cloudflare error code `6003` or `6111` | the `Authorization` header was rejected as malformed — the value has stray whitespace or a newline, or is not a scoped API token (a Global API Key cannot be sent as `Bearer`) |
+| any other HTTP non-200 | the token may be expired, revoked or invalid |
+| HTTP 200 but `status` is not `active` | the token status, e.g. `disabled` |
+
+Every non-200 message also lists the `code: message` pairs from Cloudflare's `errors` (and their
+`error_chain`), so the raw cause is in the log even when the step cannot name it.
+
 ## Example caller
 
 ```yaml
