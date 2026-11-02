@@ -50,6 +50,7 @@ CRUPDATE = ROOT / ".github" / "workflows" / "cloud-run-update.yml"
 ALERTS = ROOT / ".github" / "workflows" / "validate-alerts.yml"
 BOOTSTRAP = ROOT / ".github" / "workflows" / "bootstrap-alerts.yml"
 METRICS = ROOT / ".github" / "workflows" / "verify-metrics-arrival.yml"
+CFTOKEN = ROOT / ".github" / "workflows" / "rotate-cloudflare-token.yml"
 
 # The three writers that add a bundle version, and the job each does it in.
 WRITERS = [(SYNC, "sync"), (KEYPAIR, "rotate")]
@@ -1118,6 +1119,70 @@ def run_cf_authdomains_step(body, *, status="200", payload='{"domains":[{"id":"e
 
 def has_call(r, *needles):
     return any(all(n in c for n in needles) for c in r["calls"])
+
+
+def run_cf_verify_step(body, *, status="200", payload='{"result":{"status":"active"}}',
+                       token="tok123", warn_days="30"):
+    """Run the CF token verify step with a stubbed curl that writes `payload` to -o, prints `status`.
+    Returns rc/out/outputs plus `curls` (how many times curl was called)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "payload").write_text(payload)
+        (tmp / "curls").write_text("")
+        curl = ("#!/usr/bin/env bash\n"
+                'out=""; prev=""\n'
+                'for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; done\n'
+                f'echo x >> "{tmp}/curls"\n'
+                f'[ -n "$out" ] && cp "{tmp}/payload" "$out"\n'
+                f'echo "{status}"\n')
+        runner_temp = tmp / "rt"
+        runner_temp.mkdir()
+        env = {"CF_API_TOKEN": token, "EXPIRY_WARN_DAYS": warn_days, "RUNNER_TEMP": runner_temp}
+        res = _run_body(body, env, stubs={"curl": curl})
+        res["curls"] = len((tmp / "curls").read_text().splitlines())
+        return res
+
+
+def cf_token_verify_cases():
+    """docs/rotate-cloudflare-token.md 'When the verify step fails': name the cause it can tell."""
+    body = extract_step(CFTOKEN, "check", "Verify current CF API token is still valid")
+    print("rotate-cloudflare-token · Verify current CF API token is still valid")
+
+    r = run_cf_verify_step(body)
+    check("active token passes", r["rc"] == 0 and r["outputs"].get("token_status") == "active",
+          r["out"])
+
+    r = run_cf_verify_step(body, token="")
+    check("empty secret fails", r["rc"] != 0, r["out"])
+    check("empty secret says the secret is empty", "is empty" in r["out"], r["out"])
+    check("empty secret never calls Cloudflare", r["curls"] == 0, r["curls"])
+
+    malformed = ('{"success":false,"errors":[{"code":6003,"message":"Invalid request headers",'
+                 '"error_chain":[{"code":6111,"message":"Invalid format for Authorization header"}]}]}')
+    r = run_cf_verify_step(body, status="400", payload=malformed)
+    check("6003/6111 fails", r["rc"] != 0, r["out"])
+    check("6003/6111 names the malformed Authorization header",
+          "Authorization header" in r["out"] and "malformed" in r["out"], r["out"])
+    check("6003/6111 names the Global API Key cause", "Global API Key" in r["out"], r["out"])
+    check("6003/6111 does not blame expiry", "expired" not in r["out"], r["out"])
+    check("6003/6111 lists Cloudflare's codes, chain included",
+          "6003: Invalid request headers" in r["out"]
+          and "6111: Invalid format for Authorization header" in r["out"], r["out"])
+
+    invalid = '{"success":false,"errors":[{"code":1000,"message":"Invalid API Token"}]}'
+    r = run_cf_verify_step(body, status="401", payload=invalid)
+    check("other non-200 fails", r["rc"] != 0, r["out"])
+    check("other non-200 says expired/revoked/invalid", "expired, revoked or invalid" in r["out"],
+          r["out"])
+    check("other non-200 lists Cloudflare's code", "1000: Invalid API Token" in r["out"], r["out"])
+    check("other non-200 does not claim a malformed header", "malformed" not in r["out"], r["out"])
+
+    r = run_cf_verify_step(body, status="000", payload="")
+    check("unreachable / non-JSON body still fails cleanly",
+          r["rc"] != 0 and "HTTP 000" in r["out"], r["out"])
+
+    r = run_cf_verify_step(body, payload='{"result":{"status":"disabled"}}')
+    check("non-active status fails naming it", r["rc"] != 0 and "'disabled'" in r["out"], r["out"])
 
 
 def run_cf_validate_step(body, **kw):
@@ -4618,6 +4683,7 @@ def main():
     sync_value_safety_cases()
     r2_bootstrap_cases()
     r2_publish_cases()
+    cf_token_verify_cases()
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

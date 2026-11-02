@@ -2,8 +2,9 @@
 
 ## Index
 
-137 entries total — 127 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+138 entries total — 128 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-02` — [rotate-cloudflare-token: the verify failure names its cause (6003/6111 malformed header, empty secret)](#2026-11-02--rotate-cloudflare-token-the-verify-failure-names-its-cause-60036111-malformed-header-empty-secret)
 - `2026-11-01` — [v6 auth: client-id replaces app-id, and a caller github-token as the alternative to the App (v6.0.0)](#2026-11-01--v6-auth-client-id-replaces-app-id-and-a-caller-github-token-as-the-alternative-to-the-app-v600)
 - `2026-11-01` — [ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)](#2026-11-01--ci-green-reads-the-push-path-filter-from-the-workflow-file-models-paths-allowlists-v600-unreleased)
 - `2026-11-01` — [Remove rotate-worker-signing-secret (replaced by rotate-external-secret, ships in v6.0.0)](#2026-11-01--remove-rotate-worker-signing-secret-replaced-by-rotate-external-secret-ships-in-v600)
@@ -253,6 +254,14 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-02 — rotate-cloudflare-token: the verify failure names its cause (6003/6111 malformed header, empty secret)
+
+**What:** `rotate-cloudflare-token.yml`'s verify step now names the cause it can tell apart instead of always saying "Token may be expired or revoked": an empty secret fails before any call, a `6003`/`6111` response says the `Authorization` header was malformed (whitespace/newline, or not a scoped API token — e.g. a Global API Key sent as `Bearer`), any other non-200 keeps the expired/revoked/invalid wording, and every non-200 lists Cloudflare's own `code: message` pairs including `error_chain`. The response file moved from `/tmp` to `$RUNNER_TEMP`. Spec: `docs/rotate-cloudflare-token.md` "When the verify step fails"; pinned by `tests/run_step_tests.py` `cf_token_verify_cases`.
+
+**Why:** a consumer's session spent time chasing an expired token when the real cause was a credential of the wrong kind; the old message pointed the reader at the wrong fix. The 6003/6111 meaning is from public reports of the same error chain (header format rejected), not from Cloudflare's own docs, so the message lists the possible causes rather than asserting one, and always prints the raw codes.
+
+**RCA.** *Symptom:* a 6003/6111 verify failure read "Token may be expired or revoked". *Root cause:* the step mapped every non-200 to one message and never read `errors[]`. *Why not caught:* the verify step had no step-body test. *Fix:* as above. *Prevention:* the step now has a stubbed-curl test over each branch of the failure table.
 
 ## 2026-11-01 — v6 auth: client-id replaces app-id, and a caller github-token as the alternative to the App (v6.0.0)
 
