@@ -32,6 +32,7 @@ DEPLOY_TIMEOUT_S = 15 * 60          # per wait. Measured max release Deploy: 10 
 POLL_S = 15
 HEALTH_TRIES = 6
 HEALTH_WAIT_S = 10
+MAX_CONSECUTIVE_READ_ERRORS = 5     # polling GETs: HTTP 5xx / network errors in a row before stopping
 MAX_DEPLOY_RETRIES = 2              # H7: 3 attempts in total (docs/release-flow.md cites this)
 RETRYABLE = ("failure", "cancelled", "timed_out")
 API_TIMEOUT_S = 30                  # urllib_transport default
@@ -62,6 +63,29 @@ class _Stop(Exception):
 def order(cfg, entries):
     listed = {e.repo for e in entries}
     return [s.repo for s in cfg.services if s.repo in listed]
+
+
+def _transient(ex):
+    """A read that may succeed on the next poll: a network error (status 0) or HTTP 5xx."""
+    return ex.status == 0 or ex.status >= 500
+
+
+def _poll_get(reader, path, errors, last=None):
+    """One polling GET -> (body, consecutive_errors). A transient failure counts as one more
+    empty poll (body None); MAX_CONSECUTIVE_READ_ERRORS in a row, or any 4xx, raises. Only
+    idempotent polling reads go through here -- writes and the one-shot checks never retry
+    (a consumer release hit one HTTP 504 on the runs list and the whole publish stopped)."""
+    try:
+        body = reader.get_ok(path)
+    except gh.GitHubError as ex:
+        if not _transient(ex) or errors + 1 >= MAX_CONSECUTIVE_READ_ERRORS:
+            raise
+        if last is not None:
+            last["status"] = ex.status       # the caller names it if it gives up
+        return None, errors + 1
+    if last is not None:
+        last.pop("status", None)
+    return body, 0
 
 
 def _peels_to(reader, base, tag, sha):
@@ -99,11 +123,14 @@ def _wait_run(reader, base, svc, entry, clock, sleep, run_id=None, after_attempt
     title = title or f"Deploy {tag}"
     deadline = clock() + DEPLOY_TIMEOUT_S
     path = f"{base}/actions/workflows/{svc.deploy_workflow}/runs?event=release&per_page=30"
+    errors = 0
     while True:
-        runs = reader.get_ok(path).get("workflow_runs", [])
-        mine = [r for r in runs if r.get("event") == "release" and r.get("head_branch") == tag
-                and r.get("head_sha") == entry.sha and r.get("display_title") == title
-                and (run_id is None or r.get("id") == run_id)]
+        body, errors = _poll_get(reader, path, errors)
+        mine = [] if body is None else [
+            r for r in body.get("workflow_runs", [])
+            if r.get("event") == "release" and r.get("head_branch") == tag
+            and r.get("head_sha") == entry.sha and r.get("display_title") == title
+            and (run_id is None or r.get("id") == run_id)]
         if len(mine) > 1:
             raise _Stop(f"ambiguous: {len(mine)} deploy runs match {tag} at {entry.sha}: "
                         f"{sorted(r.get('id') for r in mine)}")
@@ -163,17 +190,21 @@ def _check_health(svc, health_get, sleep):
 def _check_assets(reader, base, release_id, svc, sleep):
     """kind download: the published Release must carry every configured asset, state uploaded."""
     missing = list(svc.assets)
+    errors = 0
+    last = {}
     for i in range(HEALTH_TRIES):
-        rel = reader.get_ok(f"{base}/releases/{release_id}")
-        have = {a.get("name") for a in rel.get("assets") or []
-                if isinstance(a, dict) and a.get("state") == "uploaded"}
-        missing = [a for a in svc.assets if a not in have]
-        if not missing:
-            return
+        rel, errors = _poll_get(reader, f"{base}/releases/{release_id}", errors, last)
+        if rel is not None:
+            have = {a.get("name") for a in rel.get("assets") or []
+                    if isinstance(a, dict) and a.get("state") == "uploaded"}
+            missing = [a for a in svc.assets if a not in have]
+            if not missing:
+                return
         if i < HEALTH_TRIES - 1:
             sleep(HEALTH_WAIT_S)
+    note = f" (last read: HTTP {last['status']})" if last.get("status") else ""
     raise _Stop(f"release asset(s) missing or not in state 'uploaded' after "
-                f"{HEALTH_TRIES} tries: {', '.join(missing)}")
+                f"{HEALTH_TRIES} tries{note}: {', '.join(missing)}")
 
 
 def publish_repo(reader, writer, cfg, entry, health_get, clock, sleep):

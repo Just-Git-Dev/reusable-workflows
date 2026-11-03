@@ -42,6 +42,7 @@ class Repo:
         self.files = {}          # (repo path, ref) -> text, served by contents/<path>?ref=
         self.live_runs = None   # deploy-workflow runs for status=success queries (None = none)
         self.pulls = {}          # commit sha -> [PR dicts]   (root repo)
+        self.git_trees = {}      # commit sha -> git tree sha, served by git/commits/<sha>
         self.check_runs = {}     # head sha -> [check-run dicts]
         self.pr_objects = {}     # PR number -> PR dict (pulls/{n}; open ones also by head ref)
         self.issue_events = {}   # PR number -> [issue events] (issues/{n}/events)
@@ -174,6 +175,10 @@ class FakeGitHub:
                 return 200, {"workflow_runs": runs[(page - 1) * size: page * size]}
             if rest == "actions/runs" and q.get("check_suite_id"):
                 return 200, {"workflow_runs": repo.suite_runs.get(int(q["check_suite_id"]), [])}
+            m = re.match(r"^git/commits/([0-9a-f]+)$", rest)
+            if m:
+                tree = repo.git_trees.get(m.group(1))
+                return (200, {"sha": m.group(1), "tree": {"sha": tree}}) if tree else nf
             m = re.match(r"^commits/([0-9a-f]+)/pulls$", rest)
             if m:
                 return 200, repo.pulls.get(m.group(1), [])

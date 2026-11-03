@@ -27,6 +27,44 @@
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/check-release-gate"
     },
+    "ci-verdict": {
+      "action": "actions/ci-verdict",
+      "inputs": {
+        "match": {
+          "default": "tree",
+          "description": "`sha`: only the same-commit rule. `tree`: same commit, else an identical-tree PR head.",
+          "required": false
+        },
+        "repo": {
+          "default": "${{ github.repository }}",
+          "description": "owner/name of the repo whose CI is read.",
+          "required": false
+        },
+        "sha": {
+          "default": "${{ github.sha }}",
+          "description": "The commit the gate is testing (40 lowercase hex).",
+          "required": false
+        },
+        "token": {
+          "default": "${{ github.token }}",
+          "description": "A token that can read actions, contents and pull requests on `repo` (the default GITHUB_TOKEN works with actions: read, contents: read, pull-requests: read).",
+          "required": false
+        },
+        "workflows": {
+          "default": null,
+          "description": "Comma-separated CI workflow file names in this repo, e.g. ci.yml or ci.yml,lint.yml. Every one must qualify. Empty is a usage error.",
+          "required": true
+        }
+      },
+      "name": "CI verdict",
+      "outputs": {
+        "reuse": "`true` when the code at `sha` is already tested, else `false`. Never empty.",
+        "run_url": "The green run(s) that justify reuse=true, space-separated. Empty otherwise.",
+        "why": "One line naming the rule that matched per workflow, or the first reason it did not."
+      },
+      "runs": "composite",
+      "uses": "Just-Git-Dev/reusable-workflows/actions/ci-verdict"
+    },
     "refresh-api-spec": {
       "action": "actions/refresh-api-spec",
       "inputs": {
