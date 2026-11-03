@@ -105,8 +105,8 @@ cut v6.1.0 only on your explicit ask. Then send each project the pin and its ado
 
 ## Checklist
 - [x] Q1-Q4 answered and written back (2026-11-03)
-- [ ] docs + DECISIONS
-- [ ] red tests seen failing
-- [ ] F1 / F2 / F3 implemented, suites green
-- [ ] PR merged (owner)
+- [x] docs + DECISIONS (2026-11-03, efb89a2)
+- [x] red tests seen failing (each builder report; mutation checks on review fixes)
+- [x] F1 / F2 / F3 implemented, suites green (make ci 29/29, 582 tests)
+- [ ] PR merged (owner) — PR #179 open
 - [ ] pins + adoption steps sent to consumers A, B, C
