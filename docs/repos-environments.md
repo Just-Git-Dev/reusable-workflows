@@ -8,7 +8,7 @@ register, the live-state JSON and the action list are defined in
 [repos-register.md](repos-register.md) (sections 2, 3, 7 and 8).
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v6.0.1
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v6.1.0
 ```
 
 ## Why it exists
@@ -128,7 +128,7 @@ permissions:
 
 jobs:
   environments:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v6.0.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/repos-environments.yml@v6.1.0
     with:
       client_id: ${{ vars.RELEASE_APP_CLIENT_ID }}
     secrets:

@@ -7,7 +7,7 @@ job (integration tests on the built image, scans, budgets).
 
 ```yaml
 - id: verdict
-  uses: Just-Git-Dev/reusable-workflows/actions/ci-verdict@v6.0.1
+  uses: Just-Git-Dev/reusable-workflows/actions/ci-verdict@v6.1.0
   with:
     workflows: ci.yml
 - name: Unit tests (skipped when CI already passed on this code)
@@ -113,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@<sha> # vX
       - id: verdict
-        uses: Just-Git-Dev/reusable-workflows/actions/ci-verdict@v6.0.1
+        uses: Just-Git-Dev/reusable-workflows/actions/ci-verdict@v6.1.0
         with:
           workflows: ci.yml
       - run: echo "CI reuse - ${VERDICT_WHY}"
