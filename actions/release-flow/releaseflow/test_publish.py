@@ -1,5 +1,7 @@
 """Tests for publish.py and guard.py (merge guard, concurrency)."""
 
+import copy
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -261,6 +263,164 @@ class PublishRepoTests(unittest.TestCase):
         f, e = world()
         res, _ = run(f, e["core"], Health({"status": "UP"}))  # no data.status
         self.assertEqual(res.status, publish.DEPLOY_FAILED)
+
+
+class PollReadErrorTests(unittest.TestCase):
+    """Read errors while polling are retried (docs/release-flow.md Stage 4): a consumer
+    release hit one HTTP 504 on the runs list and the whole publish stopped."""
+
+    RUNS = r"actions/workflows/.*/runs"
+
+    def reruns(self, f):
+        return [w for w in f.writes() if "rerun-failed-jobs" in w[1]]
+
+    def runs_gets(self, f):
+        return [r for r in f.requests if re.search(self.RUNS, r[1])]
+
+    def test_one_504_on_runs_list_then_live(self):
+        f, e = world()
+        f.fail.append(("GET", self.RUNS, 504))
+        res, clock = run(f, e["core"])
+        self.assertEqual(res.status, publish.LIVE, res.detail)
+        self.assertIn(publish.POLL_S, clock.sleeps)
+
+    def test_one_network_error_then_live(self):
+        f, e = world()
+        f.fail.append(("GET", self.RUNS, 0))
+        res, _ = run(f, e["core"])
+        self.assertEqual(res.status, publish.LIVE, res.detail)
+
+    def test_five_consecutive_504_stop_with_status_in_detail(self):
+        f, e = world()
+        f.fail.extend([("GET", self.RUNS, 504)] * 5)
+        res, _ = run(f, e["core"])
+        self.assertEqual(res.status, publish.DEPLOY_FAILED)
+        self.assertIn("504", res.detail)
+        self.assertEqual(publish.MAX_CONSECUTIVE_READ_ERRORS, 5)
+        self.assertEqual(len(self.runs_gets(f)), 5)
+
+    def test_four_504_then_success_is_live(self):
+        f, e = world()
+        f.fail.extend([("GET", self.RUNS, 504)] * 4)
+        self.assertEqual(run(f, e["core"])[0].status, publish.LIVE)
+
+    def test_error_counter_resets_on_success(self):
+        # 4 errors, an OK poll (run still in_progress), 4 more errors: never 5 in a row
+        f, e = world()
+        calls = {"n": 0}
+
+        def flaky(method, path, body=None):
+            if method == "GET" and re.search(self.RUNS, path):
+                calls["n"] += 1
+                if calls["n"] in (1, 2, 3, 4, 6, 7, 8, 9):
+                    return 504, {"message": "injected"}
+            return f(method, path, body)
+
+        clock = FakeClock()
+        res = publish.publish_repo(gh.Reader(flaky), gh.Writer(f), CFG, e["core"], Health(UP),
+                                   clock, clock.sleep)
+        self.assertEqual(res.status, publish.LIVE, res.detail)
+
+    def test_404_on_runs_list_is_not_retried(self):
+        f, e = world()
+        f.fail.append(("GET", self.RUNS, 404))
+        res, _ = run(f, e["core"])
+        self.assertEqual(res.status, publish.DEPLOY_FAILED)
+        self.assertIn("404", res.detail)
+        self.assertEqual(len(self.runs_gets(f)), 1)
+
+    def test_patch_502_is_not_retried(self):
+        f, e = world()
+        f.fail.append(("PATCH", "releases/", 502))
+        res, _ = run(f, e["core"])
+        self.assertEqual(res.status, publish.NOT_PUBLISHED)
+        self.assertEqual(len([w for w in f.requests if w[0] == "PATCH"]), 1)
+
+    def test_rerun_502_is_not_retried(self):
+        f, e = world(deploys=[("completed", "failure")])
+        f.fail.append(("POST", "rerun-failed-jobs", 502))
+        res, _ = run(f, e["core"])
+        self.assertEqual(res.status, publish.DEPLOY_FAILED)
+        self.assertIn("502", res.detail)
+        self.assertEqual(len(self.reruns(f)), 1)
+
+    def test_asset_poll_503_once_then_live(self):
+        d = copy.deepcopy(CFG_DICT)
+        d["services"].append({"repo": "desktop", "kind": "download", "order": 9,
+                              "deploy_workflow": "deploy.yml", "assets": ["Setup.msi"],
+                              "ci": [{"workflow": "gate.yml"}]})
+        cfg = config.from_dict(d)
+        f = FakeGitHub()
+        r = f.repo("desktop")
+        rel = r.stage_draft("v1.0.0", SHA_A)
+        rel["assets"] = [{"name": "Setup.msi", "state": "uploaded"}]
+        r.deploy_script = OK
+        ent = manifest.Entry("desktop", "v1.0.0", SHA_A)
+        seen = {"n": 0}
+
+        def flaky(method, path, body=None):
+            # GETs of the release: draft check (1), post-PATCH re-read (2), asset poll (3)
+            if method == "GET" and re.search(r"/releases/\d+$", path):
+                seen["n"] += 1
+                if seen["n"] == 3:
+                    return 503, {"message": "injected"}
+            return f(method, path, body)
+
+        clock = FakeClock()
+        res = publish.publish_repo(gh.Reader(flaky), gh.Writer(f), cfg, ent, Health(UP),
+                                   clock, clock.sleep)
+        self.assertEqual(res.status, publish.LIVE, res.detail)
+        self.assertEqual(seen["n"], 4)
+        self.assertIn(publish.HEALTH_WAIT_S, clock.sleeps)
+
+    def test_asset_stop_names_last_http_status_when_final_poll_errored(self):
+        d = copy.deepcopy(CFG_DICT)
+        d["services"].append({"repo": "desktop", "kind": "download", "order": 9,
+                              "deploy_workflow": "deploy.yml", "assets": ["Setup.msi"],
+                              "ci": [{"workflow": "gate.yml"}]})
+        cfg = config.from_dict(d)
+        f = FakeGitHub()
+        r = f.repo("desktop")
+        rel = r.stage_draft("v1.0.0", SHA_A)
+        rel["assets"] = [{"name": "Setup.msi", "state": "starter"}]   # never uploaded
+        r.deploy_script = OK
+        ent = manifest.Entry("desktop", "v1.0.0", SHA_A)
+        seen = {"n": 0}
+
+        def flaky(method, path, body=None):
+            # release GETs: draft check (1), post-PATCH re-read (2), then the asset polls 3..8;
+            # every even one errors, so the 6th (final) poll is a 503
+            if method == "GET" and re.search(r"/releases/\d+$", path):
+                seen["n"] += 1
+                if seen["n"] > 2 and seen["n"] % 2 == 0:
+                    return 503, {"message": "injected"}
+            return f(method, path, body)
+
+        clock = FakeClock()
+        res = publish.publish_repo(gh.Reader(flaky), gh.Writer(f), cfg, ent, Health(UP),
+                                   clock, clock.sleep)
+        self.assertNotEqual(res.status, publish.LIVE)
+        self.assertIn(f"after {publish.HEALTH_TRIES} tries (last read: HTTP 503)", res.detail)
+        self.assertIn("Setup.msi", res.detail)
+
+    def test_retried_polls_never_extend_past_the_deadline(self):
+        f, e = world(deploys=[("in_progress", None)])
+        n = {"i": 0}
+
+        def flaky(method, path, body=None):
+            if method == "GET" and re.search(self.RUNS, path):
+                n["i"] += 1
+                if n["i"] % 2:  # every other poll errors: never 5 in a row
+                    return 504, {"message": "injected"}
+            return f(method, path, body)
+
+        clock = FakeClock()
+        res = publish.publish_repo(gh.Reader(flaky), gh.Writer(f), CFG, e["core"], Health(UP),
+                                   clock, clock.sleep)
+        self.assertEqual(res.status, publish.DEPLOY_FAILED)
+        self.assertIn("timed out", res.detail)
+        self.assertLess(clock.now, publish.DEPLOY_TIMEOUT_S + publish.POLL_S + 1)
+        self.assertEqual(set(clock.sleeps), {publish.POLL_S})
 
 
 class OrderTests(unittest.TestCase):

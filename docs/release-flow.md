@@ -212,6 +212,22 @@ merge ──► plan ──► [caller: contracts, images…] ──► drafts �
    service. A final job writes the report to the run summary and, for a real release, as a
    comment on the release PR.
 
+   **Read errors while polling are retried; writes never are** (since v6.1.0). Publish polls
+   in two places: the deploy-runs list while it waits for the deploy run, and (`download`
+   kind) the release while it waits for the assets. In both, a failed GitHub **read** whose
+   failure is an HTTP 5xx or a network error is treated as one more poll that saw nothing: it
+   sleeps the usual interval (15 s for the runs list, 10 s for assets) and polls again, inside
+   the same deadline (15 min per deploy wait; 6 tries for assets), so the worst case is
+   unchanged. Five such errors in a row stop the publish as `published-deploy-failed`, with
+   the last HTTP status in the detail. A 4xx is never retried (it will not fix itself). The
+   other reads (the draft and tag checks before the PATCH, the one re-read after it) are not
+   polls and keep their single try. A
+   **write** is never retried: the publish `PATCH` and the rerun of failed jobs each run once,
+   and a 5xx on either stops at once as before, because a write that timed out may still have
+   happened. Why: one HTTP 504 on the runs list (a consumer release, 2026-11) stopped a
+   release after its api was already live; a re-run never publishes, so that one blip cost a
+   whole release PR with bumped versions.
+
 ### "Live" means a successful deploy, not a tag
 
 A service's live version comes from its deploy workflow's **successful** runs, newest started
@@ -236,6 +252,9 @@ Releases are not used: older repos carry stale ones.
   caller's `environment` and is named only as the `private-key` of a mint step.
 - **Inputs reach shell only through `env:`**, never `${{ }}` inside `run:`.
 - **A re-run never publishes** (`GITHUB_RUN_ATTEMPT` must be `1`).
+- **Only idempotent reads retry.** Publish re-tries a deploy-runs `GET` on a 5xx or network
+  error, inside the existing deadline (Stage 4). No write is ever retried, so a retry cannot
+  publish twice or re-run a deploy twice.
 
 ### Why publish is one job per service, not one job for all
 
@@ -366,6 +385,120 @@ Five line shapes only (comment, blank, `services:`, entry); anything else is an 
 line number. It is deliberately not parsed as YAML: anchors, duplicate keys and type coercion
 are each a way for a reviewed file to mean something other than what the reviewer read. The
 owner pushes each **annotated** tag before opening the release PR; the flow never creates one.
+
+## Proposing a release
+
+`release-flow propose` opens the release PR for you, once the service gates are green. It is a
+**local command**, run from a checkout of the root repo by the project's own session, right
+after the tag push. It uses 0 Actions minutes, and no service repo ever triggers the root
+(a scheduled root workflow polling every 15 min would cost about 2,900 billed min/mo, more
+than it saves). Since v6.1.0.
+
+```bash
+cd <root-repo checkout>
+release-flow propose backend@v1.4.0 webapp@v2.0.1 --slug backend-fix --allowed backend,webapp,desktop
+```
+
+Why: the 2026-11-03 review found the gap between a green gate and an opened release PR was
+1-49 min in one project and often overnight in another, and five failed releases came from
+ordering slips by hand: a PR opened before the tag existed, or a manifest filename with a dot.
+
+### What it does, in order
+
+Every step before step 7 only reads. A step that fails stops the command and nothing is
+written, so re-running it is always safe.
+
+1. **Arguments.** Each `REPO@TAG` names a service in `services.json` and in `--allowed`, with a
+   `vX.Y.Z` tag; a repo may appear once. `--slug` matches `[a-z0-9][a-z0-9-]*` (so no dots, no
+   underscores, no upper case). The manifest path is `<release_dir>/<today UTC>-<slug>.yaml`
+   and must pass the same name rule as the PR check.
+2. **Root repo.** The current directory is a git checkout whose `origin` is the root repo
+   (`--root owner/name` overrides the detected name); its owner must equal `owner` in
+   `services.json`. The `origin` URL (`git remote get-url origin`, https or ssh form) must name
+   that same `owner/name`, so a fork checkout is refused before anything is fetched or pushed.
+   It runs `git fetch origin <base_branch>` once and records that commit as **the base**; every
+   later step uses that one commit, never `origin/<base_branch>` again (a fetch by another tool
+   during the gate wait must not change what the PR is built on). The manifest path must not
+   exist in the base, and the branch `release/<date>-<slug>` must not exist on `origin`.
+   Inherited git environment variables (every name `git rev-parse --local-env-vars` lists, plus
+   `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`
+   pairs) are removed from every git call, so a calling hook cannot redirect the push.
+3. **Tags.** Each tag must exist and be an **annotated** tag; its commit is the manifest `sha`.
+   A lightweight tag is refused with "re-push it with git tag -a".
+4. **Gates.** It waits for each service's `release-gate` check run (from GitHub Actions only,
+   newest wins; the same reading as [`check-release-gate`](check-release-gate.md)) on that sha
+   to finish. It polls every 20 s, read-only, for up to `--wait-min` minutes (default 30). A
+   gate that has not started yet is waited for, not failed. A read that fails with a 5xx or a
+   network error is retried on the next poll (five in a row stop it).
+5. **Validate.** The same checks the plan stage runs (*validate* in [Stages](#stages)): tag
+   peels to the sha, sha on `base_branch`, version above every Release and tag, no Release of
+   that version yet, changelog heading present. Every failure is listed.
+6. **Manifest.** One file, the listed services in `services.json` order, re-read with the
+   strict manifest parser before it is used, so propose cannot write a file the PR check
+   would refuse.
+7. **PR.** The commit is built with git plumbing from the base recorded in step 2 (its tree,
+   and it as the only parent) plus the one manifest, so your working tree, index and current branch are never touched. It is pushed
+   as `release/<date>-<slug>` and the PR is opened with `gh pr create` (title
+   `release: backend v1.4.0, webapp v2.0.1`; the body lists each service, its sha and its
+   green gate run). The PR URL `gh pr create` prints must be
+   `https://github.com/<root>/pull/<number>`; anything else stops before auto-merge (exit 3),
+   so `gh pr merge` is never called with an empty or foreign URL.
+8. **Auto-merge.** Unless `--no-auto-merge`, it reads the base branch's required status checks
+   (classic branch protection **and** rulesets) and enables auto-merge (`gh pr merge --auto
+   --squash`; `--merge-method` changes it) **only if** the PR check (`--pr-check`, default
+   `release-pr / release-pr`) is among them. If it is not required, or the protection cannot
+   be read, auto-merge stays off: `gh pr merge --auto` on a branch with no required check
+   merges at once, untested. The PR stays open for you to merge by hand.
+
+`--dry-run` runs steps 1-6 and the protection read of step 8, prints the manifest, the branch
+and the exact commands it would run. It writes nothing to GitHub and creates no object, commit
+or branch; the one local change is that step 2's `git fetch` refreshes `origin/<base_branch>`,
+the same as any fetch.
+
+### Auto-merge: what the root repo must set
+
+For the release PR to merge by itself, the root repo must (a) make `release-pr / release-pr` a
+**required** status check on `base_branch`, and (b) allow auto-merge (repo setting *Allow
+auto-merge*). Your approval then moves from the merge click to the tag push: once the tags
+are pushed and the gates are green, the release goes out without another click.
+
+Auto-merge adds no new risk for breaking changes. An unapproved break has no
+`breaking-approved` label and no `breaking` block, so the plan stage fails before drafts
+([Contract checks](#contract-checks)); nothing is written and the same tags can be released
+again through a corrected PR. The merge guard is unchanged: an auto-merged PR is still a real
+merged PR whose check run passed.
+
+### What it prints
+
+```
+propose: root consumer-a-org/release, base main, manifest releases/2026-11-03-backend-fix.yaml
+tag: backend v1.4.0 -> 0123456789ab (annotated)
+gate: backend v1.4.0 release-gate in_progress (2m40s) https://github.com/.../runs/1
+gate: backend v1.4.0 release-gate success https://github.com/.../runs/1
+validate: 1 service(s), 0 failure(s)
+pushed: release/2026-11-03-backend-fix @ 89abcdef0123
+PR opened: https://github.com/consumer-a-org/release/pull/42
+auto-merge: on (release-pr / release-pr is required on main)
+```
+
+A waiting line is printed only when a gate's state changes, and once a minute while it is
+unchanged. The other endings:
+
+| case | last line | exit |
+|---|---|---|
+| a gate finished red (any conclusion but `success`) | `gate red: backend v1.4.0 release-gate failure <url>: fix it and push a new tag; nothing was written` | 1 |
+| a gate not finished in time | `gate not finished after 30 min: backend v1.4.0 (<state>); run propose again, nothing was written` | 1 |
+| validate failed | one `FAIL: <repo>: <reason>` line each, then `nothing was written` | 1 |
+| auto-merge refused (check not required) | `auto-merge: off (release-pr / release-pr is not a required check on main, so --auto would merge at once untested); merge by hand once it is green` | 0 |
+| auto-merge denied (`gh pr merge` failed, e.g. under Claude's auto mode or with auto-merge disabled on the repo) | `auto-merge: off (gh pr merge failed: <reason>); run: ! gh pr merge <url> --auto --squash` | 0 |
+| `--dry-run` | `dry run: nothing was written` | 0 |
+
+Exit codes as for every subcommand: 0 PR opened (or dry run done); 1 a gate or a check failed;
+2 usage, bad config, a repo outside `allowed`, manifest or branch already there; 3 an
+unexpected GitHub or network error.
+
+Token: `RELEASE_FLOW_READ_TOKEN` if set, else `gh auth token`. The push and the PR use your own
+git and `gh` login; no App token is involved.
 
 ## Inputs, outputs, secrets
 
@@ -674,6 +807,8 @@ directory**. Every manifest-bearing command needs `--allowed`.
 | `breaking-approval (--pr N \| --head-branch B)` | R1 + R2 + R5 (real release, `--pr`) or R1 + R2 on the open PR of branch B (rehearsal); prints the approved list as JSON | read |
 | `breaking-matrix --breaking J --checks J` | R3: every approved pair has a live-consumer check; prints the list | none |
 | `report --stage S --result R [--detail T] [--drafts F]` | the report markdown | none |
+| `ci-verdict --repo O/R --sha S --workflows W[,W] [--match sha\|tree] [--github-output F]` | did CI already pass for this code? prints `{reuse, run_url, why, examined}`; exit 0 either way ([ci-verdict](ci-verdict.md)) | read |
+| `propose REPO@TAG... --slug S [--dry-run] [--no-auto-merge] [--wait-min N] [--root O/R] [--pr-check C] [--merge-method M]` | wait for the gates, validate, open the release PR, enable auto-merge only when the PR check is required ([Proposing a release](#proposing-a-release)) | read + your `gh` login |
 
 Environment: `RELEASE_FLOW_READ_TOKEN`, `RELEASE_FLOW_WRITE_TOKEN`, `GITHUB_REPOSITORY`,
 `GITHUB_REPOSITORY_OWNER`, `GITHUB_RUN_ATTEMPT`. Exit codes: 0 ok; 1 a check failed; 2 usage,

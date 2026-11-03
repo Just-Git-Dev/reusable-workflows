@@ -37,6 +37,19 @@ defaults to releases/services.json in the CURRENT DIRECTORY):
   ci-green M       H8: each listed sha's own CI (services.json `ci`) must be completed/success;
                    exit 1 on any failure or 0 examined; stderr says "examined N".  read token.
                    `drafts` runs the same check in its pre-check, before any write.
+  ci-verdict --repo OWNER/NAME --sha S --workflows a.yml[,b.yml] [--match sha|tree]
+             [--github-output FILE]
+                   did CI already pass for this exact code? Prints one compact JSON line
+                   {reuse, run_url, why, examined}; exit 0 whether or not the code is reused
+                   (any API error is reuse=false), 2 on a usage error. With --github-output it
+                   appends reuse=, run_url=, why= lines. docs/ci-verdict.md.  read token
+  propose REPO@TAG... --slug S --allowed A [--dry-run] [--no-auto-merge] [--wait-min N]
+          [--root O/R] [--pr-check C] [--gate-check G] [--merge-method squash|merge|rebase]
+                   LOCAL, run from a root-repo checkout after the tag push: wait for each
+                   service's release-gate, run validate, write ONE manifest, push it with git
+                   plumbing (working tree untouched) and open the release PR; auto-merge only
+                   when the PR check is a required status check. docs/release-flow.md
+                   "Proposing a release" (propose.py).   read token + your git/gh login
   resolve M [--drafts-proof REPO:TAG]
                    JSON {repo: {ref, version, listed, image, live_ref}} incl. consumers_only.
                    live_ref of a deployable repo comes from its successful Deploy runs (see
@@ -124,6 +137,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ci as ci_mod  # noqa: E402
+import ci_verdict as ci_verdict_mod  # noqa: E402
 import ops_subset  # noqa: E402
 import spec_compat  # noqa: E402
 import config as config_mod  # noqa: E402
@@ -131,6 +145,7 @@ import drafts as drafts_mod  # noqa: E402
 import gh  # noqa: E402
 import guard  # noqa: E402
 import manifest as manifest_mod  # noqa: E402
+import propose as propose_mod  # noqa: E402
 import publish as publish_mod  # noqa: E402
 import report as report_mod  # noqa: E402
 import resolve as resolve_mod  # noqa: E402
@@ -187,6 +202,13 @@ def build_parser():
     s.add_argument("--manifest-file", default="")
     s.add_argument("--config", default=str(DEFAULT_CONFIG))
     s.add_argument("--allowed", required=True)
+    s = sub.add_parser("ci-verdict")
+    s.add_argument("--repo", required=True)
+    s.add_argument("--sha", required=True)
+    s.add_argument("--workflows", required=True)
+    s.add_argument("--match", default="tree")
+    s.add_argument("--github-output", default="")
+    propose_mod.add_arguments(sub.add_parser("propose"))
     s = sub.add_parser("concurrent")
     s.add_argument("--workflow", required=True)
     s.add_argument("--run-id", required=True)
@@ -444,6 +466,16 @@ def run(args, env, deps):
             return 1
         print(pr)
         return 0
+    if cmd == "ci-verdict":
+        try:
+            wfs = ci_verdict_mod.validate(args.repo, args.sha, args.workflows, args.match)
+        except ci_verdict_mod.UsageError as ex:
+            raise Usage(str(ex)) from ex
+        reader = gh.Reader(transport(_token(env, "RELEASE_FLOW_READ_TOKEN")))
+        return ci_verdict_mod.run_cli(reader, args.repo, args.sha, wfs, args.match,
+                                      args.github_output)
+    if cmd == "propose":
+        return propose_mod.run(args, env, deps)
     if cmd == "concurrent":
         reader = gh.Reader(transport(_token(env, "RELEASE_FLOW_READ_TOKEN")))
         try:

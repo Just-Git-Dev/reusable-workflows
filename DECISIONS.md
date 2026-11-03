@@ -2,8 +2,9 @@
 
 ## Index
 
-138 entries total — 128 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+139 entries total — 129 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-03` — [Release fast-track: publish retries polling reads, ci-verdict action, release-flow propose (v6.1.0, unreleased)](#2026-11-03--release-fast-track-publish-retries-polling-reads-ci-verdict-action-release-flow-propose-v610-unreleased)
 - `2026-11-02` — [rotate-cloudflare-token: the verify failure names its cause (6003/6111 malformed header, empty secret)](#2026-11-02--rotate-cloudflare-token-the-verify-failure-names-its-cause-60036111-malformed-header-empty-secret)
 - `2026-11-01` — [v6 auth: client-id replaces app-id, and a caller github-token as the alternative to the App (v6.0.0)](#2026-11-01--v6-auth-client-id-replaces-app-id-and-a-caller-github-token-as-the-alternative-to-the-app-v600)
 - `2026-11-01` — [ci-green reads the push path filter from the workflow file; models paths allowlists (v6.0.0, unreleased)](#2026-11-01--ci-green-reads-the-push-path-filter-from-the-workflow-file-models-paths-allowlists-v600-unreleased)
@@ -254,6 +255,26 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-03 — Release fast-track: publish retries polling reads, ci-verdict action, release-flow propose (v6.1.0, unreleased)
+
+**What.** Three additive changes for faster releases, shipping together as v6.1.0 (the input contract is unchanged; every change adds something):
+
+- **F1, publish retries a polling read.** While publish waits for the deploy run (and, for `download` kind, for the assets), a GET that fails with HTTP 5xx or a network error counts as one more empty poll, inside the same deadline. Five in a row stop it. A 4xx is never retried; a write (publish PATCH, rerun-failed-jobs) is never retried.
+- **F2, `actions/ci-verdict`.** A service's `release-gate` asks "did CI already pass on this exact code?" and skips only the steps the project marks as CI duplicates. Spec: `docs/ci-verdict.md`.
+- **F3, `release-flow propose`.** A local command that waits for the service gates, runs the plan-stage validation, writes the one manifest and opens the root release PR, then enables auto-merge only when the PR check is a required status check. Spec: `docs/release-flow.md` §Proposing a release.
+
+**Why.** The 2026-11-03 review of three consumer projects (private notes) found the same three slow-downs in each: (1) one HTTP 504 on the deploy-runs list stopped a release after its first service was already live, and because a re-run never publishes, that one blip cost a whole new release PR with bumped versions; (2) every gate re-ran unit, race and lint suites that CI had passed on the same code, about 100-340 billed min/mo per project and 4-6 min of gate time; (3) the gap between a green gate and an opened release PR was 1-49 min in one project and often overnight in another, and five failed releases came from hand ordering slips (PR before the tag, a dotted manifest name).
+
+**Why only reads retry (F1).** A GET is idempotent: re-asking costs one call. A write that timed out may still have happened at GitHub, so retrying a PATCH could not publish twice (the body is fixed) but retrying a rerun could re-run a deploy twice, and the safety model is that the write surface is exactly three calls, each made once. The retry sits inside the existing deadline, so `WORST_CASE_S` (sized under the 60 min App token lifetime) does not move.
+
+**Why "same sha or same tree" (F2, owner answer A3).** Some consumers run CI on push to main, so the tag commit has its own run; one runs its api CI on PRs only by design, so its tag commit never has one. A git tree id is a hash of the content, so a PR head whose tree equals the tag commit's tree is byte-for-byte the code CI tested. Any other case, and any API error, is "not tested" and the full suite runs: a miss costs minutes, a false yes would ship untested code. Two refinements from the pre-merge review: (i) a run that FINISHED red on the tag commit itself is final, so a green tree-equal PR head does not override it (the exact code has failed CI once); (ii) only `push`, `pull_request` and `merge_group` runs count. ci-green (H8) reads `push` runs only, because it wants the tag commit's own main-branch run; ci-verdict must also read PR runs for the tree rule. But a `pull_request_target` or `workflow_dispatch` run's `head_sha` need not be the code its job checked out, so those runs are ignored. Only the steps a project marks (`if: steps.verdict.outputs.reuse != 'true'`) may be skipped; integration on the built image always runs (owner answer A4).
+
+**Why propose is local, not a workflow (owner answer A1).** A service repo may not trigger the root repo (global rule Repo Awareness: a service knows only itself). The alternative, a scheduled root workflow polling every 15 min, costs about 2,900 billed min/mo, more than all three projects' gate savings. A local command run by the project's own session right after its tag push costs 0 Actions minutes. It builds the commit with git plumbing from `origin/<base_branch>`, so the caller's working tree and index are never touched.
+
+**Why auto-merge, and why it is guarded (owner answer A2).** The owner chose auto-merge so the approval moves from the merge click to the tag push. `gh pr merge --auto` on a branch with no required check merges at once, untested, so propose reads the branch protection and rulesets back and enables auto-merge only when the PR check is listed as required; if it cannot read them, auto-merge stays off. Auto-merge adds no risk for breaking changes: without the `breaking-approved` label and block, the plan stage fails before drafts, nothing is written, and the same tags can be released through a corrected PR. Under Claude's auto mode `gh pr merge` may be denied; propose then prints the exact `!` command for the owner.
+
+**Plan.** `plans/2026-11-03-release-fast-track.md`.
 
 ## 2026-11-02 — rotate-cloudflare-token: the verify failure names its cause (6003/6111 malformed header, empty secret)
 

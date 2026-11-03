@@ -1,0 +1,64 @@
+name: CI verdict
+description: >-
+  Read-only. Answers "did CI already pass for this exact code?": for every listed workflow the
+  newest run on `sha` finished with success, or (match=tree) a pull request of `sha` whose head
+  commit has the identical git tree has a newest successful run. Any other case, including an API
+  error, is reuse=false; it never waits for, starts or re-runs a run. Fails (exit 2) only on a
+  usage error. See docs/ci-verdict.md.
+
+# A composite action, so a caller's release-gate job can skip the steps that only repeat CI.
+# It runs `release-flow ci-verdict` from the sibling release-flow action (stdlib-only Python).
+
+inputs:
+  workflows:
+    description: >-
+      Comma-separated CI workflow file names in this repo, e.g. ci.yml or ci.yml,lint.yml.
+      Every one must qualify. Empty is a usage error.
+    required: true
+  sha:
+    description: The commit the gate is testing (40 lowercase hex).
+    required: false
+    default: ${{ github.sha }}
+  repo:
+    description: owner/name of the repo whose CI is read.
+    required: false
+    default: ${{ github.repository }}
+  match:
+    description: "`sha`: only the same-commit rule. `tree`: same commit, else an identical-tree PR head."
+    required: false
+    default: tree
+  token:
+    description: >-
+      A token that can read actions, contents and pull requests on `repo` (the default
+      GITHUB_TOKEN works with actions: read, contents: read, pull-requests: read).
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  reuse:
+    description: "`true` when the code at `sha` is already tested, else `false`. Never empty."
+    value: ${{ steps.verdict.outputs.reuse }}
+  run_url:
+    description: The green run(s) that justify reuse=true, space-separated. Empty otherwise.
+    value: ${{ steps.verdict.outputs.run_url }}
+  why:
+    description: One line naming the rule that matched per workflow, or the first reason it did not.
+    value: ${{ steps.verdict.outputs.why }}
+
+runs:
+  using: composite
+  steps:
+    - id: verdict
+      shell: bash
+      env:
+        RELEASE_FLOW_READ_TOKEN: ${{ inputs.token }}
+        CV_WORKFLOWS: ${{ inputs.workflows }}
+        CV_SHA: ${{ inputs.sha }}
+        CV_REPO: ${{ inputs.repo }}
+        CV_MATCH: ${{ inputs.match }}
+      run: |
+        set -euo pipefail
+        python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' || { echo "::error::ci-verdict needs Python 3.9 or newer, found $(python3 --version)"; exit 1; }
+        python3 "$GITHUB_ACTION_PATH/../release-flow/release-flow" ci-verdict \
+          --repo "$CV_REPO" --sha "$CV_SHA" --workflows "$CV_WORKFLOWS" --match "$CV_MATCH" \
+          --github-output "$GITHUB_OUTPUT"
