@@ -108,5 +108,5 @@ cut v6.1.0 only on your explicit ask. Then send each project the pin and its ado
 - [x] docs + DECISIONS (2026-11-03, efb89a2)
 - [x] red tests seen failing (each builder report; mutation checks on review fixes)
 - [x] F1 / F2 / F3 implemented, suites green (make ci 29/29, 582 tests)
-- [ ] PR merged (owner) — PR #179 open
-- [ ] pins + adoption steps sent to consumers A, B, C
+- [x] PR merged (owner) — PR #179 merged 2026-11-03; v6.1.0 released
+- [x] pins + adoption steps sent to consumers A, B, C (2026-11-03)

@@ -19,7 +19,7 @@ export PATH := $(CURDIR)/.tools/bin:$(PATH)
 CHECKS := tools actionlint canary shellcheck preflight zizmor \
   venv catalog docs-coverage doc-anchors version-sweep stamp-tests v1-frozen v1-selftest \
   doc-examples plan-fixtures secret-plan-fixtures repos-plan-fixtures concurrency-groups \
-  step-bodies release-gate refresh-api-spec release-flow compile-actions \
+  step-bodies release-gate refresh-api-spec release-flow image-identity compile-actions \
   tools-promtool alertgen alert-catalog pinned ci-gate-tests
 
 # CI runs python3.12; prefer it, then 3.13 (the laptop's python3 may be newer).
@@ -187,6 +187,11 @@ refresh-api-spec: venv
 
 release-flow: venv
 	$(PY) tests/run_release_flow_tests.py
+
+# actions/image-identity/identity.py against a stubbed docker and hand-built tarballs (both image-store
+# layouts); no Docker needed. The real two-store round trip is the ci.yml image-identity-* jobs.
+image-identity: venv
+	$(PY) tests/test_image_identity.py
 
 # Every Python file under actions/ must at least compile; counts what it examined.
 compile-actions: venv

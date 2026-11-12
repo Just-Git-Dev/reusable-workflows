@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# VENDORED from claude-config skills/workflow-preflight @ 7be1b9f7116e — edit canonical, not this copy
+# VENDORED from claude-config skills/workflow-preflight @ ab68385b05cd — edit canonical, not this copy
 """workflow-preflight: stop GitHub Actions failures before push (`lint`, `parity`, `refs`, `calls`, `dispatch-check`, `triggers`).
 
 Canonical copy lives in claude-config `skills/workflow-preflight/scripts/`; repos carry a stamped
@@ -10,6 +10,7 @@ vendored copy (vendor.sh). Never edit a vendored copy. See SKILL.md for the code
   workflow_preflight.py refs   [--root R] [--config F] [--repo O/R] [--static] [--names-file F] [--gh P]
   workflow_preflight.py dispatch-check -R O/R <workflow.yml> --ref REF [-f k=v ...]   (reads the workflow AT REF)
   workflow_preflight.py triggers [--root R] [--config F]   (CI trigger policy D8; warns unless enforced)
+  workflow_preflight.py runners [--root R] [--config F]   (ubuntu-latest / Playwright / image-ID guard; warns unless enforced)
   workflow_preflight.py calls  [--root R] [--repo O/R] [--gh P]   (reusable-workflow contract: ref, inputs, secrets)
 
 Exit 0 clean (WARN lines allowed), 1 findings, 2 usage / config / parse error or a check that
@@ -39,7 +40,7 @@ except ImportError:  # pragma: no cover - exercised only where PyYAML is absent
 
 CONFIG_NAME = ".workflow-preflight.json"
 TOP_KEYS = {"tools", "toolchain", "toolchain_overrides", "local_gate", "parity_mode", "jobs", "refs", "network", "adopted",
-            "triggers", "trigger_waivers", "test_jobs", "contract_jobs"}
+            "triggers", "runners", "trigger_waivers", "test_jobs", "contract_jobs"}
 ENTRY_KEYS_LOCAL = {"local", "marker", "paths"}
 ENTRY_KEYS_WAIVER = {"waiver", "reason"}
 WAIVER_KINDS = {"ci-only", "opt-in-slow", "release-only"}
@@ -423,6 +424,31 @@ def pin_findings(wfs, cfg):
     return out
 
 
+SCRATCH_CHECK = "GIT_CONFIG_GLOBAL=/dev/null git check-ignore -q .scratch/probe"
+
+
+def scratch_ignore(root):
+    """F-036: `.scratch/` must be ignored by the repo's own .gitignore. A push run with
+    GIT_CONFIG_GLOBAL=/dev/null drops the global excludes, and laptop_status.sh then refuses the
+    push as "tree dirty". Git itself answers, so every pattern form counts. Returns (finding, note)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}  # a hook's GIT_DIR names another repo
+    env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+
+    def git(*a):
+        return subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, env=env)
+
+    top = git("rev-parse", "--show-toplevel")
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != Path(root).resolve():
+        return None, f"scratch-ignore: skipped, {root} is not a git repo's top level"
+    fix = f"add the line `.scratch/` to this repo's .gitignore (check: {SCRATCH_CHECK})"
+    if git("check-ignore", "-q", ".scratch/probe").returncode != 0:
+        return f"SCRATCH_NOT_IGNORED .scratch/ is not ignored without the global git config; {fix}", None
+    src = git("check-ignore", "-v", ".scratch/probe").stdout.split(":", 1)[0]
+    if Path(src).name != ".gitignore":
+        return f"SCRATCH_NOT_IGNORED .scratch/ is ignored only by {src} (this clone only); {fix}", None
+    return None, f"scratch-ignore: .scratch/ ignored by {src}"
+
+
 def cmd_parity(root, cfg, args):
     jobs_cfg = cfg.get("jobs", {})
     errors, no_reason = validate_jobs(jobs_cfg)
@@ -516,6 +542,9 @@ def cmd_parity(root, cfg, args):
         notes.append(f"{len(not_local)} CI job(s) not run locally: {', '.join(not_local)}")
     if unverified:
         notes.append(f"markers unverified (no --gate-log): {', '.join(unverified)}")
+    finding, note = scratch_ignore(root)
+    findings += [finding] if finding else []
+    notes += [note] if note else []
     return finish(findings, warns, summary, notes=notes)
 
 
@@ -1403,6 +1432,125 @@ def cmd_triggers(root, cfg, args):
     return finish([], warns, summary, notes, examined=1)
 
 
+# ---------------------------------------------------------------- runners
+
+RUNNERS_CODES = {"LATEST_PLAYWRIGHT", "LATEST_IMAGE_IO", "RUNNER_SPLIT", "ID_COMPARE", "UNRESOLVED"}
+PLAYWRIGHT_RE = re.compile(r"playwright", re.I)
+DOCKER_SAVE_RE = re.compile(r"\bdocker\s+(?:image\s+)?save\b")
+DOCKER_LOAD_RE = re.compile(r"\bdocker\s+(?:image\s+)?load\b")
+DOCKER_INSPECT_RE = re.compile(r"\bdocker\s+image\s+inspect\b")
+ID_RE = re.compile(r"\{\{\s*\.Id\s*\}\}")
+LATEST_LABEL = "ubuntu-latest"
+
+
+def validate_runners_config(cfg):
+    r = cfg.get("runners", {})
+    if not isinstance(r, dict) or set(r) - {"enforce", "waivers"} or not isinstance(r.get("enforce", False), bool):
+        return ["runners must be an object with keys 'enforce' (boolean) and 'waivers' (list)"]
+    if not isinstance(r.get("waivers", []), list):
+        return ["runners.waivers must be a list"]
+    return []
+
+
+def runs_on_labels(job):
+    """(sorted label tuple, unresolved). Unset runs-on reads as ubuntu-latest; an expression is unresolved."""
+    if "runs-on" not in job:
+        return (LATEST_LABEL,), False
+    ro = job["runs-on"]
+    if isinstance(ro, dict):
+        ro = ro.get("labels")
+    items = [ro] if isinstance(ro, str) else ro if isinstance(ro, list) else None
+    if not items or not all(isinstance(x, str) for x in items) or any("${{" in x for x in items):
+        return (), True
+    return tuple(sorted(items)), False
+
+
+def job_runner_facts(job):
+    """What a job does that the runner label can change: playwright, docker save/load/inspect, .Id after a load."""
+    runs = "\n".join(st["run"] for st in steps_of(job) if isinstance(st.get("run"), str))
+    uses = [str(st.get("uses", "")) for st in steps_of(job)]
+    load = DOCKER_LOAD_RE.search(runs)
+    return {"playwright": any(PLAYWRIGHT_RE.search(s) for s in job_strings(job) + uses),
+            "save": bool(DOCKER_SAVE_RE.search(runs)), "load": bool(load),
+            "inspect": bool(DOCKER_INSPECT_RE.search(runs)),
+            "id_compare": bool(load and ID_RE.search(runs, load.end()))}
+
+
+def check_runners_waiver(i, wv):
+    where = wv.get("job") if isinstance(wv, dict) and isinstance(wv.get("job"), str) else f"runners.waivers[{i}]"
+    if not isinstance(wv, dict):
+        return where, "waiver must be an object"
+    if set(wv) - {"job", "code", "reason"}:
+        return where, f"unknown waiver key(s) {sorted(set(wv) - {'job', 'code', 'reason'})}"
+    if not (isinstance(wv.get("job"), str) and re.fullmatch(r"[^:\s]+:[^:\s]+", wv["job"])):
+        return where, "job must be '<workflow file>:<job id>'"
+    if wv.get("code") not in RUNNERS_CODES:
+        return where, f"code must be one of {sorted(RUNNERS_CODES)}"
+    if len(str(wv.get("reason", "")).strip()) < MIN_REASON:
+        return where, f"reason needs at least {MIN_REASON} characters"
+    return None
+
+
+def runners_findings(wfs, cfg):
+    """(findings, jobs examined). Each finding is (code, 'file:job', message)."""
+    out, examined, waived = [], 0, set()
+    for i, wv in enumerate(cfg.get("runners", {}).get("waivers", [])):
+        bad = check_runners_waiver(i, wv)
+        if bad:
+            out.append(("WAIVER_INVALID", bad[0], bad[1]))
+        else:
+            waived.add((wv["job"], wv["code"]))
+    for w in wfs:
+        jobs = {jid: j for jid, j in w["jobs"].items() if isinstance(j, dict)}
+        examined += len(w["jobs"])
+        info = {}
+        for jid, job in jobs.items():
+            if "uses" in job:  # reusable-workflow call: no runs-on by design, nothing of its own to run
+                continue
+            info[jid] = (job_runner_facts(job), *runs_on_labels(job))
+
+        def add(code, jid, msg):
+            out.append((code, f"{w['name']}:{jid}", msg))
+
+        for jid, (f, labels, unresolved) in info.items():
+            io = f["save"] or f["load"] or f["inspect"]
+            if unresolved:
+                if f["playwright"] or io:
+                    add("UNRESOLVED", jid, "runs-on is an expression; the runner label cannot be checked statically")
+            else:
+                if f["playwright"] and LATEST_LABEL in labels:
+                    add("LATEST_PLAYWRIGHT", jid, "playwright on ubuntu-latest (26.04 is unsupported); pin e.g. ubuntu-24.04")
+                if io and LATEST_LABEL in labels:
+                    add("LATEST_IMAGE_IO", jid, "docker save/load/inspect on ubuntu-latest; image IDs differ by image store; pin e.g. ubuntu-24.04")
+            if f["id_compare"]:
+                add("ID_COMPARE", jid, "reads {{.Id}} after docker load; compare the tarball hash or manifest.json config digest instead")
+        savers = [j for j, v in info.items() if v[0]["save"]]
+        for jid, (f, labels, unresolved) in info.items():
+            if not f["load"] or unresolved:
+                continue
+            for s in savers:
+                if s != jid and not info[s][2] and info[s][1] != labels and reaches(jobs, jid, {s}):
+                    add("RUNNER_SPLIT", jid, f"loads an image saved by {s} (needs:) but runs-on {list(labels)} "
+                        f"differs from {list(info[s][1])}; pin both to one explicit label")
+                    break
+    return [x for x in out if (x[1], x[0]) not in waived], examined
+
+
+def cmd_runners(root, cfg, args):
+    errors = validate_runners_config(cfg)
+    if errors:
+        raise Fatal("; ".join(errors))
+    wfs = load_workflows(root)
+    found, examined = runners_findings(wfs, cfg)
+    lines = [f"{code} {where}: {msg}" for code, where, msg in found]
+    enforce = cfg.get("runners", {}).get("enforce", False)
+    summary = f"runners: examined {examined} jobs in {len(wfs)} workflows, {len(found)} findings"
+    if enforce:
+        return finish(lines, [], summary, examined=examined, what="jobs")
+    notes = ["runners is not enforced for this repo (set \"runners\": {\"enforce\": true} to fail on findings)"]
+    return finish([], ["WARN " + ln for ln in lines], summary, notes, examined=examined, what="jobs")
+
+
 # ---------------------------------------------------------------- output / CLI
 
 def finish(findings, warns, summary, notes=(), examined=1, what="uses: lines"):
@@ -1427,7 +1575,7 @@ def default_root():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="workflow-preflight", description=__doc__.split("\n")[0])
-    ap.add_argument("subcommand", choices=["lint", "parity", "refs", "calls", "dispatch-check", "triggers"])
+    ap.add_argument("subcommand", choices=["lint", "parity", "refs", "calls", "dispatch-check", "triggers", "runners"])
     ap.add_argument("workflow", nargs="?", help="dispatch-check: the workflow file name")
     ap.add_argument("--root")
     ap.add_argument("--config")
@@ -1441,7 +1589,10 @@ def main(argv=None):
     ap.add_argument("--names-file", help="refs/dispatch-check: JSON names fixture instead of gh (tests)")
     ap.add_argument("--gh", help="refs/dispatch-check: path of the gh binary (default $WORKFLOW_PREFLIGHT_GH or PATH)")
     ap.add_argument("--offline", action="store_true", help="lint: skip the tag/SHA network check (prints a warning)")
-    args, extra = ap.parse_known_args(argv)
+    # Intermixed: before Python 3.13, plain parse_known_args fills the optional `workflow`
+    # positional with nothing when a flag sits between it and `subcommand`
+    # (`dispatch-check -R O/R x.yml`), leaving x.yml as an "unexpected argument".
+    args, extra = ap.parse_known_intermixed_args(argv)
     if extra:
         print(f"unexpected arguments: {extra}", file=sys.stderr)
         return 2
@@ -1454,7 +1605,8 @@ def main(argv=None):
         if args.subcommand == "calls":
             return cmd_calls(root, args)
         cfg = load_config(Path(args.config) if args.config else root / CONFIG_NAME)
-        return {"lint": cmd_lint, "parity": cmd_parity, "triggers": cmd_triggers}[args.subcommand](root, cfg, args)
+        return {"lint": cmd_lint, "parity": cmd_parity, "triggers": cmd_triggers,
+                "runners": cmd_runners}[args.subcommand](root, cfg, args)
     except Fatal as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

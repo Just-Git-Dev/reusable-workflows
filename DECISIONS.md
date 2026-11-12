@@ -2,8 +2,9 @@
 
 ## Index
 
-139 entries total — 129 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+140 entries total — 130 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-12` — [image-identity action: prove same image bytes by tarball hash, never docker .Id (v6.2.0)](#2026-11-12--image-identity-action-prove-same-image-bytes-by-tarball-hash-never-docker-id-v620)
 - `2026-11-03` — [Release fast-track: publish retries polling reads, ci-verdict action, release-flow propose (v6.1.0, unreleased)](#2026-11-03--release-fast-track-publish-retries-polling-reads-ci-verdict-action-release-flow-propose-v610-unreleased)
 - `2026-11-02` — [rotate-cloudflare-token: the verify failure names its cause (6003/6111 malformed header, empty secret)](#2026-11-02--rotate-cloudflare-token-the-verify-failure-names-its-cause-60036111-malformed-header-empty-secret)
 - `2026-11-01` — [v6 auth: client-id replaces app-id, and a caller github-token as the alternative to the App (v6.0.0)](#2026-11-01--v6-auth-client-id-replaces-app-id-and-a-caller-github-token-as-the-alternative-to-the-app-v600)
@@ -255,6 +256,23 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-12 — image-identity action: prove same image bytes by tarball hash, never docker .Id (v6.2.0)
+
+**What:** a new composite action, `actions/image-identity`, with `mode: record | verify` (docs/image-identity.md). `record` runs in the job that pulled the images. It `docker save`s them into one tarball and outputs that tarball's sha256. It also reads each ref's config digest from the tarball's own `manifest.json`, in both the classic and the containerd/OCI layouts. `verify` runs in the consuming job. It re-hashes the downloaded tarball against `tar_sha256`, `docker load`s it, and confirms every recorded ref is present. It fails closed: an empty value, an unparseable manifest, a missing ref or a hash mismatch is an error, never "equal". This ships in v6.2.0, a minor release: a new action, and no existing input contract changes. Plan: `plans/2026-11-12-runners-lint-image-identity.md` (unit U2).
+
+**Why:** consumers prove "smoke tested exactly what was pulled" by comparing `docker image inspect --format '{{.Id}}'` across jobs. That value depends on the image store. On the classic store (ubuntu-24.04) it is the config digest; on the containerd store (ubuntu-26.04, which is what `ubuntu-latest` now resolves to) it is the manifest digest. Saving on one label and loading on the other gave a false mismatch on identical bytes. That burned a consumer's release pair on 2026-11-11. A hash of the tarball is independent of the store, and it proves exactly the property the check exists for: the bytes are identical.
+
+**Owner ruling (2026-11-12):** one action with two modes, not two actions.
+
+**Choices:**
+- Refs are mapped through `RepoTags`. `docker save` of a digest ref records no tag, so `record` refuses `name@sha256:…` with a hint to `docker tag` it first.
+- ci.yml runs the action by local path. zizmor's `self-repository` rule wants `$/actions/…`, but actionlint 1.7.12 rejects that form. So `self-repository` is ignored for ci.yml only.
+- Four CI jobs run the real round trip both ways: record on 24.04 → verify on latest, and the reverse. They use a busybox image pinned by digest. They carry `ci-only` parity waivers.
+
+**Known blind spot (documented in the workflow-preflight skill):** the new `runners` lint reads only a job's own `run:` text, so it does not see docker inside this action. That is correct here, because the action never reads `.Id`.
+
+**Also in this change:** re-vendored workflow-preflight (stale since 7be1b9f), which adds the report-only `runners` subcommand. On this repo it examined 79 jobs in 47 workflows: 0 findings.
 
 ## 2026-11-03 — Release fast-track: publish retries polling reads, ci-verdict action, release-flow propose (v6.1.0, unreleased)
 
