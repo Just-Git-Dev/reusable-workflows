@@ -51,7 +51,7 @@ permissions:
 
 jobs:
   check:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rotate-cloudflare-token.yml@v6.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rotate-cloudflare-token.yml@v6.2.0
     with:
       zone_name: example.com
       secret_targets: my-org/api my-org/web

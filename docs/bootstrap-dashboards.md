@@ -53,7 +53,7 @@ permissions:
 
 jobs:
   run:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-dashboards.yml@v6.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/bootstrap-dashboards.yml@v6.2.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}
