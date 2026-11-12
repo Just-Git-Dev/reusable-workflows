@@ -32,6 +32,11 @@ rules:
       - release.yml
       - rotate-signing-keypair.yml
       - validate-alerts.yml
+  self-repository:
+    ignore:
+      # ci.yml runs the image-identity action by local path. actionlint 1.7.12 rejects zizmor's
+      # suggested `$/actions/...` form ("ref is missing"), and the two gates cannot both be met.
+      - ci.yml
   github-app:
     ignore:
       # create-github-app-token without permission-* inputs inherits the whole App installation's

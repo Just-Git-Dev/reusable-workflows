@@ -65,6 +65,43 @@
       "runs": "composite",
       "uses": "Just-Git-Dev/reusable-workflows/actions/ci-verdict"
     },
+    "image-identity": {
+      "action": "actions/image-identity",
+      "inputs": {
+        "identity": {
+          "default": "",
+          "description": "verify: the identity output of record.",
+          "required": false
+        },
+        "images": {
+          "default": "",
+          "description": "record: newline-separated image refs, already pulled.",
+          "required": false
+        },
+        "mode": {
+          "default": null,
+          "description": "`record` (in the job that pulled) or `verify` (in the consuming job).",
+          "required": true
+        },
+        "path": {
+          "default": null,
+          "description": "Tarball path: written by record, read by verify.",
+          "required": true
+        },
+        "tar_sha256": {
+          "default": "",
+          "description": "verify: the tar_sha256 output of record.",
+          "required": false
+        }
+      },
+      "name": "Image identity",
+      "outputs": {
+        "identity": "record: compact JSON {ref: {config, repo_digest}}. Empty in verify mode.",
+        "tar_sha256": "record: sha256 of the tarball. Empty in verify mode."
+      },
+      "runs": "composite",
+      "uses": "Just-Git-Dev/reusable-workflows/actions/image-identity"
+    },
     "refresh-api-spec": {
       "action": "actions/refresh-api-spec",
       "inputs": {

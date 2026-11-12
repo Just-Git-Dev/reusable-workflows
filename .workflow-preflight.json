@@ -47,6 +47,22 @@
     },
     "ci.yml:ci-gate": {
       "local": "make ci-gate-tests"
+    },
+    "ci.yml:image-identity-record-classic": {
+      "waiver": "ci-only",
+      "reason": "Real round trip across the two Docker image stores needs the ubuntu-24.04 and ubuntu-latest runners; the unit half is make image-identity."
+    },
+    "ci.yml:image-identity-verify-containerd": {
+      "waiver": "ci-only",
+      "reason": "Real round trip across the two Docker image stores needs the ubuntu-24.04 and ubuntu-latest runners; the unit half is make image-identity."
+    },
+    "ci.yml:image-identity-record-containerd": {
+      "waiver": "ci-only",
+      "reason": "Real round trip across the two Docker image stores needs the ubuntu-24.04 and ubuntu-latest runners; the unit half is make image-identity."
+    },
+    "ci.yml:image-identity-verify-classic": {
+      "waiver": "ci-only",
+      "reason": "Real round trip across the two Docker image stores needs the ubuntu-24.04 and ubuntu-latest runners; the unit half is make image-identity."
     }
   }
 }

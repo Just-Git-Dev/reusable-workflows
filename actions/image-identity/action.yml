@@ -1,0 +1,52 @@
+name: Image identity
+description: >-
+  Proves two jobs handled the same image bytes without reading `docker image inspect .Id`
+  (store-dependent). mode=record saves the images into one tarball, hashes it and reads each
+  image's config digest from the tarball's own manifest.json; mode=verify re-hashes the
+  downloaded tarball, loads it and confirms every image is present. Fails closed. See
+  docs/image-identity.md.
+
+# A thin wrapper: the logic is identity.py (stdlib-only Python), tested by tests/test_image_identity.py.
+
+inputs:
+  mode:
+    description: "`record` (in the job that pulled) or `verify` (in the consuming job)."
+    required: true
+  images:
+    description: "record: newline-separated image refs, already pulled."
+    required: false
+    default: ''
+  path:
+    description: "Tarball path: written by record, read by verify."
+    required: true
+  tar_sha256:
+    description: "verify: the tar_sha256 output of record."
+    required: false
+    default: ''
+  identity:
+    description: "verify: the identity output of record."
+    required: false
+    default: ''
+
+outputs:
+  tar_sha256:
+    description: "record: sha256 of the tarball. Empty in verify mode."
+    value: ${{ steps.run.outputs.tar_sha256 }}
+  identity:
+    description: "record: compact JSON {ref: {config, repo_digest}}. Empty in verify mode."
+    value: ${{ steps.run.outputs.identity }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        ID_MODE: ${{ inputs.mode }}
+        ID_IMAGES: ${{ inputs.images }}
+        ID_PATH: ${{ inputs.path }}
+        ID_TAR_SHA256: ${{ inputs.tar_sha256 }}
+        ID_IDENTITY: ${{ inputs.identity }}
+      run: |
+        set -euo pipefail
+        python3 "$GITHUB_ACTION_PATH/identity.py"
