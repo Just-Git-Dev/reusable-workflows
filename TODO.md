@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-34 open across 14 live sections. 47 closed items archived.
+35 open across 15 live sections. 47 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **ACTIVE** — [Rotate external secret — state read absorbs stderr (opened 2026-11-12)](#rotate-external-secret--state-read-absorbs-stderr-opened-2026-11-12) — 1 open
 - **ACTIVE** — [Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)](#release-flow--ci-green-cannot-model-an-onpushpaths-allowlist-opened-2026-11-01) — 1 open
 - **ACTIVE** — [App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)](#app-token-mint--app-id-input-is-deprecated-upstream-opened-2026-10-28) — 0 open (built for v6.0.0)
 - **ACTIVE** — [Owner rulings to build (opened 2026-10-21)](#owner-rulings-to-build-opened-2026-10-21) — 3 open
@@ -21,6 +22,14 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 6 open
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 2 open
+
+## Rotate external secret — state read absorbs stderr (opened 2026-11-12)
+
+- [ ] `actions/rotate-external-secret/read-state.sh` captures `gh variable get … 2>&1` and stores
+  that capture as STATE. If `gh` prints a warning on stderr and still exits 0 (an update notice,
+  a deprecation), the warning text becomes part of the stored state. Fix: capture stdout only
+  (`2>"$errf"`) and read stderr only to classify a failure. The same bug class shipped in a
+  consumer's release workflow on 2026-11-11. Rule: claude-config `skills/github-actions` §3d.
 
 ## Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)
 

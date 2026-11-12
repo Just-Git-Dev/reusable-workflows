@@ -22,9 +22,9 @@ It is two things:
 | [`release-publish.yml`](../.github/workflows/release-publish.yml) | publish each draft in order, wait for its Deploy, prove it live, retry a failed deploy, then report | publish + re-run of its own failed Deploy |
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.1.0
+- uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.2.0
 # and, as jobs:
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.1.0
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.2.0
 ```
 
 ## Why this exists
@@ -662,7 +662,7 @@ permissions: {}
 jobs:
   release-pr:
     permissions: {contents: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-pr-check.yml@v6.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-pr-check.yml@v6.2.0
     with:
       allowed: backend,webapp,desktop
 ```
@@ -682,7 +682,7 @@ permissions: {}
 jobs:
   plan:
     permissions: {contents: read, pull-requests: read, checks: read, actions: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.2.0
     with:
       allowed: backend,webapp,desktop
       client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
@@ -699,7 +699,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {contents: read}
     steps:
-      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.1.0
+      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.2.0
       # once per matrix entry; --pair + RELEASE_BREAKING apply the breaking-approved list
       - run: release-flow spec-compat baseline.yaml candidate.yaml --label "$PAIR" --pair "$PAIR" --consumer-side "$SIDE"
         shell: bash
@@ -712,7 +712,7 @@ jobs:
     needs: [plan, contracts]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     permissions: {contents: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-drafts.yml@v6.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-drafts.yml@v6.2.0
     with:
       needs: ${{ toJSON(needs) }}
       allowed: backend,webapp,desktop
@@ -731,7 +731,7 @@ jobs:
     needs: [plan, contracts, drafts, smoke]
     if: ${{ always() }}
     permissions: {contents: read, pull-requests: write}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-publish.yml@v6.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-publish.yml@v6.2.0
     with:
       needs: ${{ toJSON(needs) }}
       required-jobs: plan,drafts,smoke
@@ -754,7 +754,7 @@ permissions: {}
 jobs:
   plan:
     permissions: {contents: read, pull-requests: read, checks: read, actions: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.1.0
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.2.0
     with:
       allowed: backend,webapp,desktop
     secrets:
