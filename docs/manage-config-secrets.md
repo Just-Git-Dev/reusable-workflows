@@ -59,7 +59,10 @@ is set.
 Cloud Run service in the project's register is created, and its IAM policy written, only by
 [`repos-secrets`](repos-secrets.md) (F8): one writer per secret policy. Its values are written by
 [`sync-bundle-key`](sync-bundle-key.md) as the service's own deployer. The `gsm` create path remains
-for other names only. (The workflow does not yet refuse a `*-env` name itself; this page is the rule.)
+for other names only. The workflow enforces it: a `gsm` create of a name ending `-env` (the blob
+`secret_name`, or `secret_name` + a payload key in `individual` mode) fails with an error before
+anything is written, dry run included. A `-env` secret that already exists is not a create and is
+not refused.
 
 ## Inputs / secrets
 
