@@ -16,6 +16,7 @@ closed items from live sections are archived too, under a dated heading at the e
 - [Archived 2026-10-29 (closed items from live sections)](#archived-2026-10-29-closed-items-from-live-sections) — 30 closed
 - [rotate-cloudflare-token — the verify error blames the token for a header-format failure — ✅ DONE 2026-11-02 (opened 2026-11-01)](#rotate-cloudflare-token--the-verify-error-blames-the-token-for-a-header-format-failure---done-2026-11-02-opened-2026-11-01) — 1 closed
 - [Archived 2026-11-13 (TODO re-org + read-state fix)](#archived-2026-11-13-todo-re-org--read-state-fix) — 12 closed
+- [Archived 2026-11-13 (RW1 built)](#archived-2026-11-13-rw1-built) — 1 closed
 
 ## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
 
@@ -582,3 +583,13 @@ its original `TODO.md` section. Text is verbatim.
 - [x] Build-once pilot / roll-out / post-pilot-proof checklists: moved out 2026-11-13: consumer adoption is each project's own work; the reusable side shipped in v1.17.0.
 - [x] Three "Pre-commit gates that check the wrong thing" items: moved to ~/.claude/TODO.md 2026-11-13 (fleet tooling, not workflow bodies).
 - [x] RW3 provenance: closed 2026-11-13; commit 360d70a (#90) states provenance mode=min / sbom=false explicitly on all three build surfaces (plans/provenance-and-release-gate.md Option C).
+
+## Archived 2026-11-13 (RW1 built)
+
+- [x] Caller-declared waiver kinds (`waiver_pairs`) + plan outputs the PR label list. Closed
+  2026-11-13 (branch `feat/rw1-waiver-pairs`; minor version, release pending the owner's ask):
+  optional `waiver_pairs` input on `release-pr-check` and `release-plan`, `release-plan` output
+  `labels` (labels at merge time). Spec `plans/2026-11-13-caller-waiver-kinds.md` and
+  `docs/release-flow.md` "Caller-declared pairs"; tests `ParseDeclaredTests`, `LabelsAtTests`
+  (`test_waiver.py`), `DeclaredPairs*Tests` (`test_breaking_cli.py`), `test_workflow_breaking.py`;
+  DECISIONS 2026-11-13.

@@ -2,8 +2,9 @@
 
 ## Index
 
-145 entries total — 135 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+146 entries total — 136 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-13` — [Release flow: caller-declared waiver pairs + plan labels output built (RW1)](#2026-11-13--release-flow-caller-declared-waiver-pairs--plan-labels-output-built-rw1)
 - `2026-11-13` — [Owner ruling: third-party image mirror and probe parked until the next upstream-image outage](#2026-11-13--owner-ruling-third-party-image-mirror-and-probe-parked-until-the-next-upstream-image-outage)
 - `2026-11-13` — [Owner ruling: release-flow waivers extend to caller-declared pairs (waiver_pairs) + plan outputs PR labels](#2026-11-13--owner-ruling-release-flow-waivers-extend-to-caller-declared-pairs-waiver_pairs--plan-outputs-pr-labels)
 - `2026-11-13` — [Owner rulings on TODO triage questions (RW3-RW6)](#2026-11-13--owner-rulings-on-todo-triage-questions-rw3-rw6)
@@ -261,6 +262,21 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-13 — Release flow: caller-declared waiver pairs + plan labels output built (RW1)
+
+**Built (RW1, branch `feat/rw1-waiver-pairs`; release pending the owner's explicit ask, would be a minor).** The ruling above is implemented as planned in `plans/2026-11-13-caller-waiver-kinds.md`: optional `waiver_pairs` input on `release-pr-check` and `release-plan`, and a `release-plan` output `labels`. `RELEASE_FLOW_TREE` restamped; `WORKFLOW_VERSION` unchanged (v6.2.1).
+
+**Owner answers to the open questions:** Q1 = a workflow input on BOTH workflows (not a `services.json` key); drift between the two copies is safe because the Release refuses before any write. Q2 = the provider of a declared pair must be a configured service; the consumer side is a free name; an unknown provider (a typo) is exit 2 on the first run. Q3 = `labels` is the PR's labels at merge time, from label events replayed strictly before `merged_at` (R5's rule for every label); a rehearsal reads the open PR's current labels, and a rehearsal without `manifest-ref` gives `[]`.
+
+**Design choices a future session must not re-litigate:**
+- A declared pair that is also a configured contract is refused (exit 2). Otherwise a caller could switch off R3's live-consumer check for a real contract by redeclaring it. Malformed items and duplicates are exit 2 as well.
+- R3 for a declared pair is met by its presence in `waiver_pairs` (the ruling's text). Accepted trade-off: if the caller's own stage does not run `spec-compat --pair ... --consumer-side live` for that pair, approved lines for it are never matched against findings. A contracts pair keeps the live-consumer requirement.
+- `breaking-approval --labels-out FILE` writes the labels from the SAME PR read as the approval list, so a label change cannot race between two reads. Issue events are now read on every real release (before: only when a block existed).
+- `breaking-matrix` loads `--config` only when `--waiver-pairs` is non-empty, so existing callers behave exactly as before.
+- Caller trap, documented: a declared-pair stage in drafts' `needs` must always run (`verdict.py` fails any non-`success` needed job except the contracts job when `checks` is `[]`); never `if:`-skip it.
+
+**Why not the alternatives:** a `services.json` key (Q1 = B) would change the ruling's word "input" and need a `config.py` schema change; a provider outside the release has no case (spec-compat compares a candidate provider spec).
 
 ## 2026-11-13 — Owner ruling: third-party image mirror and probe parked until the next upstream-image outage
 

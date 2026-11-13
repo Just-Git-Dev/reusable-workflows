@@ -18,7 +18,7 @@ day, M about a day, L several.
 10. **M** — `TODO.md:"Audit the remaining gates"` — derived comparands / assumed scopes.
 11. **M** — `TODO.md:"when they are on an old version"` — needs its three questions answered first.
 12. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
-13. **M** — `TODO.md:"Caller-declared waiver kinds"` — owner-ruled 2026-11-13 (option B); minor version.
+13. **S** — `TODO.md:"CI runs the release-flow tests"` — a doc line names the wrong CI job for the release-flow tests.
 
 Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
 
@@ -47,16 +47,9 @@ Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
 
 ## Ready — release flow
 
-- [ ] **Caller-declared waiver kinds (`waiver_pairs`) + plan outputs the PR label list.** Ruling
-      (owner 2026-11-13, option B): a new optional `waiver_pairs` input lets a caller declare
-      non-`contracts` pairs (e.g. a consumer's "oldest published client SDK" stage) that the
-      same breaking-approved label waives through the R1-R3 path; R3's "a live check entry per
-      listed pair" is satisfied by the pair being in the caller's declared `waiver_pairs` list.
-      The plan stage also outputs the merged release PR's label list, so a caller needs no labels
-      job of its own. Minor version (new optional input; no change for existing callers). Today
-      `waiver.py` R1/R2 accept only services.json `contracts` pairs (per this item; verify in
-      the plan). Spec: `plans/2026-10-15-breaking-approved-waiver.md` R1-R3 + `docs/release-flow.md`.
-      Size M.
+- [ ] `docs/release-flow.md` §Testing says CI runs the release-flow tests "in `step-bodies`". The
+      Makefile runs them in the `release-flow` target, and `step-bodies` lists no release-flow
+      runner (`Makefile:170-175`). Fix the sentence. Found while planning RW1. Size S.
 
 - [ ] `docs/release-flow.md` §Contract checks/Smoke — say which ref the smoke SPECS come from.
       "Against the resolved refs and images" is silent on it, and a consumer whose e2e specs
