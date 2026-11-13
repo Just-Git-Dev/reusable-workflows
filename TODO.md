@@ -20,9 +20,7 @@ day, M about a day, L several.
 12. **M** — `TODO.md:"every pinned image in the fleet still resolves"` — caller-invoked probe.
 13. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
 
-Waiting on someone else: see [Waiting / blocked](#waiting--blocked). Items that belong in another
-tracker are listed under [Flagged: belongs elsewhere](#flagged-belongs-elsewhere) until the owner
-confirms the move.
+Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
 
 ## Ready — release and stamp gates
 
@@ -100,7 +98,11 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
 - [ ] **`zizmor.yml` — re-check the other ignores** (github-app, unpinned-images, unsound-ternary,
       github-env, cache-poisoning) and remove each one a fix can retire. Where the reason is
       permanent (a caller-chosen service image; a deliberate empty-string ternary in a job name),
-      say so as accepted. github-app needs the exact permission set per App from the owner. Size S.
+      say so as accepted. github-app: no permission set is needed (every mint already sets
+      `permission-*`); the rule flags repository scope (`owner:` with no `repositories:`).
+      repos-create stays org-wide (it creates repos that do not exist yet), so its ignore is
+      accepted. Open for repos-settings and repos-variables: narrow the read-only mint to the
+      registry's repo list, or accept it. Size S.
 - [ ] `.github/workflows/*.yml` — **template-injection: move** each `${{ }}` used inside `run:`
       into an `env:` entry and reference `"$VAR"`. 10 files ignored; 30 findings on 2026-11-13
       (`zizmor --offline --no-config`). Exercise each deploy body before dropping its ignore; one
@@ -185,40 +187,9 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
       mean owning the `.npmrc` ourselves. Documented as a known limitation in both docs pages;
       revisit when a second registry shows up.
 
-## Flagged: belongs elsewhere
+**Parked**
+- [ ] Signed build attestations (option D in plans/provenance-and-release-gate.md) — parked; not planned until a consumer needs verifiable provenance.
 
-Not rw work. Listed so nothing is lost; the owner confirms each move.
-
-- **Build-once rollout** (consumer repos; reusable side done in `v1.17.0`, DECISIONS 2026-07-27).
-  Proposed home: `infra-provisioning/TODO.md` §"Consumer follow-ups (moved from
-  reusable-workflows 2026-10-29)".
-  - [ ] Pilot `<consumer-C-org>/core` end-to-end: `main`-triggered `deploy-cloud-run` with
-        `build_only: true` → `:<sha>`; migrate-smoke against that image; tag path calls
-        `promote-image` (`source_tag: ${{ github.sha }}`, `deploy_target: cloud-run`,
-        `environment: production`, `enforce_forward_only: true`), `dry_run: true` first. Set
-        `source_wait_seconds` (build p99 + queue, e.g. 900) and `timeout_minutes` above it (the
-        2026-07-28 race RCA).
-  - [ ] Roll to the remaining four: `<consumer-C-org>/gateway`, `<consumer-A-org>/api`,
-        `<consumer-B-org>/image-service`, then `<consumer-B-org>/api` last. Precondition per repo:
-        config is runtime-resolved (`APP_ENV=prod` a `--set-env-vars`, not a build arg) —
-        re-verify, don't assume.
-  - [ ] Post-pilot proof: `cleanup-gar-images` `dry_run: true` against each of the 5 GAR repos,
-        confirm `candidates` drops (see the 2026-08-11 boundary-crossing entry before reading a
-        small rise as a regression); assert prod digest equals the `:<sha>` digest; exercise
-        `promote-image`'s preflight on a tag whose commit never built.
-- **Pre-commit gates that check the wrong thing** (developer tooling, not `workflow_call`
-  bodies; each project fixes its own hooks). Proposed home: the fleet tooling TODO
-  (`~/.claude/TODO.md`, devops session). Reported by one consumer, not re-checked here.
-  - [ ] A gate that reads a neighbouring working tree instead of what is being committed (an api
-        coverage check read the live sibling `../ui`). Fix shape: read the committed tree
-        (`git show <ref>:<path>`) or refuse on a dirty one.
-  - [ ] The pre-commit tier doesn't include the tier that catches cross-layer breaks (an api
-        commit broke 6 integration tests and passed its hook). Which tier must a commit gate
-        include, and what catches the rest before push?
-  - [ ] Flaky or false-positive guards: (a) a GoFr lint rule flags `RETURNING id` on valid code;
-        (b) a ui visual check's `.run-started-at` marker races; (c) a route-registration edit hook
-        gives false positives; (d) an api pre-commit exited rc=1 after "checks passed". (a) and
-        (c) may be shared developer-tooling guards; check before assigning an owner.
 
 ## Reference — operating facts (not tasks)
 

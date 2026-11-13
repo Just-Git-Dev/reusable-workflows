@@ -2,8 +2,9 @@
 
 ## Index
 
-142 entries total — 132 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+143 entries total — 133 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-13` — [Owner rulings on TODO triage questions (RW3-RW6)](#2026-11-13--owner-rulings-on-todo-triage-questions-rw3-rw6)
 - `2026-11-13` — [rotate-external-secret: state read stores stdout only (stderr warning no longer corrupts state)](#2026-11-13--rotate-external-secret-state-read-stores-stdout-only-stderr-warning-no-longer-corrupts-state)
 - `2026-11-13` — [TODO.md re-org: triage verified against code, closed items evidenced](#2026-11-13--todomd-re-org-triage-verified-against-code-closed-items-evidenced)
 - `2026-11-12` — [image-identity action: prove same image bytes by tarball hash, never docker .Id (v6.2.0)](#2026-11-12--image-identity-action-prove-same-image-bytes-by-tarball-hash-never-docker-id-v620)
@@ -258,6 +259,18 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-13 — Owner rulings on TODO triage questions (RW3-RW6)
+
+The owner answered the TODO-triage questions RW3-RW6 on 2026-11-13 with "part 1 accept all". Evidence and recommendations: `.scratch/todo-triage/owner-questions.md`.
+
+**RW3, provenance: closed.** Commit 360d70a (#90) states provenance `mode=min` and `sbom=false` explicitly on all three build surfaces, which is Option C in `plans/provenance-and-release-gate.md`. Signed build attestations (option D) are parked in TODO.md Waiting / blocked until a consumer needs verifiable provenance.
+
+**RW4, build-once rollout: moved out.** The pilot, roll-out and post-pilot-proof checklists left TODO.md. Consumer adoption is each project's own work; the reusable side shipped in v1.17.0. `infra-provisioning` keeps a one-line pointer under "Handed elsewhere" (its "Consumer follow-ups" section no longer exists).
+
+**RW5, pre-commit gates: moved to fleet tooling.** The three "Pre-commit gates that check the wrong thing" items are developer tooling, not workflow bodies. They now live in `~/.claude/TODO.md`.
+
+**RW6, zizmor `github-app` ignores: reworded.** No permission set is needed: every token mint already sets `permission-*`. The rule flags repository scope (`owner:` with no `repositories:`). `repos-create` stays org-wide because it creates repos that do not exist yet, so its ignore is accepted. For `repos-settings` and `repos-variables` the open item is whether to narrow the read-only mint to the registry's repo list. `zizmor.yml` reason text and the TODO item now say this.
 
 ## 2026-11-13 — rotate-external-secret: state read stores stdout only (stderr warning no longer corrupts state)
 

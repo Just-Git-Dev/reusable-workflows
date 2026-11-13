@@ -39,9 +39,11 @@ rules:
       - ci.yml
   github-app:
     ignore:
-      # create-github-app-token without permission-* inputs inherits the whole App installation's
-      # permissions. These are the repo-admin Apps; their permissions are the job's purpose, and
-      # narrowing needs the exact permission set per App from the owner.
+      # Every mint here already sets permission-* (e.g. repos-create.yml). What this rule flags is
+      # repository SCOPE: `owner:` with no `repositories:` mints a token for every repo the App is
+      # installed on. repos-create must stay org-wide (it creates repos that do not exist yet), so
+      # that ignore is accepted. For repos-settings and repos-variables the read-only mint is
+      # org-wide too; narrowing it to the registry's repo list is an open question (TODO.md).
       - repos-create.yml
       - repos-settings.yml
       - repos-variables.yml
