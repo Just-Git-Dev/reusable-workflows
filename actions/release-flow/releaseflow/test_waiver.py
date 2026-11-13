@@ -208,5 +208,142 @@ class PairAndPasteTests(unittest.TestCase):
                                                     waiver.Entry("gateway", "core", F2)])
 
 
+SERVICES = {"core", "gateway", "web"}
+SDK = ("sdk-oldest", "core")
+
+
+class ParseDeclaredTests(unittest.TestCase):
+    """`waiver_pairs`: caller-declared pairs that are not `contracts` pairs."""
+
+    def parse(self, text, services=SERVICES):
+        return waiver.parse_declared(text, CONTRACTS, services)
+
+    def test_comma_and_newline_lists_with_whitespace(self):
+        want = frozenset({SDK, ("sdk-newest", "gateway")})
+        self.assertEqual(self.parse("sdk-oldest -> core, sdk-newest -> gateway"), want)
+        self.assertEqual(self.parse("  sdk-oldest -> core\n\n sdk-newest -> gateway \n"), want)
+
+    def test_empty_is_the_empty_set(self):
+        for text in ("", "  ", None, " , \n ,"):
+            self.assertEqual(self.parse(text), frozenset(), repr(text))
+
+    def test_malformed_item_fails(self):
+        for bad in ("sdk-oldest->core", "sdk-oldest", "SDK -> core", "a -> b -> c"):
+            with self.assertRaises(waiver.WaiverError, msg=bad):
+                self.parse(bad)
+
+    def test_duplicate_fails(self):
+        with self.assertRaises(waiver.WaiverError) as cm:
+            self.parse("sdk-oldest -> core, sdk-oldest -> core")
+        self.assertIn("sdk-oldest -> core", str(cm.exception))
+
+    def test_a_configured_contract_cannot_be_redeclared(self):
+        with self.assertRaises(waiver.WaiverError) as cm:
+            self.parse("gateway -> core")
+        self.assertIn("gateway -> core", str(cm.exception))
+
+    def test_unknown_provider_fails(self):
+        with self.assertRaises(waiver.WaiverError) as cm:
+            self.parse("sdk-oldest -> backned")
+        self.assertIn("backned", str(cm.exception))
+
+    def test_consumer_side_is_a_free_name(self):
+        self.assertEqual(self.parse("never-heard-of -> web"), frozenset({("never-heard-of", "web")}))
+
+
+class DeclaredShapeTests(unittest.TestCase):
+    """R1 + R2 with declared pairs."""
+    DECLARED = frozenset({SDK})
+
+    def test_a_declared_pair_passes_r2(self):
+        got = waiver.check_shape([waiver.LABEL], body(f"sdk-oldest -> core | {F1}"), CONTRACTS,
+                                 self.DECLARED)
+        self.assertEqual(got, [waiver.Entry("sdk-oldest", "core", F1)])
+
+    def test_contract_and_declared_pairs_mix(self):
+        got = waiver.check_shape([waiver.LABEL],
+                                 body(f"gateway -> core | {F1}", f"sdk-oldest -> core | {F2}"),
+                                 CONTRACTS, self.DECLARED)
+        self.assertEqual(len(got), 2)
+
+    def test_an_undeclared_non_contract_pair_still_fails(self):
+        with self.assertRaises(waiver.WaiverError) as cm:
+            waiver.check_shape([waiver.LABEL], body(f"sdk-newest -> core | {F1}"), CONTRACTS,
+                               self.DECLARED)
+        self.assertIn("sdk-newest -> core", str(cm.exception))
+        self.assertIn("waiver_pairs", str(cm.exception))
+
+    def test_r1_is_unchanged_for_declared_pairs(self):
+        with self.assertRaises(waiver.WaiverError):
+            waiver.check_shape(["bug"], body(f"sdk-oldest -> core | {F1}"), CONTRACTS,
+                               self.DECLARED)
+        with self.assertRaises(waiver.WaiverError):
+            waiver.check_shape([waiver.LABEL], "notes", CONTRACTS, self.DECLARED)
+
+
+class DeclaredMatrixTests(unittest.TestCase):
+    """R3 with declared pairs."""
+
+    def live(self, consumer, provider):
+        return {"consumer": consumer, "consumer_ref": "v1.0.0", "provider": provider,
+                "provider_ref": "a" * 40, "states": ["s"], "consumer_side": "live"}
+
+    def test_a_declared_pair_passes_with_no_checks_entry(self):
+        waiver.check_matrix([waiver.Entry("sdk-oldest", "core", F1)], [],
+                            frozenset({SDK}))
+
+    def test_a_contract_pair_still_needs_a_live_consumer_check(self):
+        with self.assertRaises(waiver.WaiverError):
+            waiver.check_matrix([waiver.Entry("gateway", "core", F1)], [], frozenset({SDK}))
+        waiver.check_matrix([waiver.Entry("gateway", "core", F1)],
+                            [self.live("gateway", "core")], frozenset({SDK}))
+
+    def test_an_undeclared_pair_is_still_refused(self):
+        with self.assertRaises(waiver.WaiverError):
+            waiver.check_matrix([waiver.Entry("sdk-newest", "core", F1)], [], frozenset({SDK}))
+
+
+class LabelsAtTests(unittest.TestCase):
+    """Q3-B: the PR's labels at the moment it merged (the R5 rule for every label)."""
+    MERGED = "2026-10-15T12:00:00Z"
+
+    def ev(self, kind, at, name):
+        return {"event": kind, "label": {"name": name}, "created_at": at}
+
+    def test_labeled_before_merge_is_listed_sorted(self):
+        evs = [self.ev("labeled", "2026-10-15T11:00:00Z", "skip-smoke"),
+               self.ev("labeled", "2026-10-15T10:00:00Z", "breaking-approved")]
+        self.assertEqual(waiver.labels_at(evs, self.MERGED), ["breaking-approved", "skip-smoke"])
+
+    def test_labeled_at_or_after_merge_is_not_listed(self):
+        evs = [self.ev("labeled", self.MERGED, "a"),
+               self.ev("labeled", "2026-10-15T12:00:01Z", "b")]
+        self.assertEqual(waiver.labels_at(evs, self.MERGED), [])
+
+    def test_removed_before_merge_is_not_listed(self):
+        evs = [self.ev("labeled", "2026-10-15T10:00:00Z", "a"),
+               self.ev("unlabeled", "2026-10-15T11:00:00Z", "a")]
+        self.assertEqual(waiver.labels_at(evs, self.MERGED), [])
+
+    def test_re_added_and_order_independent(self):
+        evs = [self.ev("labeled", "2026-10-15T11:30:00Z", "a"),
+               self.ev("unlabeled", "2026-10-15T11:00:00Z", "a"),
+               self.ev("labeled", "2026-10-15T10:00:00Z", "a")]
+        self.assertEqual(waiver.labels_at(evs, self.MERGED), ["a"])
+
+    def test_removed_after_merge_is_still_listed(self):
+        evs = [self.ev("labeled", "2026-10-15T10:00:00Z", "a"),
+               self.ev("unlabeled", "2026-10-15T13:00:00Z", "a")]
+        self.assertEqual(waiver.labels_at(evs, self.MERGED), ["a"])
+
+    def test_other_events_are_ignored(self):
+        evs = [{"event": "closed", "created_at": "2026-10-15T10:00:00Z"}]
+        self.assertEqual(waiver.labels_at(evs, self.MERGED), [])
+
+    def test_no_merge_time_fails(self):
+        with self.assertRaises(waiver.WaiverError):
+            waiver.labels_at([], None)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -234,5 +234,119 @@ class NewestRunMergeGuardTests(unittest.TestCase):
             self.merge(f)
 
 
+
+SDK_BLOCK = f"Notes.\n\n```breaking\nsdk-oldest -> core | {F1}\n```\n"
+PAIRS = "sdk-oldest -> core"
+
+
+class DeclaredPairsShapeTests(unittest.TestCase):
+    def shape(self, body, *names, pairs=PAIRS):
+        ev = {"pull_request": {"number": 7, "body": body, "labels": labels(*names)}}
+        with tmpdir() as d:
+            return call(["breaking-shape", "--event-file", write(d, "event.json", ev),
+                         "--config", write(d, "c.json", CFG_DICT), "--waiver-pairs", pairs])
+
+    def test_a_declared_pair_prints_the_list(self):
+        rc, out, err = self.shape(SDK_BLOCK, waiver.LABEL)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out),
+                         [{"consumer": "sdk-oldest", "provider": "core", "finding": F1}])
+
+    def test_without_the_flag_the_pair_is_still_refused(self):
+        ev = {"pull_request": {"number": 7, "body": SDK_BLOCK, "labels": labels(waiver.LABEL)}}
+        with tmpdir() as d:
+            rc, _, err = call(["breaking-shape", "--event-file", write(d, "event.json", ev),
+                               "--config", write(d, "c.json", CFG_DICT)])
+        self.assertEqual(rc, 1)
+        self.assertIn("not a configured contract", err)
+
+    def test_config_errors_in_the_list_are_exit_2(self):
+        for bad in ("gateway -> core", "sdk-oldest -> backned", "sdk-oldest->core",
+                    "sdk-oldest -> core, sdk-oldest -> core"):
+            rc, _, err = self.shape(SDK_BLOCK, waiver.LABEL, pairs=bad)
+            self.assertEqual(rc, 2, f"{bad}: {err}")
+
+
+class DeclaredPairsApprovalTests(unittest.TestCase):
+    EVENTS = [
+        {"event": "labeled", "label": {"name": waiver.LABEL}, "created_at": "2026-10-15T11:00:00Z"},
+        {"event": "labeled", "label": {"name": "skip-smoke"}, "created_at": "2026-10-15T11:30:00Z"},
+        {"event": "labeled", "label": {"name": "late"}, "created_at": "2026-10-15T12:05:00Z"},
+    ]
+
+    def world(self, body=SDK_BLOCK, names=(waiver.LABEL, "skip-smoke", "late"), merged_at=MERGED,
+              state="closed", events=None):
+        f = FakeGitHub()
+        f.repos["project"] = p = f.repo("project")
+        p.pr_objects[7] = {"number": 7, "state": state, "merged_at": merged_at, "body": body,
+                           "labels": labels(*names), "head": {"ref": "release/x", "sha": SHA_B}}
+        p.issue_events[7] = self.EVENTS if events is None else events
+        return f
+
+    def approve(self, f, *args):
+        with tmpdir() as d:
+            out = Path(d) / "labels.json"
+            rc, so, err = call(["breaking-approval", *args, "--config", write(d, "c.json", CFG_DICT),
+                                "--labels-out", str(out)], ENV, {"transport": f})
+            return rc, so, err, (json.loads(out.read_text()) if out.exists() else None)
+
+    def test_real_release_writes_the_labels_at_merge_time(self):
+        rc, out, err, lab = self.approve(self.world(), "--pr", "7", "--waiver-pairs", PAIRS)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)[0]["consumer"], "sdk-oldest")
+        self.assertEqual(lab, [waiver.LABEL, "skip-smoke"])
+
+    def test_real_release_without_a_block_still_lists_the_labels(self):
+        f = self.world(body="notes", names=("skip-smoke",), events=self.EVENTS[1:2])
+        rc, out, err, lab = self.approve(f, "--pr", "7")
+        self.assertEqual((rc, json.loads(out), lab), (0, [], ["skip-smoke"]), err)
+
+    def test_rehearsal_writes_the_open_prs_current_labels(self):
+        f = self.world(merged_at=None, state="open", events=[])
+        rc, out, err, lab = self.approve(f, "--head-branch", "release/x", "--waiver-pairs", PAIRS)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(lab, sorted([waiver.LABEL, "skip-smoke", "late"]))
+
+    def test_a_refused_run_writes_no_labels_file(self):
+        f = self.world(names=())
+        rc, _, _, lab = self.approve(f, "--pr", "7", "--waiver-pairs", PAIRS)
+        self.assertEqual((rc, lab), (1, None))
+
+    def test_without_the_flags_stdout_is_todays_list(self):
+        f = self.world(body=BLOCK)
+        with tmpdir() as d:
+            rc, out, err = call(["breaking-approval", "--pr", "7", "--config",
+                                 write(d, "c.json", CFG_DICT)], ENV, {"transport": f})
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, waiver.to_json([waiver.Entry("gateway", "core", F1)]) + "\n")
+
+    def test_bad_pairs_are_exit_2(self):
+        rc, _, _, _ = self.approve(self.world(), "--pr", "7", "--waiver-pairs", "gateway -> core")
+        self.assertEqual(rc, 2)
+
+
+class DeclaredPairsMatrixTests(unittest.TestCase):
+    ENTRY = [{"consumer": "sdk-oldest", "provider": "core", "finding": F1}]
+
+    def matrix(self, pairs, breaking=None):
+        with tmpdir() as d:
+            return call(["breaking-matrix", "--breaking", json.dumps(breaking or self.ENTRY),
+                         "--checks", "[]", "--waiver-pairs", pairs,
+                         "--config", write(d, "c.json", CFG_DICT)])
+
+    def test_a_declared_pair_with_no_checks_is_exit_0(self):
+        rc, out, err = self.matrix(PAIRS)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out), self.ENTRY)
+
+    def test_an_undeclared_pair_is_exit_1(self):
+        rc, _, _ = self.matrix("sdk-newest -> core")
+        self.assertEqual(rc, 1)
+
+    def test_malformed_overlapping_or_unknown_provider_is_exit_2(self):
+        for bad in ("sdk-oldest->core", "gateway -> core", "sdk-oldest -> backned"):
+            self.assertEqual(self.matrix(bad)[0], 2, bad)
+
+
 if __name__ == "__main__":
     unittest.main()
