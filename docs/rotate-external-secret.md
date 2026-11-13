@@ -54,6 +54,11 @@ Either way the old value stays valid until a successful promote plus the grace p
 chosen branch and planned calls. It makes no write call: no PUT, DELETE, secret set, variable set
 or workflow dispatch.
 
+The state read keeps only what `gh variable get` writes to stdout. Its stderr is read only to
+classify a failure: a 404 is the empty bootstrap state, and any other error fails the step. A
+warning `gh` prints on a successful read (an update notice, a deprecation) never becomes part of
+the stored state.
+
 The new value is masked the moment it is generated, lives only in a `0600` file under
 `$RUNNER_TEMP` that is shredded in an `always()` step, and reaches `gh secret set` on stdin and
 Cloudflare through `curl --data @-`. It is never an output, an env var or a summary line.

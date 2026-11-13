@@ -2,8 +2,9 @@
 
 ## Index
 
-141 entries total — 131 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+142 entries total — 132 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-13` — [rotate-external-secret: state read stores stdout only (stderr warning no longer corrupts state)](#2026-11-13--rotate-external-secret-state-read-stores-stdout-only-stderr-warning-no-longer-corrupts-state)
 - `2026-11-13` — [TODO.md re-org: triage verified against code, closed items evidenced](#2026-11-13--todomd-re-org-triage-verified-against-code-closed-items-evidenced)
 - `2026-11-12` — [image-identity action: prove same image bytes by tarball hash, never docker .Id (v6.2.0)](#2026-11-12--image-identity-action-prove-same-image-bytes-by-tarball-hash-never-docker-id-v620)
 - `2026-11-03` — [Release fast-track: publish retries polling reads, ci-verdict action, release-flow propose (v6.1.0, unreleased)](#2026-11-03--release-fast-track-publish-retries-polling-reads-ci-verdict-action-release-flow-propose-v610-unreleased)
@@ -257,6 +258,17 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-13 — rotate-external-secret: state read stores stdout only (stderr warning no longer corrupts state)
+
+**What:** `actions/rotate-external-secret/read-state.sh` now keeps only `gh variable get`'s stdout as state. stderr goes to a temp file and is read only to classify a failure (404 = empty bootstrap state; anything else fails the step with the stderr text). A warning on a successful read is surfaced as a `::notice::` and not stored. The spec (`docs/rotate-external-secret.md`) now states this rule.
+
+**RCA**
+- **Symptom:** latent; no live incident recorded. If `gh` prints a warning on stderr and exits 0 (an update notice, a deprecation), the warning text is prepended to the stored state, e.g. `A new release of gh is available{"current":"SIG_A",…}`. `decide.sh` then refuses the state as bad JSON, so rotation stops until someone edits the variable by hand.
+- **Root cause:** `OUT=$(gh … 2>&1)` merged stderr into the value that was used as data. The `2>&1` was there so the failure branch could grep for "404"; the success branch reused the same merged capture.
+- **Why it wasn't caught:** the test `gh` stub wrote to stderr only on failure, so no case had stderr output on a successful read. The same bug class shipped in a consumer's release workflow on 2026-11-11 (rule: claude-config `skills/github-actions` §3d).
+- **Fix:** capture stdout only (`2>"$ERRF"`); read `$ERRF` only on failure. A red-first test feeds a stub that warns on stderr and exits 0, and a second test checks that the stderr text appears in the error message.
+- **Prevention:** a sweep of `actions/`, `.github/workflows/` and `scripts/` for `$(… 2>&1)` found one other capture: `distribute-env-secrets.yml:196`. It sends stdout to /dev/null and uses stderr only as the error text, which is the correct shape.
 
 ## 2026-11-13 — TODO.md re-org: triage verified against code, closed items evidenced
 

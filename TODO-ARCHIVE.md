@@ -15,6 +15,7 @@ closed items from live sections are archived too, under a dated heading at the e
 - [Secret Manager](#secret-manager) — 4 closed
 - [Archived 2026-10-29 (closed items from live sections)](#archived-2026-10-29-closed-items-from-live-sections) — 30 closed
 - [rotate-cloudflare-token — the verify error blames the token for a header-format failure — ✅ DONE 2026-11-02 (opened 2026-11-01)](#rotate-cloudflare-token--the-verify-error-blames-the-token-for-a-header-format-failure---done-2026-11-02-opened-2026-11-01) — 1 closed
+- [Archived 2026-11-13 (TODO re-org + read-state fix)](#archived-2026-11-13-todo-re-org--read-state-fix) — 9 closed
 
 ## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
 
@@ -568,3 +569,13 @@ its original `TODO.md` section. Text is verbatim.
   2026-11-01). Closed 2026-11-02: the step names the empty-secret / malformed-header / other
   causes and lists Cloudflare's own codes. Spec `docs/rotate-cloudflare-token.md` "When the verify
   step fails"; test `cf_token_verify_cases` in `tests/run_step_tests.py`.
+
+## Archived 2026-11-13 (TODO re-org + read-state fix)
+
+- [x] The 2026-11-13 re-org (#186) closed 4 DONE + 4 OBSOLETE items. Each one is a row, with its
+  evidence (commit, PR or file:line), in `plans/2026-11-13-todo-triage.md`; their full text is in
+  `git show c5131d3:TODO.md`.
+- [x] `actions/rotate-external-secret/read-state.sh` stored `gh` stderr warnings as state. Closed
+  2026-11-13 (#187): stdout only, stderr classifies a failure. Spec `docs/rotate-external-secret.md`;
+  test "a gh stderr warning on success is not stored as state" in `tests/run_rotate_external_tests.py`;
+  RCA in DECISIONS 2026-11-13.

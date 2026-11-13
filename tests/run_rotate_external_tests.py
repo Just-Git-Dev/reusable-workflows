@@ -263,6 +263,15 @@ def gh_cases():
         check("read-state: a missing variable (404) is empty state, not an error", r["rc"] == 0 and outs(r["outputs"]).get("state_json") == "", r["out"] + r["outputs"])
         r = run(body, base, stubs='gh() { echo "HTTP 500: boom" >&2; return 1; }\n')
         check("read-state: any other API error fails the step", r["rc"] != 0, r["out"])
+        # docs/rotate-external-secret.md: a stderr warning on a successful read is not state.
+        warn = ('gh() { echo "GH $*" >> /tmp/calls; echo "A new release of gh is available" >&2;'
+                ' cat /tmp/var.json; }\n')
+        r = run(body, base, files={"var.json": '{"current":"SIG_A","pending":"","rotated_at":5}'}, stubs=warn)
+        check("read-state: a gh stderr warning on success is not stored as state",
+              r["rc"] == 0 and outs(r["outputs"]).get("state_json") == '{"current":"SIG_A","pending":"","rotated_at":5}',
+              r["out"] + r["outputs"])
+        r = run(body, base, stubs='gh() { echo "HTTP 500: boom" >&2; return 1; }\n')
+        check("read-state: the error message names the gh stderr", r["rc"] != 0 and "HTTP 500: boom" in r["out"], r["out"])
     body = step("Write environment secret")
     if body is not None:
         pre = 'mkdir -p "$RUNNER_TEMP/rotate-external"; printf %s "v4lue-xyz" > "$RUNNER_TEMP/rotate-external/new-secret"\n'
