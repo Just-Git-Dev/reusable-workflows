@@ -234,6 +234,47 @@ def test_scan_flags_a_missing_stamp():
 
 
 # --------------------------------------------------------------------------
+# the gate asserts its own COVERAGE: a pin outside the swept set must fail --check
+
+def test_coverage_flags_an_unswept_file_with_a_pin():
+    texts = {
+        "docs/a.md": "uses: Just-Git-Dev/reusable-workflows/actions/x@v1.2.3\n",
+        "ops/new.yml": "    uses: Just-Git-Dev/reusable-workflows/.github/workflows/ci-go.yml@v1.2.3\n",
+        "notes.txt": "no pin here, only `uses: .../reusable-workflows/...@` prose\n",
+    }
+    problems = S.coverage_problems(texts, swept={"docs/a.md"}, exempt={})
+    check("coverage: unswept pin file reported", [p for p in problems if "ops/new.yml" in p] != [], True)
+    check("coverage: swept file not reported", any("docs/a.md" in p for p in problems), False)
+    check("coverage: prose without a ref not reported", any("notes.txt" in p for p in problems), False)
+
+
+def test_coverage_catches_shapes_pin_re_misses():
+    # Not matched by PIN_RE (branch ref, quoted, a SHA) but still a pin shape.
+    texts = {
+        "a.yml": "    uses: Just-Git-Dev/reusable-workflows/actions/x@main\n",
+        "b.yml": "    uses: 'Just-Git-Dev/reusable-workflows/actions/x@v1'\n",
+        "c.yml": "    uses: Just-Git-Dev/reusable-workflows/actions/x@" + "a" * 40 + "\n",
+    }
+    problems = S.coverage_problems(texts, swept=set(), exempt={})
+    check("coverage: loose shapes all reported", sorted(p.split(":")[0] for p in problems), ["a.yml", "b.yml", "c.yml"])
+
+
+def test_coverage_exemptions():
+    texts = {"tests/fixture.py": "uses: Just-Git-Dev/reusable-workflows/actions/x@v1.2.3\n"}
+    check("coverage: exempt file passes",
+          S.coverage_problems(texts, swept=set(), exempt={"tests/fixture.py": "fixture"}), [])
+    stale = S.coverage_problems({"tests/fixture.py": "nothing\n"}, swept=set(),
+                                exempt={"tests/fixture.py": "fixture"})
+    check("coverage: exemption that no longer needs it is reported", len(stale), 1)
+
+
+def test_repo_coverage_is_complete():
+    problems, examined = S.scan_coverage(ROOT)
+    check("repo coverage: no unswept pin file", problems, [])
+    check("repo coverage: examined a real file set", examined > 100, True)
+
+
+# --------------------------------------------------------------------------
 # RELEASE_FLOW_TREE: the content pin of actions/release-flow (docs/release-flow.md)
 
 T0 = "0" * 40
@@ -309,6 +350,10 @@ def main():
         test_tree_must_be_40_hex,
         test_tree_problems,
         test_scan_collects_trees,
+        test_coverage_flags_an_unswept_file_with_a_pin,
+        test_coverage_catches_shapes_pin_re_misses,
+        test_coverage_exemptions,
+        test_repo_coverage_is_complete,
     ]:
         print(f"{fn.__name__}:")
         fn()
