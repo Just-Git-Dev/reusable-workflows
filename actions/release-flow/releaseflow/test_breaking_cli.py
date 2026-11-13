@@ -301,6 +301,20 @@ class DeclaredPairsApprovalTests(unittest.TestCase):
         rc, out, err, lab = self.approve(f, "--pr", "7")
         self.assertEqual((rc, json.loads(out), lab), (0, [], ["skip-smoke"]), err)
 
+    def test_real_release_without_a_block_ignores_a_label_added_after_the_merge(self):
+        late = [{"event": "labeled", "label": {"name": "skip-smoke"},
+                 "created_at": "2026-10-15T12:00:03Z"}]
+        f = self.world(body="notes", names=("skip-smoke",), events=late)
+        rc, out, err, lab = self.approve(f, "--pr", "7")
+        self.assertEqual((rc, json.loads(out), lab), (0, [], []), err)
+
+    def test_real_release_without_a_block_fails_when_the_events_read_fails(self):
+        f = self.world(body="notes", names=("skip-smoke",))
+        f.fail.append(("GET", r"issues/7/events", 500))
+        rc, _, err, lab = self.approve(f, "--pr", "7")
+        self.assertEqual((rc, lab), (1, None))
+        self.assertIn("label events", err)
+
     def test_rehearsal_writes_the_open_prs_current_labels(self):
         f = self.world(merged_at=None, state="open", events=[])
         rc, out, err, lab = self.approve(f, "--head-branch", "release/x", "--waiver-pairs", PAIRS)

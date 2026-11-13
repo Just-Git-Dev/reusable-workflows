@@ -336,6 +336,11 @@ class LabelsAtTests(unittest.TestCase):
                self.ev("unlabeled", "2026-10-15T13:00:00Z", "a")]
         self.assertEqual(waiver.labels_at(evs, self.MERGED), ["a"])
 
+    def test_a_post_merge_event_listed_first_does_not_hide_earlier_ones(self):
+        evs = [self.ev("labeled", "2026-10-15T13:00:00Z", "late"),
+               self.ev("labeled", "2026-10-15T10:00:00Z", "a")]
+        self.assertEqual(waiver.labels_at(evs, self.MERGED), ["a"])
+
     def test_other_events_are_ignored(self):
         evs = [{"event": "closed", "created_at": "2026-10-15T10:00:00Z"}]
         self.assertEqual(waiver.labels_at(evs, self.MERGED), [])
