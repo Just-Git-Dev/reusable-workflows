@@ -39,7 +39,9 @@ or not checked.
   same anchor").
 - **Semver:** minor, **v6.3.0** (latest tag v6.2.0, VERIFIED `git tag`; 5 commits since, none
   changing an input contract per their titles — titles only, UNVERIFIED in diff). Existing callers
-  pass no `waiver_pairs` and behave exactly as before. The CLI tree changes, so
+  pass no `waiver_pairs` and get the same approval results, with one difference: a real release
+  now always reads the PR's issue events (the `labels` output), so a failed events read blocks a
+  release that v6.2.x would have passed. The CLI tree changes, so
   `RELEASE_FLOW_TREE` is restamped in the PR (§6 Wave 4). Release only on the owner's explicit ask.
 
 ## 2. Owner questions (only what the ruling leaves open)
@@ -242,8 +244,11 @@ CHANGELOG.md — VERIFIED `ls`, and `git log -- CHANGELOG.md` is empty)
 > input: caller-declared `consumer -> provider` pairs (not `contracts` pairs) whose breaks the
 > `breaking-approved` label + ```` ```breaking ```` block can approve. The caller's own stage
 > applies the list with `spec-compat --pair … --consumer-side live`. `release-plan` gains a
-> `labels` output (the release PR's labels [Q3 wording]). A caller that passes neither input
-> behaves exactly as on v6.2.0. To adopt: move the pin to `v6.3.0`, pass the same
+> `labels` output (the release PR's labels at merge time, from label events replayed strictly
+> before `merged_at`). A caller that passes no `waiver_pairs` gets the same approval results as on
+> v6.2.x, with one difference: a real release now always reads the PR's issue events (before, only
+> when a `breaking` block existed), so a failed events read blocks a release that v6.2.x would
+> have passed. To adopt: move the pin to `v6.3.0`, pass the same
 > `waiver_pairs` to both calls, and drop any caller-owned labels job.
 
 At release time a separate DECISIONS entry "`v6.3.0` released" follows the `v3.5.0` pattern

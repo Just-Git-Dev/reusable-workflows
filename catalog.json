@@ -3512,7 +3512,7 @@
         "breaking": "JSON [{consumer, provider, finding}] approved by the breaking-approved label ([] without it); pass to spec-compat as RELEASE_BREAKING",
         "checks": "JSON list for a matrix include; [] when no contract involves a listed service",
         "ci-filters": "JSON {repo/workflow@sha: {kind, globs}}: the push path filters ci-green read; release-drafts re-checks with them (its write job parses no YAML)",
-        "labels": "JSON list of the release PR's label names at the moment it merged (events replayed up to merged_at); a rehearsal reads the open PR's current labels, and [] without manifest-ref",
+        "labels": "JSON list of the release PR's label names at the moment it merged (events replayed strictly before merged_at); a rehearsal reads the open PR's current labels, and [] without manifest-ref",
         "manifest": "The manifest path",
         "manifest-sha256": "sha256 of the manifest file; every later stage checks the staged artifact against it",
         "order": "Listed repos in publish order, comma-separated",

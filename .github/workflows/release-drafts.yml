@@ -70,7 +70,7 @@ env:
   # the tag. A called workflow cannot discover its own ref at runtime.
   WORKFLOW_VERSION: v6.2.1
   # Git tree hash of actions/release-flow at that release; every job refuses any other CLI.
-  RELEASE_FLOW_TREE: "02ea531cb19ee9b7400027b700edde14654fdd3d"
+  RELEASE_FLOW_TREE: "340c419c1e9d43b39d1467817489d20a8b96ade6"
 
 defaults:
   run:
