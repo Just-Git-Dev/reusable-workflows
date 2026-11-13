@@ -2,8 +2,9 @@
 
 ## Index
 
-140 entries total — 130 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+141 entries total — 131 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-13` — [TODO.md re-org: triage verified against code, closed items evidenced](#2026-11-13--todomd-re-org-triage-verified-against-code-closed-items-evidenced)
 - `2026-11-12` — [image-identity action: prove same image bytes by tarball hash, never docker .Id (v6.2.0)](#2026-11-12--image-identity-action-prove-same-image-bytes-by-tarball-hash-never-docker-id-v620)
 - `2026-11-03` — [Release fast-track: publish retries polling reads, ci-verdict action, release-flow propose (v6.1.0, unreleased)](#2026-11-03--release-fast-track-publish-retries-polling-reads-ci-verdict-action-release-flow-propose-v610-unreleased)
 - `2026-11-02` — [rotate-cloudflare-token: the verify failure names its cause (6003/6111 malformed header, empty secret)](#2026-11-02--rotate-cloudflare-token-the-verify-failure-names-its-cause-60036111-malformed-header-empty-secret)
@@ -256,6 +257,16 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-13 — TODO.md re-org: triage verified against code, closed items evidenced
+
+**What:** TODO.md reorganized: 469 → 242 lines. A ranked Index now sits at the top, followed by ready work grouped by theme, then waiting items, a "belongs elsewhere" list and a reference section. 4 items closed as DONE and 4 as OBSOLETE; each closure has evidence in `plans/2026-11-13-todo-triage.md`. Several items had been closed by commits without ever being ticked. For example, 360d70a (#90) shipped provenance + sbom inputs and ruled out a ruleset for the release gate.
+
+**Why:** the file had grown into a mixed log of history, live work and facts, so "what can we pick up?" had no quick answer. Each item was verified against the code and git, not against its own wording.
+
+**Ruling recorded here (previously only in TODO prose): do not build consumer monitoring (2026-08-11).** A scheduled caller-drift scan was built and de-scoped the same day. This repo is public and most callers are private, so an org-wide scanner shipped from a public repo is the wrong trade.
+
+**Trap:** read commit bodies as well as the TODO when triaging; a commit can close an item without ticking it.
 
 ## 2026-11-12 — image-identity action: prove same image bytes by tarball hash, never docker .Id (v6.2.0)
 
