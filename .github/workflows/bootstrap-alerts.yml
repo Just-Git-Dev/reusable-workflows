@@ -74,6 +74,11 @@ on:
         type: boolean
         required: false
         default: false
+      environment:
+        description: "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment."
+        type: string
+        required: false
+        default: ''
     outputs:
       channel_name:
         description: 'Resolved notification-channel resource name.'
@@ -112,6 +117,8 @@ env:
 jobs:
   apply:
     runs-on: ubuntu-latest
+    # '' must mean NO environment; the `|| null` form guarantees it (same as bootstrap-cf-service).
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
     timeout-minutes: 10
     defaults:
       run:
