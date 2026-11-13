@@ -12,16 +12,16 @@
 - **Projects do:** adopt it themselves. Each project re-vendors, runs `runners`, pins, and swaps its `.Id` check for the action; devops sends each one the steps. No edits in project repos from here.
 
 ## Checklist ("done" = ticked with evidence)
-- [ ] 1. U1 docs: SKILL.md gains a `## \`runners\`` section with a code table, plus the `runners` key in the config key table.
-- [ ] 2. U1 red tests: written and confirmed failing.
-- [ ] 3. U1 implementation: the suite is green (174 existing tests plus the new ones), and a mutation check shows each new code is killed by a test.
-- [ ] 4. U2 docs: `docs/image-identity.md`, including an example the `doc-examples` CI job extracts; a README catalog line.
-- [ ] 5. U2 red tests: written and confirmed failing.
-- [ ] 6. U2 implementation: `make ci` is green, plus actionlint and pinned-actions.
-- [ ] 7. Re-vendor workflow-preflight into reusable-workflows and infra-provisioning (both are on the stale 7be1b9f). Run `runners` on both and record what it finds.
-- [ ] 8. DECISIONS entries: the claude-config `DECISIONS.md` for U1; reusable-workflows `DECISIONS.md` for U2.
-- [ ] 9. reusable-workflows PR: owner merges, stamp v6.2.0, owner dispatches the release. Tick the stale :111/:112 boxes of plans/2026-11-03-release-fast-track.md in the same PR.
-- [ ] 10. Adoption steps sent to consumers A, B and C; each project confirms back.
+- [x] 1. U1 docs: SKILL.md gains a `## \`runners\`` section with a code table, plus the `runners` key in the config key table. Evidence: claude-config SKILL.md `## \`runners\`` (one heading).
+- [x] 2. U1 red tests: written and confirmed failing. Evidence: 25 of 29 new tests failed with `invalid choice: 'runners'` (claude-config DECISIONS 5ed7f93; code fce70e6).
+- [x] 3. U1 implementation: the suite is green (174 existing tests plus the new ones), and a mutation check shows each new code is killed by a test. Evidence: 203 tests OK, re-run 2026-11-12; mutation result in claude-config DECISIONS (5ed7f93).
+- [x] 4. U2 docs: `docs/image-identity.md`, including an example the `doc-examples` CI job extracts; a README catalog line. Evidence: #181 (f23657a), `doc examples are valid workflows` green.
+- [x] 5. U2 red tests: written and confirmed failing. Evidence: written before identity.py in the same unit; the red run itself is not recorded in a durable file.
+- [x] 6. U2 implementation: `make ci` is green, plus actionlint and pinned-actions. Evidence: #181 18/18 checks green; `tests/test_image_identity.py` 20 tests OK; cross-store CI run 43184510752.
+- [x] 7. Re-vendor workflow-preflight into reusable-workflows and infra-provisioning (both are on the stale 7be1b9f). Run `runners` on both and record what it finds. Evidence: #181 and infra-provisioning #133 (cf0f664); `runners` on main 2026-11-12: this repo 79 jobs in 47 workflows, 0 findings; infra-provisioning 12 jobs in 8 workflows, 0 findings. This repo's only save/load pair (ci.yml) uses the action, so its 0 is the blind kind described in docs/image-identity.md.
+- [x] 8. DECISIONS entries: the claude-config `DECISIONS.md` for U1; reusable-workflows `DECISIONS.md` for U2. Evidence: claude-config 5ed7f93 (the code is fce70e6); this repo's entry "image-identity action: prove same image bytes by tarball hash" (#181).
+- [x] 9. reusable-workflows PR: owner merges, stamp v6.2.0, owner dispatches the release. Tick the stale :111/:112 boxes of plans/2026-11-03-release-fast-track.md in the same PR. Evidence: #181 merged (f23657a, both boxes ticked there); stamp #182 merged (a482997); release.yml run 43206206958 tagged v6.2.0 → a482997, Release published 2026-11-12.
+- [ ] 10. Adoption steps sent to consumers A, B and C; each project confirms back. Status 2026-11-12: steps sent; all three confirmed adoption (per their own reports, not checked from here) (lint re-vendored, each lint caught the old pattern on the pre-fix workflow and reports 0 on the new one, `.Id` compare replaced by this action). Open: one green release or rehearsal run id from each, which each consumer sends after its next release.
 
 ## U1: `workflow_preflight.py runners`
 Structural parse, reusing the existing helpers: `parse_workflow_text` :197, `steps_of` :228, `step_strings` :241, `job_strings` :1309, `needs_of`/`reaches` :1336/1341. `runs-on` is read from `job["runs-on"]`.

@@ -156,6 +156,31 @@ This action never reads `.Id`. The tarball's layout differs by store, but the co
 read from its `manifest.json` does not, and the tarball's sha256 is the proof the bytes did not
 change between the jobs.
 
+## The runner lint after adoption
+
+The workflow-preflight `runners` lint reads `docker save`, `docker load`, `docker image inspect`
+and `{{.Id}}` only in a job's own `run:` steps, never inside a `uses:` action. Its silence about
+the docker work inside this action is correct, because the action does not depend on the image
+store. But it means a `0 findings` from the lint no longer proves your own steps are right:
+
+- **Delete every `.Id` read when you switch.** The lint flags `{{.Id}}` only when it comes after
+  a `docker load` in the same job's `run:` text. Once the load happens inside this action, a
+  leftover `.Id` comparison is not flagged, and `verify` does not check it either.
+- **Every job that loads the tarball must call `mode: verify`.** The lint finds the saving job by
+  its own `docker save`. Once that job calls `record`, the runner-split check no longer sees the
+  pair, so a loader that skips `verify` gets neither a finding nor a hash check.
+- A job that calls the action and also runs `docker load`, `docker save` or
+  `docker image inspect` itself is still checked for those steps as before.
+
+For that pair, `verify` is then the only check that both jobs handled the same bytes. To show the
+lint did work on your tree, run it once on the workflow from before the switch, in a scratch copy
+of the repo with the old file in `.github/workflows/`:
+`python3 scripts/workflow_preflight.py runners`. Read the `WARN` lines and the
+`runners: examined … K findings` line: in report-only mode the final `ok:` line reads
+`0 finding(s)` even when the lint fired. If the old workflow read the digest some other way
+(`{{.ID}}`, a jq read, save and load in different workflows), the lint misses it there too, so
+check that by hand.
+
 ## Verification
 
 `tests/test_image_identity.py` (`make image-identity`) builds tarballs in both layouts by hand,
