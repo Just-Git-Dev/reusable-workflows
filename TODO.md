@@ -1,12 +1,13 @@
 # TODO — reusable-workflows
 
 ## Index
-35 open across 15 live sections. 47 closed items archived.
+37 open across 16 live sections. 47 closed items archived.
 
 Status is the section's own, not per item; keep it current by hand when a
 section opens or closes. Closed sections live in
 [TODO-ARCHIVE.md](TODO-ARCHIVE.md) — same log, split by state only.
 
+- **PROPOSED** — [Release flow — waivers beyond `contracts` pairs (opened 2026-11-13)](#release-flow--waivers-beyond-contracts-pairs-opened-2026-11-13) — 2 open (record only; build needs the owner)
 - **ACTIVE** — [Rotate external secret — state read absorbs stderr (opened 2026-11-12)](#rotate-external-secret--state-read-absorbs-stderr-opened-2026-11-12) — 1 open
 - **ACTIVE** — [Release flow — ci-green cannot model an `on.push.paths` allowlist (opened 2026-11-01)](#release-flow--ci-green-cannot-model-an-onpushpaths-allowlist-opened-2026-11-01) — 1 open
 - **ACTIVE** — [App-token mint — `app-id` input is deprecated upstream (opened 2026-10-28)](#app-token-mint--app-id-input-is-deprecated-upstream-opened-2026-10-28) — 0 open (built for v6.0.0)
@@ -22,6 +23,22 @@ section opens or closes. Closed sections live in
 - **ACTIVE** — [Build-once, promote-to-prod](#build-once-promote-to-prod) — 5 open
 - **ACTIVE** — [Convergence — remaining work](#convergence--remaining-work) — 6 open
 - **REFERENCE** — [Convergence — operating facts that live nowhere else in this repo](#convergence--operating-facts-that-live-nowhere-else-in-this-repo) — 2 open
+
+## Release flow — waivers beyond `contracts` pairs (opened 2026-11-13)
+
+A consumer added its own release stage (the candidate service must pass a suite against the
+oldest supported PUBLISHED client SDK) and wants it waivable like a spec break. Today it cannot
+be: `waiver.py` R1 refuses a `breaking-approved` label without a `breaking` block, and R2 accepts
+only pairs listed in services.json `contracts` (`waiver.py:108`). So the consumer runs its own
+waiver (a CHANGELOG line plus a separate owner label) and an extra `pull-requests: read` job that
+calls `gh api repos/{repo}/commits/$GITHUB_SHA/pulls` just to read the PR's labels. Recorded at
+the consumer's request; not ruled, not built.
+
+- [ ] Plan stage outputs the merged release PR's label list (today it exposes only `resolved`,
+  `checks` and `breaking`; `release-plan.yml:104-110`), so a caller needs no labels job of its own.
+- [ ] Caller-declared waiver kinds (working name: a `waiver_pairs` input), so a non-`contracts`
+  break is waived through the same R1-R3 path as a spec break. Design question for the owner:
+  how R3's "a live check entry per listed pair" applies to a kind that has no `checks` entry.
 
 ## Rotate external secret — state read absorbs stderr (opened 2026-11-12)
 
