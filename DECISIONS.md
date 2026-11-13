@@ -2,8 +2,10 @@
 
 ## Index
 
-143 entries total — 133 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+145 entries total — 135 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-13` — [Owner ruling: third-party image mirror and probe parked until the next upstream-image outage](#2026-11-13--owner-ruling-third-party-image-mirror-and-probe-parked-until-the-next-upstream-image-outage)
+- `2026-11-13` — [Owner ruling: release-flow waivers extend to caller-declared pairs (waiver_pairs) + plan outputs PR labels](#2026-11-13--owner-ruling-release-flow-waivers-extend-to-caller-declared-pairs-waiver_pairs--plan-outputs-pr-labels)
 - `2026-11-13` — [Owner rulings on TODO triage questions (RW3-RW6)](#2026-11-13--owner-rulings-on-todo-triage-questions-rw3-rw6)
 - `2026-11-13` — [rotate-external-secret: state read stores stdout only (stderr warning no longer corrupts state)](#2026-11-13--rotate-external-secret-state-read-stores-stdout-only-stderr-warning-no-longer-corrupts-state)
 - `2026-11-13` — [TODO.md re-org: triage verified against code, closed items evidenced](#2026-11-13--todomd-re-org-triage-verified-against-code-closed-items-evidenced)
@@ -259,6 +261,18 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-13 — Owner ruling: third-party image mirror and probe parked until the next upstream-image outage
+
+**Owner words:** "let it be for now - we will get to it if we have an outage again in future."
+
+**Ruling:** neither a third-party image mirror nor the image-resolve probe is built now. Both are parked in TODO "Third-party image vanishing upstream", and the trigger to revisit is the next outage caused by a pinned image disappearing upstream. The open choices are recorded there: GAR or GHCR for a mirror, and whether to build the probe first. **Why:** one incident so far (MinIO, 2026-09-24), and the owner prefers to spend effort elsewhere until it recurs.
+
+## 2026-11-13 — Owner ruling: release-flow waivers extend to caller-declared pairs (waiver_pairs) + plan outputs PR labels
+
+**Owner words:** "B".
+
+**Ruling:** build caller-declared waiver kinds. A new optional `waiver_pairs` input declares non-`contracts` pairs that the same breaking-approved label waives through R1-R3. For such a pair, R3 ("a live check entry per listed pair") is satisfied by its presence in the caller-declared list. The plan stage also outputs the merged release PR label list, so a caller needs no labels job of its own. Rejected: A (each consumer keeps its own labels job and stage, which duplicates the waiver logic) and C (a stub `checks` entry per kind: heavier for callers, no extra safety). **Why:** R3 exists to stop approvals of something unchecked or stale, and a declared list gives the same anchor. Minor version; existing callers are unaffected.
 
 ## 2026-11-13 — Owner rulings on TODO triage questions (RW3-RW6)
 

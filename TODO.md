@@ -17,8 +17,8 @@ day, M about a day, L several.
 9. **S then M** — `TODO.md:"delayed destruction"` — spike (a)-(c) before any build.
 10. **M** — `TODO.md:"Audit the remaining gates"` — derived comparands / assumed scopes.
 11. **M** — `TODO.md:"when they are on an old version"` — needs its three questions answered first.
-12. **M** — `TODO.md:"every pinned image in the fleet still resolves"` — caller-invoked probe.
-13. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
+12. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
+13. **M** — `TODO.md:"Caller-declared waiver kinds"` — owner-ruled 2026-11-13 (option B); minor version.
 
 Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
 
@@ -46,6 +46,17 @@ Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
       cheaper and catches all of them at once. Size S.
 
 ## Ready — release flow
+
+- [ ] **Caller-declared waiver kinds (`waiver_pairs`) + plan outputs the PR label list.** Ruling
+      (owner 2026-11-13, option B): a new optional `waiver_pairs` input lets a caller declare
+      non-`contracts` pairs (e.g. a consumer's "oldest published client SDK" stage) that the
+      same breaking-approved label waives through the R1-R3 path; R3's "a live check entry per
+      listed pair" is satisfied by the pair being in the caller's declared `waiver_pairs` list.
+      The plan stage also outputs the merged release PR's label list, so a caller needs no labels
+      job of its own. Minor version (new optional input; no change for existing callers). Today
+      `waiver.py` R1/R2 accept only services.json `contracts` pairs (per this item; verify in
+      the plan). Spec: `plans/2026-10-15-breaking-approved-waiver.md` R1-R3 + `docs/release-flow.md`.
+      Size M.
 
 - [ ] `docs/release-flow.md` §Contract checks/Smoke — say which ref the smoke SPECS come from.
       "Against the resolved refs and images" is silent on it, and a consumer whose e2e specs
@@ -118,34 +129,12 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
       plan: which workflows carry it (all, or only the deploy paths — one API call per run);
       whether it needs a token (`/releases/latest` is public but rate-limited by runner IP, so it
       must degrade silently); an opt-out input for callers who deliberately hold a pin. Size M.
-- [ ] **Scheduled probe: every pinned image in the fleet still resolves.** A reusable workflow,
-      run by each caller on its own repo, that greps compose/Dockerfile/workflow refs and runs
-      `docker manifest inspect` on each, with a positive-control ref, so "couldn't check" never
-      reads as "all fine". Same three-outcome shape as `verify-metrics-arrival`. Not an org-wide
-      scanner (see `TODO.md:"Do not build consumer monitoring"`). Background: a third-party image
-      vanishing from its public registry breaks every pinned consumer at once, and local stacks
-      hide it from the image cache (MinIO, 2026-09-24: `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z`,
-      `quay.io/minio/mc:latest` and `minio/minio:latest` all failed `docker manifest inspect`).
-      Size M.
 - [ ] **`validate-alerts`: four checks have no dedicated test** — `combiner`, the channel
       placeholder, the `autoClose` range, and the log-condition rate limit. Add one red-first case
       each (re-filed here 2026-11-13 from infra-provisioning's TODO, where it sat as a pointer).
       Size S.
 
 ## Waiting / blocked
-
-**On an owner ruling**
-- [ ] Release flow — plan stage outputs the merged release PR's label list (today it exposes
-      `resolved`, `checks`, `breaking` and others, no labels), so a caller needs no labels job of
-      its own. Recorded 2026-11-13 at a consumer's request (it wants its own "oldest published
-      client SDK" stage waivable like a spec break); not ruled, not built.
-- [ ] Release flow — caller-declared waiver kinds (working name: a `waiver_pairs` input), so a
-      non-`contracts` break is waived through the same R1-R3 path as a spec break (today
-      `waiver.py` R1/R2 accept only services.json `contracts` pairs). Design question for the
-      owner: how R3's "a live check entry per listed pair" applies to a kind with no `checks` entry.
-- [ ] **Mirror pinned third-party images into our own registry (GHCR or GAR).** Consumers pull
-      from the mirror, so an upstream withdrawal becomes a sync failure rather than an outage.
-      Owner to decide on the registry and which images are in scope.
 
 **On a consumer (live proofs)**
 - [ ] v6.0.0 ci-green `paths` allowlist: consumer C removes its `"paths_ignore": ["**"]`
@@ -189,6 +178,7 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
 
 **Parked**
 - [ ] Signed build attestations (option D in plans/provenance-and-release-gate.md) — parked; not planned until a consumer needs verifiable provenance.
+- [ ] **Third-party image vanishing upstream — mirror and probe both PARKED** (owner 2026-11-13: "let it be for now - we'll get to it if we have an outage again in future"). Trigger: the next outage caused by a pinned image disappearing upstream. Then decide (a) the registry for a mirror: GAR, which Cloud Run pulls from but laptops need `gcloud` auth for; or GHCR, which pulls anonymously but Cloud Run cannot pull from directly. And (b) whether to build first the caller-run probe: `docker manifest inspect` on every pinned compose/Dockerfile/workflow ref, with a positive-control ref and the three-outcome shape of `verify-metrics-arrival`, never an org-wide scanner. Background: MinIO, 2026-09-24: `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z`, `quay.io/minio/mc:latest` and `minio/minio:latest` all failed `docker manifest inspect`, and local stacks hid it behind the image cache.
 
 
 ## Reference — operating facts (not tasks)
