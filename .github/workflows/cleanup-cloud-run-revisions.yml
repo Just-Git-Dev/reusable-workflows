@@ -55,6 +55,11 @@ on:
         type: boolean
         required: false
         default: true
+      environment:
+        description: "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment."
+        type: string
+        required: false
+        default: ''
     outputs:
       candidates:
         description: 'Number of revisions selected for deletion by the plan.'
@@ -84,6 +89,8 @@ env:
 jobs:
   prune:
     runs-on: ubuntu-latest
+    # '' must mean NO environment; the `|| null` form guarantees it (same as bootstrap-cf-service).
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
     timeout-minutes: 30
     defaults:
       run:

@@ -24,8 +24,19 @@ use is skipped, not fatal.
 | `keep_last` | no | `10` | per service, retain this many of the most-recent inactive revisions |
 | `services` | no | `''` (all in region) | comma/space-separated list to limit to |
 | `dry_run` | no | **`true`** | print the plan only, delete nothing |
+| `environment` | no | `''` | the calling repo's GitHub environment the job runs in. Empty = no environment (existing callers unchanged); see [Running in an environment](#running-in-an-environment) |
 
 `dry_run` defaults to `true`. A caller that wants deletions has to say so.
+
+### Running in an environment
+
+A consumer that binds its GCP Workload Identity Federation to a main-only GitHub environment passes
+`environment: <name>`. A caller job that `uses:` this workflow cannot declare `environment:` itself,
+so the called job does: it is applied as the job-level `environment:` of the job that authenticates
+to GCP, and is no environment at all when the input is empty. With an environment the OIDC subject
+becomes `repo:<owner>/<repo>:environment:<name>` (not `...:ref:refs/heads/<branch>`), so the
+consumer's WIF binding (`principalSet` / attribute condition) must match that subject. The
+environment must exist in the calling repo, and its deployment-branch policy applies to the run.
 
 ## Outputs
 

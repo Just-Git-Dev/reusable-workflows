@@ -1184,6 +1184,30 @@ def manage_env_guard_cases():
     check("an already-existing svc-env is not a create", r["rc"] == 0, r["out"])
 
 
+ENV_FORM = "${{ inputs.environment != '' && inputs.environment || null }}"
+
+
+def environment_input_cases():
+    """Optional `environment` input: '' (default) = no environment, so existing callers are
+    unchanged; a name binds the GCP-authenticating job to it (the OIDC subject becomes
+    `...:environment:<name>`). The `|| null` form is the one bootstrap-cf-service.yml uses."""
+    import yaml
+    print("environment input · cleanup-gar-images, cleanup-cloud-run-revisions, bootstrap-alerts")
+    for wf, job in (("cleanup-gar-images", "cleanup"), ("cleanup-cloud-run-revisions", "prune"),
+                    ("bootstrap-alerts", "apply")):
+        doc = yaml.safe_load((ROOT / ".github" / "workflows" / f"{wf}.yml").read_text())
+        inp = (doc.get(True) or doc.get("on"))["workflow_call"]["inputs"].get("environment")
+        check(f"{wf}: has an optional string `environment` input",
+              bool(inp) and inp.get("type") == "string" and inp.get("required") is False, inp)
+        check(f"{wf}: `environment` defaults to '' (existing callers unchanged)",
+              bool(inp) and inp.get("default") == "", inp)
+        check(f"{wf}: job {job} applies it as a conditional job-level environment",
+              doc["jobs"][job].get("environment") == ENV_FORM, doc["jobs"][job].get("environment"))
+        text = (ROOT / "docs" / f"{wf}.md").read_text()
+        check(f"{wf}: doc names the input and the environment OIDC subject",
+              "`environment`" in text and ":environment:<name>" in text)
+
+
 def cf_token_verify_cases():
     """docs/rotate-cloudflare-token.md 'When the verify step fails': name the cause it can tell."""
     body = extract_step(CFTOKEN, "check", "Verify current CF API token is still valid")
@@ -4726,6 +4750,7 @@ def main():
     r2_publish_cases()
     cf_token_verify_cases()
     manage_env_guard_cases()
+    environment_input_cases()
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

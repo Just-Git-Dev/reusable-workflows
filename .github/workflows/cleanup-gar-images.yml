@@ -187,6 +187,11 @@ on:
         type: string
         required: false
         default: ''
+      environment:
+        description: "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment."
+        type: string
+        required: false
+        default: ''
     outputs:
       candidates:
         description: 'Number of image versions selected for deletion by the plan.'
@@ -216,6 +221,8 @@ env:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    # '' must mean NO environment; the `|| null` form guarantees it (same as bootstrap-cf-service).
+    environment: ${{ inputs.environment != '' && inputs.environment || null }}
     timeout-minutes: 45
     defaults:
       run:

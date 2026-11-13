@@ -31,6 +31,17 @@ below.
 | `force_update` | no | `false` | overwrite existing policies (destructive) |
 | `policies_artifact` | no | `''` | name of an Actions artifact holding rendered policy files + the channel file; when set it replaces `alerts_dir` as the source (see below) |
 | `dry_run` | no | `false` | plan only — print what would create/update/leave unchanged, make no create/update calls |
+| `environment` | no | `''` | the calling repo's GitHub environment the job runs in. Empty = no environment (existing callers unchanged); see [Running in an environment](#running-in-an-environment) |
+
+### Running in an environment
+
+A consumer that binds its GCP Workload Identity Federation to a main-only GitHub environment passes
+`environment: <name>`. A caller job that `uses:` this workflow cannot declare `environment:` itself,
+so the called job does: it is applied as the job-level `environment:` of the job that authenticates
+to GCP, and is no environment at all when the input is empty. With an environment the OIDC subject
+becomes `repo:<owner>/<repo>:environment:<name>` (not `...:ref:refs/heads/<branch>`), so the
+consumer's WIF binding (`principalSet` / attribute condition) must match that subject. The
+environment must exist in the calling repo, and its deployment-branch policy applies to the run.
 
 ## Outputs
 
