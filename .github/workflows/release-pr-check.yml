@@ -26,6 +26,11 @@ on:
         type: string
         required: false
         default: releases/services.json
+      waiver_pairs:
+        description: "Extra 'consumer -> provider' pairs (not contracts pairs) the breaking-approved label may waive; comma or newline separated. Pass the same string to release-pr-check and release-plan"
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -146,9 +151,10 @@ jobs:
       - name: Breaking-change approval shape (label + block, no token)
         env:
           CONFIG: ${{ inputs.config }}
+          WAIVER_PAIRS: ${{ inputs.waiver_pairs }}
         run: |
           set -euo pipefail
-          list=$(release-flow breaking-shape --event-file "$GITHUB_EVENT_PATH" --config "$CONFIG")
+          list=$(release-flow breaking-shape --event-file "$GITHUB_EVENT_PATH" --config "$CONFIG" --waiver-pairs "$WAIVER_PAIRS")
           n=$(jq length <<<"$list")
           if [ "$n" -gt 0 ]; then
             {

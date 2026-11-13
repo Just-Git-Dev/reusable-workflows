@@ -69,7 +69,8 @@ class PlanTests(unittest.TestCase):
         self.assertIn('--waiver-pairs "$WAIVER_PAIRS"', st["run"])
         self.assertIn('--labels-out "$RUNNER_TEMP/labels.json"', st["run"])
         self.assertIn("labels=", st["run"])
-        self.assertIn("labels=[]", st["run"])   # a rehearsal without manifest-ref has no PR
+        # a rehearsal without manifest-ref has no PR: the file keeps its default, labels=[]
+        self.assertIn("echo '[]' > \"$RUNNER_TEMP/labels.json\"", st["run"])
         self.assertNotIn("inputs.waiver_pairs", st["run"])
         self.assertEqual(self.jobs["plan"]["outputs"]["labels"], "${{ steps.brk.outputs.labels }}")
         outs = wf.on_block(self.w)["workflow_call"]["outputs"]
@@ -122,7 +123,7 @@ class CallerExampleTests(unittest.TestCase):
         self.assertIn("--consumer-side live", stage)
         self.assertIn("--pair", stage)
         self.assertIn("RELEASE_BREAKING: ${{ needs.plan.outputs.breaking }}", stage)
-        self.assertNotIn("if:", stage)   # verdict.py: a needs job that is skipped fails drafts
+        self.assertNotIn("\n    if:", stage)   # verdict.py: a needs job that is skipped fails drafts
         self.assertIn("needs: [plan, contracts, sdk-compat]", text)
         self.assertIn("fromJSON(needs.plan.outputs.labels)", text)
 

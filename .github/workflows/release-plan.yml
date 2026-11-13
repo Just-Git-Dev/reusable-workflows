@@ -48,6 +48,11 @@ on:
         type: string
         required: false
         default: releases/services.json
+      waiver_pairs:
+        description: "Extra 'consumer -> provider' pairs (not contracts pairs) the breaking-approved label may waive; comma or newline separated. Pass the same string to release-pr-check and release-plan"
+        type: string
+        required: false
+        default: ''
       release-workflow:
         description: "File name of the caller's release workflow (for the concurrent-run guard)"
         type: string
@@ -110,6 +115,9 @@ on:
       breaking:
         description: "JSON [{consumer, provider, finding}] approved by the breaking-approved label ([] without it); pass to spec-compat as RELEASE_BREAKING"
         value: ${{ jobs.resolve.outputs.breaking }}
+      labels:
+        description: "JSON list of the release PR's label names at the moment it merged (events replayed up to merged_at); a rehearsal reads the open PR's current labels, and [] without manifest-ref"
+        value: ${{ jobs.plan.outputs.labels }}
       ci-filters:
         description: "JSON {repo/workflow@sha: {kind, globs}}: the push path filters ci-green read; release-drafts re-checks with them (its write job parses no YAML)"
         value: ${{ jobs.resolve.outputs.ci_filters }}
@@ -147,6 +155,7 @@ jobs:
       rehearsal: ${{ steps.in.outputs.rehearsal }}
       owner: ${{ steps.cfg.outputs.owner }}
       breaking: ${{ steps.brk.outputs.breaking }}
+      labels: ${{ steps.brk.outputs.labels }}
     steps:
       - name: Checkout the caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -281,17 +290,21 @@ jobs:
           MANIFEST_REF: ${{ inputs.manifest-ref }}
           PR: ${{ steps.m.outputs.pr }}
           CONFIG: ${{ inputs.config }}
+          WAIVER_PAIRS: ${{ inputs.waiver_pairs }}
         run: |
           set -euo pipefail
+          # labels: the PR's labels from the SAME read (--labels-out); no PR (rehearsal without manifest-ref) = []
+          echo '[]' > "$RUNNER_TEMP/labels.json"
           if [ "$REHEARSAL" = "true" ]; then
             if [ -n "$MANIFEST_REF" ]; then
-              list=$(release-flow breaking-approval --head-branch "$MANIFEST_REF" --config "$CONFIG")
+              list=$(release-flow breaking-approval --head-branch "$MANIFEST_REF" --config "$CONFIG" --waiver-pairs "$WAIVER_PAIRS" --labels-out "$RUNNER_TEMP/labels.json")
             else
               list='[]'
             fi
           else
-            list=$(release-flow breaking-approval --pr "$PR" --config "$CONFIG")
+            list=$(release-flow breaking-approval --pr "$PR" --config "$CONFIG" --waiver-pairs "$WAIVER_PAIRS" --labels-out "$RUNNER_TEMP/labels.json")
           fi
+          echo "labels=$(jq -c . "$RUNNER_TEMP/labels.json")" >> "$GITHUB_OUTPUT"
           jq -e 'type == "array"' <<<"$list" >/dev/null || { echo "::error::breaking-approval printed '$list', not a JSON list"; exit 1; }
           echo "breaking=$(jq -c . <<<"$list")" >> "$GITHUB_OUTPUT"
           n=$(jq length <<<"$list")
@@ -493,9 +506,11 @@ jobs:
         env:
           BREAKING: ${{ needs.plan.outputs.breaking }}
           CHECKS: ${{ steps.r.outputs.checks }}
+          WAIVER_PAIRS: ${{ inputs.waiver_pairs }}
+          CONFIG: ${{ inputs.config }}
         run: |
           set -euo pipefail
-          list=$(release-flow breaking-matrix --breaking "$BREAKING" --checks "$CHECKS")
+          list=$(release-flow breaking-matrix --breaking "$BREAKING" --checks "$CHECKS" --waiver-pairs "$WAIVER_PAIRS" --config "$CONFIG")
           echo "breaking=$(jq -c . <<<"$list")" >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------- service-gates

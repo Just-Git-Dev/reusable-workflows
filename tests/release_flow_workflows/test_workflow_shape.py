@@ -139,12 +139,12 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(required, {"allowed"})
         self.assertEqual(set(ins), {"allowed", "read-only-repos", "client-id", "environment", "config",
                                     "release-workflow", "pr-check-name", "pr-check-workflow",
-                                    "rehearsal", "manifest", "manifest-ref"})
+                                    "rehearsal", "manifest", "manifest-ref", "waiver_pairs"})
         self.assertEqual(ins["environment"]["default"], "release")
         self.assertEqual(ins["pr-check-name"]["default"], "release-pr / release-pr")
         self.assertEqual(ins["rehearsal"]["type"], "boolean")
         self.assertEqual(set(call["outputs"]), {"manifest", "manifest-sha256", "pr", "order", "rehearsal", "resolved", "breaking",
-                                           "checks", "ci-filters"})
+                                           "checks", "ci-filters", "labels"})
 
     def test_jobs_and_needs(self):
         self.assertEqual(list(self.jobs), ["plan", "resolve", "service-gates"])
