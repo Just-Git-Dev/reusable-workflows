@@ -16,6 +16,7 @@ closed items from live sections are archived too, under a dated heading at the e
 - [Archived 2026-10-29 (closed items from live sections)](#archived-2026-10-29-closed-items-from-live-sections) — 30 closed
 - [rotate-cloudflare-token — the verify error blames the token for a header-format failure — ✅ DONE 2026-11-02 (opened 2026-11-01)](#rotate-cloudflare-token--the-verify-error-blames-the-token-for-a-header-format-failure---done-2026-11-02-opened-2026-11-01) — 1 closed
 - [Archived 2026-11-13 (TODO re-org + read-state fix)](#archived-2026-11-13-todo-re-org--read-state-fix) — 12 closed
+- [Archived 2026-11-13 (stamp coverage, -env guard)](#archived-2026-11-13-stamp-coverage--env-guard) — 2 closed
 
 ## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
 
@@ -582,3 +583,8 @@ its original `TODO.md` section. Text is verbatim.
 - [x] Build-once pilot / roll-out / post-pilot-proof checklists: moved out 2026-11-13: consumer adoption is each project's own work; the reusable side shipped in v1.17.0.
 - [x] Three "Pre-commit gates that check the wrong thing" items: moved to ~/.claude/TODO.md 2026-11-13 (fleet tooling, not workflow bodies).
 - [x] RW3 provenance: closed 2026-11-13; commit 360d70a (#90) states provenance mode=min / sbom=false explicitly on all three build surfaces (plans/provenance-and-release-gate.md Option C).
+
+## Archived 2026-11-13 (stamp coverage, -env guard)
+
+- [x] The stamp gate asserted no COVERAGE of its own: closed 2026-11-13; `scripts/stamp_version.py --check` now fails on any tracked file with a loose-regex `reusable-workflows` pin outside the swept set (5 reasoned exemptions); test `test_coverage_*` in `tests/run_stamp_tests.py`; DECISIONS 2026-11-13.
+- [x] `manage-config-secrets.yml` refuse a `gsm` create of a `*-env` secret (ruling 24): closed 2026-11-13; test `manage_env_guard_cases` in `tests/run_step_tests.py`; DECISIONS 2026-11-13.

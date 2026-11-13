@@ -2,8 +2,11 @@
 
 ## Index
 
-145 entries total — 135 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+148 entries total — 138 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-13` — [Optional environment input on cleanup-gar-images, cleanup-cloud-run-revisions, bootstrap-alerts](#2026-11-13--optional-environment-input-on-cleanup-gar-images-cleanup-cloud-run-revisions-bootstrap-alerts)
+- `2026-11-13` — [manage-config-secrets refuses a gsm create of a *-env secret (ruling 24)](#2026-11-13--manage-config-secrets-refuses-a-gsm-create-of-a--env-secret-ruling-24)
+- `2026-11-13` — [Stamp gate asserts its own pin coverage](#2026-11-13--stamp-gate-asserts-its-own-pin-coverage)
 - `2026-11-13` — [Owner ruling: third-party image mirror and probe parked until the next upstream-image outage](#2026-11-13--owner-ruling-third-party-image-mirror-and-probe-parked-until-the-next-upstream-image-outage)
 - `2026-11-13` — [Owner ruling: release-flow waivers extend to caller-declared pairs (waiver_pairs) + plan outputs PR labels](#2026-11-13--owner-ruling-release-flow-waivers-extend-to-caller-declared-pairs-waiver_pairs--plan-outputs-pr-labels)
 - `2026-11-13` — [Owner rulings on TODO triage questions (RW3-RW6)](#2026-11-13--owner-rulings-on-todo-triage-questions-rw3-rw6)
@@ -261,6 +264,38 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-13 — Optional environment input on cleanup-gar-images, cleanup-cloud-run-revisions, bootstrap-alerts
+
+**Change.** New optional string input `environment` (default `''` = no environment) on `cleanup-gar-images.yml`, `cleanup-cloud-run-revisions.yml` and `bootstrap-alerts.yml`, applied as the job-level `environment:` of the single GCP-authenticating job of each. Existing callers that pass nothing are unchanged. Minor version (new optional input); not stamped in this change.
+
+**Why.** A consumer binds its GCP WIF to a main-only GitHub environment, and a caller job that `uses:` a reusable workflow cannot declare `environment:` itself, so the called workflow must.
+
+**Form.** `${{ inputs.environment != '' && inputs.environment || null }}`, identical to `bootstrap-cf-service.yml`'s (2026-10 entry), so it does not rely on how GitHub treats `environment: ''`. The release package's `environment` input has a non-empty default, so it does not prove the empty case.
+
+**Docs.** Each `docs/<workflow>.md` lists the input and states that with an environment the OIDC subject becomes `repo:<owner>/<repo>:environment:<name>`, so the consumer's WIF binding must use it.
+
+**Test.** `environment_input_cases` in `tests/run_step_tests.py` (red first: input absent).
+
+## 2026-11-13 — manage-config-secrets refuses a gsm create of a *-env secret (ruling 24)
+
+**Change.** The `Materialize secrets` step of `manage-config-secrets.yml` refuses, before any write and in a dry run too, a `gsm` create of a secret whose name ends `-env` (blob: `secret_name`; individual: `secret_name` + payload key, all checked before the first write). Error names `repos-secrets` and ruling 24.
+
+**Why.** Ruling 24 (2026-10-20): `repos-secrets` is the ONE writer of `<service>-env` secrets; only `docs/manage-config-secrets.md` stated it. TODO "create of a".
+
+**Open.** The brief says "create": an already-existing `*-env` secret is not refused (a version add proceeds). A stricter "no write at all" is the owner's call.
+
+**Test.** `manage_env_guard_cases` in `tests/run_step_tests.py` (red first: svc-env was created and versioned).
+
+## 2026-11-13 — Stamp gate asserts its own pin coverage
+
+**Change.** `scripts/stamp_version.py --check` now lists every git-tracked text file and, with a deliberately loose regex (`LOOSE_PIN_RE`: any owner, any ref shape incl. branch, SHA, quoted), fails on any file carrying a `uses: <owner>/reusable-workflows/...@<ref>` pin that is outside `pin_files()`. It prints how many files it examined.
+
+**Why.** An uncovered file was indistinguishable from a passing one (the 2026-10-21 RCA was this exact gap). TODO "assert its own COVERAGE".
+
+**Found on first run.** The loose scan finds 5 files the TODO's "no live instance" check missed: 3 test fixtures or behaviour scripts and 2 historical plans. They are listed in `COVERAGE_EXEMPT` with a reason each, so exclusion is an explicit decision; an exemption whose file no longer carries a pin is itself reported, so the list cannot rot.
+
+**Test.** `tests/run_stamp_tests.py` `test_coverage_*` (red first: `coverage_problems` did not exist).
 
 ## 2026-11-13 — Owner ruling: third-party image mirror and probe parked until the next upstream-image outage
 
