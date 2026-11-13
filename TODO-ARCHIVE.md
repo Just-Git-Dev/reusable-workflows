@@ -15,7 +15,7 @@ closed items from live sections are archived too, under a dated heading at the e
 - [Secret Manager](#secret-manager) — 4 closed
 - [Archived 2026-10-29 (closed items from live sections)](#archived-2026-10-29-closed-items-from-live-sections) — 30 closed
 - [rotate-cloudflare-token — the verify error blames the token for a header-format failure — ✅ DONE 2026-11-02 (opened 2026-11-01)](#rotate-cloudflare-token--the-verify-error-blames-the-token-for-a-header-format-failure---done-2026-11-02-opened-2026-11-01) — 1 closed
-- [Archived 2026-11-13 (TODO re-org + read-state fix)](#archived-2026-11-13-todo-re-org--read-state-fix) — 9 closed
+- [Archived 2026-11-13 (TODO re-org + read-state fix)](#archived-2026-11-13-todo-re-org--read-state-fix) — 12 closed
 
 ## `validate-alerts` executes MQL only — ✅ DONE 2026-09-01 (opened and closed same day)
 
@@ -579,3 +579,6 @@ its original `TODO.md` section. Text is verbatim.
   2026-11-13 (#187): stdout only, stderr classifies a failure. Spec `docs/rotate-external-secret.md`;
   test "a gh stderr warning on success is not stored as state" in `tests/run_rotate_external_tests.py`;
   RCA in DECISIONS 2026-11-13.
+- [x] Build-once pilot / roll-out / post-pilot-proof checklists: moved out 2026-11-13: consumer adoption is each project's own work; the reusable side shipped in v1.17.0.
+- [x] Three "Pre-commit gates that check the wrong thing" items: moved to ~/.claude/TODO.md 2026-11-13 (fleet tooling, not workflow bodies).
+- [x] RW3 provenance: closed 2026-11-13; commit 360d70a (#90) states provenance mode=min / sbom=false explicitly on all three build surfaces (plans/provenance-and-release-gate.md Option C).

@@ -2,8 +2,11 @@
 
 ## Index
 
-142 entries total — 132 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+145 entries total — 135 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-13` — [Owner ruling: third-party image mirror and probe parked until the next upstream-image outage](#2026-11-13--owner-ruling-third-party-image-mirror-and-probe-parked-until-the-next-upstream-image-outage)
+- `2026-11-13` — [Owner ruling: release-flow waivers extend to caller-declared pairs (waiver_pairs) + plan outputs PR labels](#2026-11-13--owner-ruling-release-flow-waivers-extend-to-caller-declared-pairs-waiver_pairs--plan-outputs-pr-labels)
+- `2026-11-13` — [Owner rulings on TODO triage questions (RW3-RW6)](#2026-11-13--owner-rulings-on-todo-triage-questions-rw3-rw6)
 - `2026-11-13` — [rotate-external-secret: state read stores stdout only (stderr warning no longer corrupts state)](#2026-11-13--rotate-external-secret-state-read-stores-stdout-only-stderr-warning-no-longer-corrupts-state)
 - `2026-11-13` — [TODO.md re-org: triage verified against code, closed items evidenced](#2026-11-13--todomd-re-org-triage-verified-against-code-closed-items-evidenced)
 - `2026-11-12` — [image-identity action: prove same image bytes by tarball hash, never docker .Id (v6.2.0)](#2026-11-12--image-identity-action-prove-same-image-bytes-by-tarball-hash-never-docker-id-v620)
@@ -258,6 +261,30 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-13 — Owner ruling: third-party image mirror and probe parked until the next upstream-image outage
+
+**Owner words:** "let it be for now - we will get to it if we have an outage again in future."
+
+**Ruling:** neither a third-party image mirror nor the image-resolve probe is built now. Both are parked in TODO "Third-party image vanishing upstream", and the trigger to revisit is the next outage caused by a pinned image disappearing upstream. The open choices are recorded there: GAR or GHCR for a mirror, and whether to build the probe first. **Why:** one incident so far (MinIO, 2026-09-24), and the owner prefers to spend effort elsewhere until it recurs.
+
+## 2026-11-13 — Owner ruling: release-flow waivers extend to caller-declared pairs (waiver_pairs) + plan outputs PR labels
+
+**Owner words:** "B".
+
+**Ruling:** build caller-declared waiver kinds. A new optional `waiver_pairs` input declares non-`contracts` pairs that the same breaking-approved label waives through R1-R3. For such a pair, R3 ("a live check entry per listed pair") is satisfied by its presence in the caller-declared list. The plan stage also outputs the merged release PR label list, so a caller needs no labels job of its own. Rejected: A (each consumer keeps its own labels job and stage, which duplicates the waiver logic) and C (a stub `checks` entry per kind: heavier for callers, no extra safety). **Why:** R3 exists to stop approvals of something unchecked or stale, and a declared list gives the same anchor. Minor version; existing callers are unaffected.
+
+## 2026-11-13 — Owner rulings on TODO triage questions (RW3-RW6)
+
+The owner answered the TODO-triage questions RW3-RW6 on 2026-11-13 with "part 1 accept all". Evidence and recommendations: `.scratch/todo-triage/owner-questions.md`.
+
+**RW3, provenance: closed.** Commit 360d70a (#90) states provenance `mode=min` and `sbom=false` explicitly on all three build surfaces, which is Option C in `plans/provenance-and-release-gate.md`. Signed build attestations (option D) are parked in TODO.md Waiting / blocked until a consumer needs verifiable provenance.
+
+**RW4, build-once rollout: moved out.** The pilot, roll-out and post-pilot-proof checklists left TODO.md. Consumer adoption is each project's own work; the reusable side shipped in v1.17.0. `infra-provisioning` keeps a one-line pointer under "Handed elsewhere" (its "Consumer follow-ups" section no longer exists).
+
+**RW5, pre-commit gates: moved to fleet tooling.** The three "Pre-commit gates that check the wrong thing" items are developer tooling, not workflow bodies. They now live in `~/.claude/TODO.md`.
+
+**RW6, zizmor `github-app` ignores: reworded.** No permission set is needed: every token mint already sets `permission-*`. The rule flags repository scope (`owner:` with no `repositories:`). `repos-create` stays org-wide because it creates repos that do not exist yet, so its ignore is accepted. For `repos-settings` and `repos-variables` the open item is whether to narrow the read-only mint to the registry's repo list. `zizmor.yml` reason text and the TODO item now say this.
 
 ## 2026-11-13 — rotate-external-secret: state read stores stdout only (stderr warning no longer corrupts state)
 
