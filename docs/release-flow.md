@@ -101,8 +101,8 @@ provider already ignores).
 | # | rule | checked by |
 |---|---|---|
 | R1 | Label without a block, or a block without the label, fails. | `release-pr-check`, plan (rehearsal and real) |
-| R2 | Exactly one ```` ```breaking ```` block; every line parses; no duplicate line; no empty block; every pair is a configured contract. | `release-pr-check`, plan |
-| R3 | Every listed pair has a **live-consumer** check in this release (`checks` entry with `consumer_side: live`). The approved list becomes the `breaking` output. | resolve |
+| R2 | Exactly one ```` ```breaking ```` block; every line parses; no duplicate line; no empty block; every pair is a configured contract **or a declared `waiver_pairs` pair**. | `release-pr-check`, plan |
+| R3 | Every listed pair has a **live-consumer** check in this release (`checks` entry with `consumer_side: live`); a declared pair needs only its presence in `waiver_pairs`. The approved list becomes the `breaking` output. | resolve |
 | R4 | `spec-compat --pair "c -> p" --consumer-side live` with `RELEASE_BREAKING` set: each finding listed for this pair is printed `WAIVED` and written to the job summary; an unlisted finding fails; a listed entry that did not occur fails (no stale approvals). In a `--consumer-side candidate` check nothing is waived. | the caller's contracts job |
 | R5 | A real release counts the label only if it was on the PR **before `merged_at`**: the last `labeled`/`unlabeled` event for it before the merge must be `labeled` (`issues/{n}/events`). A label added after the merge approves nothing. | plan (real release) |
 | R6 | On any spec-compat failure, a ready-to-paste `breaking` block of what it found is printed. | the caller's contracts job |
@@ -119,6 +119,38 @@ transient window, and no label can approve it. With the consumer live, the provi
 candidate (a state where both are live is not checked), so each pair has at most one
 live-consumer check. Because of that, R3 and R4 together make "every waived finding" equal "the
 block". Call spec-compat with `--pair` **once per matrix entry**.
+
+### Caller-declared pairs (`waiver_pairs`)
+
+A caller can have a compatibility stage of its own that is not a `contracts` pair. Example: consumer
+A checks the oldest published client SDK against the candidate backend spec. It declares that pair
+in the optional input `waiver_pairs`, and the same `breaking-approved` label and ```` ```breaking ````
+block can then approve a break on it.
+
+```yaml
+waiver_pairs: "sdk-oldest -> backend"   # comma or newline separated; same string on both calls
+```
+
+- **Where.** Pass the **same** string to `release-pr-check` and to `release-plan`. If the two
+  drift, the PR check and the Release disagree; the Release refuses before any write, so drift is
+  safe.
+- **Rules.** R1, R4, R5, R6 are unchanged. R2 accepts a configured contract or a declared pair.
+  R3 for a declared pair is met by its presence in `waiver_pairs`; for a `contracts` pair it is
+  unchanged (a live-consumer check is required).
+- **Accepted risk.** The caller's own stage must run `spec-compat` for the declared pair
+  (R4). If it does not, approved lines for that pair are never matched against findings, because
+  R3 no longer forces "every waived finding equals the block" for declared pairs.
+- **Refused with exit 2.** A malformed item, a duplicate, a declared pair that is also a configured
+  contract (otherwise a caller could switch off R3's live-consumer check for a real contract by
+  redeclaring it), and a provider that is not a service in `services.json`. A typo such as
+  `sdk-oldest -> backned` fails the PR check on the first run with "provider 'backned' is not a
+  service". The consumer side is a free name.
+- **The caller's stage.** It runs
+  `release-flow spec-compat BASE CAND --pair "sdk-oldest -> backend" --consumer-side live` with
+  `RELEASE_BREAKING: ${{ needs.plan.outputs.breaking }}`. A stale entry fails there as for any pair.
+- **Trap: the stage must always run.** The drafts verdict fails on any job in `needs` that is not
+  `success`, except the contracts job when `checks` is `[]`. A declared-pair stage listed in
+  drafts' `needs` must therefore run and pass when it has nothing to compare. Never `if:`-skip it.
 
 **Pre-merge, for the author:**
 
@@ -585,6 +617,7 @@ call below lists.
 |---|---|---|---|
 | `allowed` | yes | — | comma list of service repos a manifest may name |
 | `config` | no | `releases/services.json` | path in the root repo |
+| `waiver_pairs` | no | `''` | extra `consumer -> provider` pairs (not `contracts` pairs) the `breaking-approved` label may waive; comma or newline separated; pass the same string to `release-plan`. See [Caller-declared pairs](#caller-declared-pairs-waiver_pairs). |
 
 Job name `release-pr`; called from a caller job also named `release-pr`, the check run is
 `release-pr / release-pr`. Caller permissions: `contents: read`. Trigger it on
@@ -603,6 +636,7 @@ body from the event payload, with no token.
 | secret `RELEASE_APP_KEY` | no | — | App mode: the App's private key |
 | secret `github-token` | no | — | token mode: one token used by every job instead of the App |
 | `config` | no | `releases/services.json` | |
+| `waiver_pairs` | no | `''` | as in `release-pr-check`; the same string must be passed to both |
 | `release-workflow` | no | `release.yml` | file name of the caller's release workflow (for the concurrent-run guard) |
 | `pr-check-name` | no | `release-pr / release-pr` | the check run the merged PR must carry |
 | `pr-check-workflow` | no | `.github/workflows/release-pr.yml` | the workflow file that check must come from |
@@ -620,6 +654,7 @@ body from the event payload, with no token.
 | `resolved` | JSON `{repo: {ref, version, listed, image, live_ref}}` for every service and `consumers_only` repo. `ref` is a 40-hex sha or `vX.Y.Z`. |
 | `checks` | JSON list for a matrix `include`: `[{consumer, consumer_ref, provider, provider_ref, states, provider_live_ref, consumer_side}]`. There is one entry per distinct consumer@ref → provider@ref pair across every intermediate state of the publish order. `states` lists the labels of the states that need it (`new a,b; live c`). `provider_live_ref` is the provider's LIVE version even when `provider_ref` is its candidate, so a check can compare a consumer against what production serves. `consumer_side` is `candidate` when the consumer is in the manifest at that state, else `live`. `[]` when no contract involves a listed service. |
 | `breaking` | JSON list of the approved breaking changes, `[{consumer, provider, finding}]` (see [Contract checks](#contract-checks)); `[]` without the `breaking-approved` label. Pass it to `spec-compat` as `RELEASE_BREAKING`. |
+| `labels` | JSON list of the release PR's label names at the moment it merged: label events are replayed up to `merged_at` (the R5 rule), so a label added after the merge is not listed. A rehearsal reads the open PR's current labels; a rehearsal without `manifest-ref` gives `[]`. Use it instead of a caller-owned labels job, e.g. `contains(fromJSON(needs.plan.outputs.labels), 'skip-smoke')`. |
 
 Caller permissions: `contents: read`, `pull-requests: read`, `checks: read`, `actions: read`.
 
@@ -665,6 +700,7 @@ jobs:
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-pr-check.yml@v6.2.1
     with:
       allowed: backend,webapp,desktop
+      waiver_pairs: sdk-oldest -> backend   # optional; same string on the plan call
 ```
 
 ```yaml
@@ -686,6 +722,7 @@ jobs:
     with:
       allowed: backend,webapp,desktop
       client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+      waiver_pairs: sdk-oldest -> backend   # optional; same string as in release-pr.yml
       rehearsal: ${{ github.event_name == 'workflow_dispatch' }}
       manifest: ${{ inputs.manifest || '' }}
       manifest-ref: ${{ inputs.manifest-ref || '' }}
@@ -708,8 +745,21 @@ jobs:
           SIDE: ${{ matrix.consumer_side }}
           RELEASE_BREAKING: ${{ needs.plan.outputs.breaking }}
 
+  sdk-compat:                    # a caller-declared pair (waiver_pairs); must always run, never `if:`-skipped
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.2.1
+      - run: release-flow spec-compat oldest-sdk.yaml candidate.yaml --label "$PAIR" --pair "$PAIR" --consumer-side live
+        shell: bash
+        env:
+          PAIR: sdk-oldest -> backend
+          RELEASE_BREAKING: ${{ needs.plan.outputs.breaking }}
+      # the release PR's labels (no labels job): fromJSON(needs.plan.outputs.labels)
+
   drafts:
-    needs: [plan, contracts]
+    needs: [plan, contracts, sdk-compat]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     permissions: {contents: read}
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-drafts.yml@v6.2.1
@@ -728,7 +778,7 @@ jobs:
       backend_ref: ${{ fromJSON(needs.plan.outputs.resolved).backend.ref }}
 
   publish:
-    needs: [plan, contracts, drafts, smoke]
+    needs: [plan, contracts, sdk-compat, drafts, smoke]
     if: ${{ always() }}
     permissions: {contents: read, pull-requests: write}
     uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-publish.yml@v6.2.1
@@ -803,9 +853,9 @@ directory**. Every manifest-bearing command needs `--allowed`.
 | `drafts M [--check-only]` | create drafts; `--check-only` runs every pre-check and writes nothing (no write token needed) | write (read with `--check-only`) |
 | `publish M --repo X` | publish one draft and prove it live; prints `{repo, status, detail}` | write |
 | `spec-compat BASELINE CANDIDATE [--pair "C -> P" --consumer-side live\|candidate]`, `ops-subset CONSUMER_COPY PROVIDER` | contract checks on OpenAPI files; with `--pair`, applies `RELEASE_BREAKING` (R4) and prints a paste-ready block on failure (R6) | none |
-| `breaking-shape --event-file F` | R1 + R2 from a `pull_request` event payload (labels, body) | none |
-| `breaking-approval (--pr N \| --head-branch B)` | R1 + R2 + R5 (real release, `--pr`) or R1 + R2 on the open PR of branch B (rehearsal); prints the approved list as JSON | read |
-| `breaking-matrix --breaking J --checks J` | R3: every approved pair has a live-consumer check; prints the list | none |
+| `breaking-shape --event-file F [--waiver-pairs S]` | R1 + R2 from a `pull_request` event payload (labels, body) | none |
+| `breaking-approval (--pr N \| --head-branch B) [--waiver-pairs S] [--labels-out F]` | R1 + R2 + R5 (real release, `--pr`) or R1 + R2 on the open PR of branch B (rehearsal); prints the approved list as JSON; `--labels-out` writes the PR's label names (JSON) from the same read | read |
+| `breaking-matrix --breaking J --checks J [--waiver-pairs S] [--config C]` | R3: every approved pair has a live-consumer check, or is a declared pair; prints the list | none |
 | `report --stage S --result R [--detail T] [--drafts F]` | the report markdown | none |
 | `ci-verdict --repo O/R --sha S --workflows W[,W] [--match sha\|tree] [--github-output F]` | did CI already pass for this code? prints `{reuse, run_url, why, examined}`; exit 0 either way ([ci-verdict](ci-verdict.md)) | read |
 | `propose REPO@TAG... --slug S [--dry-run] [--no-auto-merge] [--wait-min N] [--root O/R] [--pr-check C] [--merge-method M]` | wait for the gates, validate, open the release PR, enable auto-merge only when the PR check is required ([Proposing a release](#proposing-a-release)) | read + your `gh` login |
