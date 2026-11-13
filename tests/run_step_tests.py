@@ -1143,6 +1143,71 @@ def run_cf_verify_step(body, *, status="200", payload='{"result":{"status":"acti
         return res
 
 
+MANAGE = ROOT / ".github" / "workflows" / "manage-config-secrets.yml"
+
+
+def run_manage_gsm_step(body, *, name, mode="blob", payload='{"A":"valuevaluevalue"}', exists=False,
+                        dry="false"):
+    """Materialize secrets, gsm backend, with a gcloud stub that echoes every call (so `out` shows
+    what reached gcloud); `secrets describe` succeeds iff `exists`. /tmp is redirected to the cwd."""
+    gcloud = ('#!/usr/bin/env bash\necho "gcloud $*"\n'
+              'if [ "$1 $2" = "secrets describe" ]; then ' + ("exit 0" if exists else "exit 1") + '; fi\n')
+    env = {"PAYLOAD_JSON": payload, "SECRETS_BACKEND": "gsm", "SECRET_NAME": name, "GSM_MODE": mode,
+           "GSM_LOCATIONS": "", "GCP_PROJECT": "p", "DRY_RUN": dry, "MIN_VALUE_LEN": "0"}
+    return _run_body(body.replace("/tmp/", "./"), env, stubs={"gcloud": gcloud})
+
+
+def manage_env_guard_cases():
+    """docs/manage-config-secrets.md: a gsm create of a `*-env` secret is refused (ruling 24)."""
+    body = extract_step(MANAGE, "manage", "Materialize secrets")
+    print("manage-config-secrets · gsm refuses to create a <service>-env secret")
+
+    def wrote(r):
+        return "secrets create" in r["out"] or "versions add" in r["out"]
+
+    r = run_manage_gsm_step(body, name="svc-env")
+    check("blob create of svc-env is refused", r["rc"] != 0, r["out"])
+    check("refusal names repos-secrets", "repos-secrets" in r["out"], r["out"])
+    check("refusal writes nothing", not wrote(r), r["out"])
+    r = run_manage_gsm_step(body, name="svc-env", dry="true")
+    check("dry-run create of svc-env is refused too", r["rc"] != 0, r["out"])
+    r = run_manage_gsm_step(body, name="svc-", mode="individual",
+                            payload='{"B":"valuevaluevalue","env":"valuevaluevalue"}')
+    check("individual key that makes <prefix>env is refused", r["rc"] != 0, r["out"])
+    check("individual refusal writes nothing (not even the earlier key)", not wrote(r), r["out"])
+    r = run_manage_gsm_step(body, name="svc-config", dry="true")
+    check("a non -env name still plans a create",
+          r["rc"] == 0 and "would create GSM secret svc-config" in r["out"], r["out"])
+    r = run_manage_gsm_step(body, name="svc-environment", dry="true")
+    check("only a name ENDING -env is refused", r["rc"] == 0, r["out"])
+    r = run_manage_gsm_step(body, name="svc-env", exists=True, dry="true")
+    check("an already-existing svc-env is not a create", r["rc"] == 0, r["out"])
+
+
+ENV_FORM = "${{ inputs.environment != '' && inputs.environment || null }}"
+
+
+def environment_input_cases():
+    """Optional `environment` input: '' (default) = no environment, so existing callers are
+    unchanged; a name binds the GCP-authenticating job to it (the OIDC subject becomes
+    `...:environment:<name>`). The `|| null` form is the one bootstrap-cf-service.yml uses."""
+    import yaml
+    print("environment input · cleanup-gar-images, cleanup-cloud-run-revisions, bootstrap-alerts")
+    for wf, job in (("cleanup-gar-images", "cleanup"), ("cleanup-cloud-run-revisions", "prune"),
+                    ("bootstrap-alerts", "apply")):
+        doc = yaml.safe_load((ROOT / ".github" / "workflows" / f"{wf}.yml").read_text())
+        inp = (doc.get(True) or doc.get("on"))["workflow_call"]["inputs"].get("environment")
+        check(f"{wf}: has an optional string `environment` input",
+              bool(inp) and inp.get("type") == "string" and inp.get("required") is False, inp)
+        check(f"{wf}: `environment` defaults to '' (existing callers unchanged)",
+              bool(inp) and inp.get("default") == "", inp)
+        check(f"{wf}: job {job} applies it as a conditional job-level environment",
+              doc["jobs"][job].get("environment") == ENV_FORM, doc["jobs"][job].get("environment"))
+        text = (ROOT / "docs" / f"{wf}.md").read_text()
+        check(f"{wf}: doc names the input and the environment OIDC subject",
+              "`environment`" in text and ":environment:<name>" in text)
+
+
 def cf_token_verify_cases():
     """docs/rotate-cloudflare-token.md 'When the verify step fails': name the cause it can tell."""
     body = extract_step(CFTOKEN, "check", "Verify current CF API token is still valid")
@@ -4684,6 +4749,8 @@ def main():
     r2_bootstrap_cases()
     r2_publish_cases()
     cf_token_verify_cases()
+    manage_env_guard_cases()
+    environment_input_cases()
 
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed")

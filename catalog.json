@@ -429,6 +429,12 @@
           "required": false,
           "type": "boolean"
         },
+        "environment": {
+          "default": "",
+          "description": "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment.",
+          "required": false,
+          "type": "string"
+        },
         "force_update": {
           "default": false,
           "description": "Replace existing policies instead of skipping them (destructive).",
@@ -1253,6 +1259,12 @@
           "required": false,
           "type": "boolean"
         },
+        "environment": {
+          "default": "",
+          "description": "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment.",
+          "required": false,
+          "type": "string"
+        },
         "gcp_project": {
           "default": null,
           "description": "GCP project id owning the Cloud Run services.",
@@ -1331,6 +1343,12 @@
           "description": "true = print the plan only, delete nothing.",
           "required": false,
           "type": "boolean"
+        },
+        "environment": {
+          "default": "",
+          "description": "The calling repo's environment the job runs in; needed when the caller's GCP service account is WIF-trusted to an environment subject. Empty = no environment.",
+          "required": false,
+          "type": "string"
         },
         "fail_on_inert": {
           "default": false,

@@ -6,34 +6,22 @@ Ranked by value for effort. Re-triaged 2026-11-13 against `c5131d3`; closed and 
 moved to [TODO-ARCHIVE.md](TODO-ARCHIVE.md) (same log, split by state only). Sizes: S < half a
 day, M about a day, L several.
 
-1. **S** — `TODO.md:"assert its own COVERAGE"` — the stamp gate's file set has already been wrong twice.
-2. **S** — `TODO.md:"create of a"` — ruling 24 is enforced only in a doc today.
-3. **M** — `TODO.md:"receive the App private key"` — owner-requested 2026-10-21; ends hand-kept key guards.
-4. **S** — `TODO.md:"which ref the smoke SPECS come from"` — doc-only; a consumer already failed a rehearsal on it.
-5. **S** — `TODO.md:"bare conditional"` — the Summary-step rule, as a CI grep.
-6. **S** — `TODO.md:"four checks have no dedicated test"` — validate-alerts test gaps.
-7. **M** — `TODO.md:"IAM conditions"` — repos-secrets conditional-binding redesign.
-8. **S** — `TODO.md:"re-check the other ignores"` — zizmor ignores that a fix or a reason can retire.
-9. **S then M** — `TODO.md:"delayed destruction"` — spike (a)-(c) before any build.
-10. **M** — `TODO.md:"Audit the remaining gates"` — derived comparands / assumed scopes.
-11. **M** — `TODO.md:"when they are on an old version"` — needs its three questions answered first.
-12. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
-13. **S** — `TODO.md:"CI runs the release-flow tests"` — a doc line names the wrong CI job for the release-flow tests.
+1. **M** — `TODO.md:"receive the App private key"` — owner-requested 2026-10-21; ends hand-kept key guards.
+2. **S** — `TODO.md:"which ref the smoke SPECS come from"` — doc-only; a consumer already failed a rehearsal on it.
+3. **S** — `TODO.md:"bare conditional"` — the Summary-step rule, as a CI grep.
+4. **S** — `TODO.md:"four checks have no dedicated test"` — validate-alerts test gaps.
+5. **M** — `TODO.md:"IAM conditions"` — repos-secrets conditional-binding redesign.
+6. **S** — `TODO.md:"re-check the other ignores"` — zizmor ignores that a fix or a reason can retire.
+7. **S then M** — `TODO.md:"delayed destruction"` — spike (a)-(c) before any build.
+8. **M** — `TODO.md:"Audit the remaining gates"` — derived comparands / assumed scopes.
+9. **M** — `TODO.md:"when they are on an old version"` — needs its three questions answered first.
+10. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
+11. **S** — `TODO.md:"CI runs the release-flow tests"` — a doc line names the wrong CI job for the release-flow tests.
 
 Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
 
 ## Ready — release and stamp gates
 
-- [ ] **The stamp gate does not assert its own COVERAGE.** `PIN_RE` in `scripts/stamp_version.py`
-      requires a literal `Just-Git-Dev/reusable-workflows/...`, and `pin_files()` is a fixed set
-      (docs, README, AGENTS, published workflows). Any file outside that set, or any pin shape
-      `PIN_RE` doesn't match, is invisible to both the sweep and `--check` — **an uncovered file is
-      indistinguishable from a passing one.** No live instance today (checked 2026-11-13: no
-      tracked file outside the set carries a `reusable-workflows/...@vN` pin), but the 2026-10-21
-      RCA (action pins inside workflows) was this exact gap. Fix: assert that every tracked file
-      containing a `uses: .../reusable-workflows/...@` pin (by a loose regex, not `PIN_RE`) is in
-      the swept set, and fail on any that is not. First step: a red case in
-      `tests/run_stamp_tests.py`. Size S.
 - [ ] **Audit the remaining gates for the same two shapes** — comparands that are all derived, and
       scopes that are assumed rather than computed. `validate-alerts` is done
       (`plans/validate-alerts-audit-2026-09-15.md`: both shapes not found). Remaining:
@@ -63,9 +51,6 @@ Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
 
 ## Ready — secrets and access workflows
 
-- [ ] `.github/workflows/manage-config-secrets.yml` — refuse a `gsm` create of a `*-env` secret
-      (ruling 24, DECISIONS 2026-10-20: F8 `repos-secrets` is the one writer; only the doc states it
-      today). Size S.
 - [ ] `.github/workflows/repos-secrets.yml` — IAM conditions: the fetch step and `live_lines`
       (`scripts/repos_secrets_plan.py`) drop `condition`, and gcloud add/remove run without
       `--condition`, so a conditional `<d>-run` line would read in-sync in F8 while the engine's

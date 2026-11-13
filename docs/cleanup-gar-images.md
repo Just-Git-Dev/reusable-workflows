@@ -142,7 +142,19 @@ warning rather than passing quietly.
 | `fail_on_inert` | no | `false` | `true` ends the run **red** if any image has zero release-tagged images. Fails last, dry runs included; see [Making an inert sweep fail](#making-an-inert-sweep-fail) |
 | `allow_inert_images` | no | `''` | comma-separated image names (last path segment of the package) exempt from `fail_on_inert`; they keep the warning only |
 
+| `environment` | no | `''` | the calling repo's GitHub environment the job runs in. Empty = no environment (existing callers unchanged); see [Running in an environment](#running-in-an-environment) |
+
 The repo path is derived as `<gcp_region>-docker.pkg.dev/<gcp_project>/<gar_repo>`.
+
+### Running in an environment
+
+A consumer that binds its GCP Workload Identity Federation to a main-only GitHub environment passes
+`environment: <name>`. A caller job that `uses:` this workflow cannot declare `environment:` itself,
+so the called job does: it is applied as the job-level `environment:` of the job that authenticates
+to GCP, and is no environment at all when the input is empty. With an environment the OIDC subject
+becomes `repo:<owner>/<repo>:environment:<name>` (not `...:ref:refs/heads/<branch>`), so the
+consumer's WIF binding (`principalSet` / attribute condition) must match that subject. The
+environment must exist in the calling repo, and its deployment-branch policy applies to the run.
 
 
 ## Immutable tags

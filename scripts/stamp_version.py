@@ -187,6 +187,67 @@ def pin_files(root: Path) -> list[Path]:
     return doc_files(root) + [p for p in workflows if "workflow_call:" in p.read_text()]
 
 
+# COVERAGE. `PIN_RE` and `pin_files()` decide what the sweep and `--check` look at, so a file
+# outside that set (or a pin shape PIN_RE does not match) is invisible to both: an uncovered
+# file is indistinguishable from a passing one. The 2026-10-21 RCA (action pins inside
+# workflows) was this exact gap. So `--check` also asks, with a deliberately LOOSE regex of its
+# own, which tracked files carry a `uses: <owner>/reusable-workflows/...@<ref>` pin at all, and
+# fails on any that is not in the swept set.
+LOOSE_PIN_RE = re.compile(
+    r"\buses:[ \t]*['\"]?[A-Za-z0-9._-]+/reusable-workflows/"
+    r"(?:\.github/workflows/[A-Za-z0-9._-]+\.yml|actions/[A-Za-z0-9._-]+)@[^\s`'\"]"
+)
+
+# Tracked files that mention a pin but must NOT be swept, each with the reason. Adding a file
+# here is a decision; a file that stops needing its entry is reported, so the list stays true.
+COVERAGE_EXEMPT = {
+    "plans/2026-10-08-check-release-gate.md": "historical plan; its pin is a placeholder for what was planned",
+    "plans/2026-10-12-refresh-api-spec.md": "historical plan; its pin records what was planned",
+    "scripts/pin_gate_behaviour.sh": "behaviour fixture for the pinned-actions gate; pins are test data",
+    "tests/run_pinned_actions_tests.py": "fixtures: deliberately good and bad pin shapes",
+    "tests/run_stamp_tests.py": "fixtures: deliberately stale pins the sweep must handle",
+}
+
+
+def coverage_problems(texts: dict[str, str], swept: set[str], exempt: dict[str, str]) -> list[str]:
+    """Every file in `texts` carrying a loose pin must be swept or exempt; exemptions must be live."""
+    problems = []
+    for name, text in sorted(texts.items()):
+        if LOOSE_PIN_RE.search(text):
+            if name not in swept and name not in exempt:
+                problems.append(f"{name}: carries a reusable-workflows pin but is outside the swept "
+                                f"set (pin_files()); sweep it or add it to COVERAGE_EXEMPT with a reason")
+        elif name in exempt:
+            problems.append(f"{name}: in COVERAGE_EXEMPT but carries no pin any more; remove the entry")
+    return problems
+
+
+def tracked_texts(root: Path) -> dict[str, str]:
+    """Text of every git-tracked file (binary files skipped). Raises when git cannot list them."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    r = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise SystemExit(f"::error::cannot list tracked files (git ls-files rc={r.returncode}); "
+                         f"the pin-coverage check cannot run")
+    out = {}
+    for name in filter(None, r.stdout.split("\0")):
+        p = root / name
+        if not p.is_file():
+            continue
+        try:
+            out[name] = p.read_text()
+        except UnicodeDecodeError:
+            continue
+    return out
+
+
+def scan_coverage(root: Path) -> tuple[list[str], int]:
+    """(problems, number of tracked text files examined)."""
+    texts = tracked_texts(root)
+    swept = {_rel(p, root) for p in pin_files(root)}
+    return coverage_problems(texts, swept, COVERAGE_EXEMPT), len(texts)
+
+
 @dataclass
 class Report:
     stamps: dict[str, str | None] = field(default_factory=dict)
@@ -291,6 +352,12 @@ def sweep(version: str) -> int:
 def check(expect: str | None) -> int:
     report = scan(ROOT)
     report.problems += tree_problems(report.trees, current_tree(ROOT) if report.trees else None)
+    cov_problems, cov_examined = scan_coverage(ROOT)
+    if cov_problems:
+        print(f"::error::pin coverage gap ({cov_examined} tracked files examined):")
+        for p in cov_problems:
+            print(f"  {p}")
+        return 1
     if report.problems:
         print(f"::error::version sweep is stale — run: python3 scripts/stamp_version.py {report.version}")
         for p in report.problems:
@@ -304,7 +371,8 @@ def check(expect: str | None) -> int:
         return 1
     print(
         f"version sweep is consistent at {report.version} "
-        f"({len(report.stamps)} workflows, {sum(len(v) for v in report.pins.values())} doc pins)"
+        f"({len(report.stamps)} workflows, {sum(len(v) for v in report.pins.values())} doc pins, "
+        f"pin coverage: {cov_examined} tracked files examined, 0 unswept)"
     )
     return 0
 
