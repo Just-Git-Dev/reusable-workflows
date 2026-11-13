@@ -6,12 +6,12 @@ Ranked by value for effort. Re-triaged 2026-11-13 against `c5131d3`; closed and 
 moved to [TODO-ARCHIVE.md](TODO-ARCHIVE.md) (same log, split by state only). Sizes: S < half a
 day, M about a day, L several.
 
-1. **S** — `TODO.md:"stores that capture as STATE"` — a shipped action stores `gh` stderr warnings as state.
-2. **S** — `TODO.md:"assert its own COVERAGE"` — the stamp gate's file set has already been wrong twice.
-3. **S** — `TODO.md:"create of a"` — ruling 24 is enforced only in a doc today.
-4. **M** — `TODO.md:"receive the App private key"` — owner-requested 2026-10-21; ends hand-kept key guards.
-5. **S** — `TODO.md:"which ref the smoke SPECS come from"` — doc-only; a consumer already failed a rehearsal on it.
-6. **S** — `TODO.md:"bare conditional"` — the Summary-step rule, as a CI grep.
+1. **S** — `TODO.md:"assert its own COVERAGE"` — the stamp gate's file set has already been wrong twice.
+2. **S** — `TODO.md:"create of a"` — ruling 24 is enforced only in a doc today.
+3. **M** — `TODO.md:"receive the App private key"` — owner-requested 2026-10-21; ends hand-kept key guards.
+4. **S** — `TODO.md:"which ref the smoke SPECS come from"` — doc-only; a consumer already failed a rehearsal on it.
+5. **S** — `TODO.md:"bare conditional"` — the Summary-step rule, as a CI grep.
+6. **S** — `TODO.md:"four checks have no dedicated test"` — validate-alerts test gaps.
 7. **M** — `TODO.md:"IAM conditions"` — repos-secrets conditional-binding redesign.
 8. **S** — `TODO.md:"re-check the other ignores"` — zizmor ignores that a fix or a reason can retire.
 9. **S then M** — `TODO.md:"delayed destruction"` — spike (a)-(c) before any build.
@@ -61,13 +61,6 @@ confirms the move.
 
 ## Ready — secrets and access workflows
 
-- [ ] `actions/rotate-external-secret/read-state.sh` captures `gh variable get … 2>&1` and stores that
-      capture as STATE. If `gh` prints a warning on stderr and still exits 0 (an update
-      notice, a deprecation), the warning text becomes part of the stored state. Fix: capture
-      stdout only (`2>"$errf"`) and read stderr only to classify a failure. The same bug class
-      shipped in a consumer's release workflow on 2026-11-11. Rule: claude-config
-      `skills/github-actions` §3d. First step: a red test with a `gh` stub that warns on stderr
-      and exits 0. Patch release. Size S.
 - [ ] `.github/workflows/manage-config-secrets.yml` — refuse a `gsm` create of a `*-env` secret
       (ruling 24, DECISIONS 2026-10-20: F8 `repos-secrets` is the one writer; only the doc states it
       today). Size S.
