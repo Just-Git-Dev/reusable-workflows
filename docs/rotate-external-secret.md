@@ -150,7 +150,7 @@ permissions:
 
 jobs:
   rotate:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rotate-external-secret.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/rotate-external-secret.yml@v6.3.0
     with:
       cf_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       worker_script: service-files-cdn

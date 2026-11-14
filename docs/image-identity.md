@@ -26,7 +26,7 @@ jobs:
         shell: bash
         run: docker pull alpine:3.20
       - id: rec
-        uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.2.1
+        uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.3.0
         with:
           mode: record
           images: |
@@ -45,7 +45,7 @@ jobs:
         with:
           name: images
           path: ${{ runner.temp }}/in
-      - uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.2.1
+      - uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.3.0
         with:
           mode: verify
           path: ${{ runner.temp }}/in/images.tar
