@@ -8,4 +8,4 @@ See docs/alertspec.md for the format and docs/service-alerts.md for the workflow
 
 # Semver of the built-in catalog (alerting/catalog/*.yaml); stamped into every policy's
 # userLabels as catalog_version. Bump rules: docs/alertspec.md#catalog-versioning.
-CATALOG_VERSION = "1.0.0"
+CATALOG_VERSION = "1.1.0"

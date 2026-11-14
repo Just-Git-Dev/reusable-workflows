@@ -34,3 +34,21 @@ rules:
       The service logged an entry matching the filter configured in alerts.yaml for this
       rule. Open the matching entries in Logs Explorer with the same filter and follow the
       error to its dependency; the filter itself says what the app owners consider page-worthy.
+
+  - id: logs.gofr_app_5xx
+    kind: log_match
+    # GoFr's access log line is `{"message": {"uri": ..., "response": <status>, ...}}` on Cloud Run
+    # stdout. Field path verified on GoFr v1.63.0 only; recheck after a GoFr upgrade. `logName:` is
+    # the has-operator on the stdout log, so no project id is needed. The renderer adds
+    # resource.type and the per-service scope. A new log-match policy can miss entries written in
+    # its first minute or two.
+    filter: logName:"run.googleapis.com%2Fstdout" AND jsonPayload.message.response>=500
+    rate_limit: 1800s
+    severity: page
+    signal: GoFr access-log entries with a response status of 500 or more on a Cloud Run service
+    summary: Service app returned a 5xx
+    triage: >-
+      The app itself logged a response with status 500 or more. Open the matching entries in
+      Logs Explorer, read the uri and the surrounding error entries, and check whether the
+      latest revision introduced it; roll back with rollback-service if so. Cloud Run request
+      metrics can miss a low-volume 5xx that this log line still shows.

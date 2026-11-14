@@ -81,6 +81,12 @@ So the number of policies stays close to the number of rules, not rules × servi
 - A default-off rule that needs a parameter (`logs.error_match` needs `filter`) is an error if
   you enable it without one.
 
+**`logs.gofr_app_5xx` matches GoFr's own access log.** It fires on a Cloud Run stdout entry
+whose `jsonPayload.message.response` is 500 or more, so it sees a 5xx the app returned even when
+Cloud Run's request metrics are too coarse for `cloudrun.5xx_ratio`. A new log-match policy can
+miss entries written in its first minute or two, so run a positive control (force one 5xx) only
+several minutes after the policy is created, then check the incident opened.
+
 **Log filters on a GoFr app: never filter on `severity`.** GoFr writes its level as
 `jsonPayload.level` (`"ERROR"`, `"FATAL"`, …) and never sets Cloud Logging's `severity`, so
 every GoFr entry is stored at DEFAULT severity. `severity>=ERROR` silently matches nothing
@@ -204,6 +210,7 @@ notification channels in the Cloud Monitoring console if you want pages and tick
 | `cloudrun` | `cloudrun.memory_p99` | Cloud Run p99 container memory utilisation | > 85% over 10m, for 10m | ticket | yes |
 | `gcp-logs` | `logs.crash_loop` | FATAL / CRITICAL log entries or unrecovered Go panics on a Cloud Run revision | any match, rate limit 300s | page | yes |
 | `gcp-logs` | `logs.error_match` | Log entries matching a filter you supply | any match, rate limit 300s | page | no |
+| `gcp-logs` | `logs.gofr_app_5xx` | GoFr access-log entries with a response status of 500 or more on a Cloud Run service | any match, rate limit 1800s | page | yes |
 | `gofr-http` | `gofr.http.server.error_ratio` | GoFr HTTP 5xx / all responses, per service | > 5% over 10m, for 10m, min 20 req | page | yes |
 | `gofr-http` | `gofr.http.server.latency_p95` | GoFr HTTP p95 response time | > 2s over 10m, for 10m, min 20 req | ticket | yes |
 | `gofr-meta` | `gofr.metrics.silent_while_serving` | Cloud Run is serving traffic but GoFr exports no HTTP metrics | over 30m, for 30m | ticket | yes |
@@ -241,6 +248,10 @@ The catalog ships inside this repo's releases, so it follows the same semver:
 - **Minor** (called out at the top of the release notes): a default threshold tightened or
   loosened, or a rule added to a pack.
 - **Major**: a rule id removed or renamed, or a rule changed from `ticket` to `page`.
+
+**1.1.0** adds `logs.gofr_app_5xx` to `gcp-logs`, on by default, so a caller starts receiving
+app-5xx alerts on upgrade. The field path (`jsonPayload.message.response`) is verified on GoFr
+v1.63.0 only. Opt out with `logs.gofr_app_5xx: {enabled: false}`.
 
 Each policy carries `catalog_version` in its `userLabels`, so you can see which catalog built it.
 

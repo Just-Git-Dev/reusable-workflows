@@ -337,7 +337,9 @@ def test_render():
                       c["query"].count('monitored_resource="cloud_run_revision"') == n_sel, c["query"])
         else:
             check(f"{fname}: log rule has notificationRateLimit",
-                  p["alertStrategy"]["notificationRateLimit"]["period"] == "300s", p["alertStrategy"])
+                  p["alertStrategy"]["notificationRateLimit"]["period"]
+                  == ("1800s" if p["userLabels"]["rule_id"] == "logs-gofr_app_5xx" else "300s"),
+                  p["alertStrategy"])
             check(f"{fname}: log rule scoped to the spec's services",
                   'resource.labels.service_name="gateway"' in cond["conditionMatchedLog"]["filter"],
                   cond["conditionMatchedLog"]["filter"])
@@ -355,6 +357,19 @@ def test_render():
     crash = by_rule["logs-crash_loop"]["conditions"][0]["conditionMatchedLog"]["filter"]
     check("crash_loop matches GoFr's own FATAL level, not only severity",
           'jsonPayload.level="FATAL"' in crash, crash)
+    # logs.gofr_app_5xx: pin the exact rendered filter (service scoping comes from the renderer).
+    app5xx = by_rule["logs-gofr_app_5xx"]
+    check("gofr_app_5xx renders the pinned log filter",
+          app5xx["conditions"][0]["conditionMatchedLog"]["filter"]
+          == 'resource.type="cloud_run_revision" AND (resource.labels.service_name="core" '
+             'OR resource.labels.service_name="gateway") AND '
+             '(logName:"run.googleapis.com%2Fstdout" AND jsonPayload.message.response>=500)',
+          app5xx["conditions"][0]["conditionMatchedLog"]["filter"])
+    check("gofr_app_5xx is a page with 1800s rate limit",
+          app5xx["severity"] == "CRITICAL"
+          and app5xx["alertStrategy"]["notificationRateLimit"]["period"] == "1800s", app5xx["alertStrategy"])
+    check("catalog version is 1.1.0 (a rule added to a pack is a minor)",
+          app5xx["userLabels"]["catalog_version"] == "1-1-0", app5xx["userLabels"])
     c = by_rule["gateway-upstream-errors"]["conditions"][0]["conditionPrometheusQueryLanguage"]
     check("may_be_absent -> disableMetricValidation", c.get("disableMetricValidation") is True, c)
     check("custom `in` filter renders as an anchored regex", 'code=~"502|503"' in c["query"], c["query"])

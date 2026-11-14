@@ -20,7 +20,7 @@ documentation:
     the service''s ERROR logs for it and check the latest deploy and the database.
 
 
-    - Rule: `gofr.http.server.error_ratio` (pack `gofr-http`, catalog 1.0.0)
+    - Rule: `gofr.http.server.error_ratio` (pack `gofr-http`, catalog 1.1.0)
 
     - Condition: > 5% (compared as 0.05), over 10m, for 10m, only with at least 20
     requests in the window
@@ -41,7 +41,7 @@ notificationChannels:
 severity: WARNING
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: gofr-http-server-error_ratio
-  spec_hash: 2bd415da4030466b
+  spec_hash: b2ccffab19352d16

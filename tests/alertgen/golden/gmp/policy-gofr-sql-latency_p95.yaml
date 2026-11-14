@@ -19,7 +19,7 @@ documentation:
     locks and connection limits, and whether a recent migration dropped an index.
 
 
-    - Rule: `gofr.sql.latency_p95` (pack `gofr-sql`, catalog 1.0.0)
+    - Rule: `gofr.sql.latency_p95` (pack `gofr-sql`, catalog 1.1.0)
 
     - Condition: > 500ms (compared as 500), over 10m, for 10m, only with at least
     20 requests in the window
@@ -39,7 +39,7 @@ notificationChannels:
 severity: WARNING
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: gofr-sql-latency_p95
-  spec_hash: b4ab32d9a0e61806
+  spec_hash: 5f84ab4bf313fb43

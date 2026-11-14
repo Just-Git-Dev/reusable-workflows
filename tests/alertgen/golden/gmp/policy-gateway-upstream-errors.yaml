@@ -36,7 +36,7 @@ notificationChannels:
 severity: CRITICAL
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: gateway-upstream-errors
-  spec_hash: be1c8b0971fc996b
+  spec_hash: cc795237f0db343d

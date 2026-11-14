@@ -21,7 +21,7 @@ documentation:
     or upstream dependencies.
 
 
-    - Rule: `cloudrun.5xx_ratio` (pack `cloudrun`, catalog 1.0.0)
+    - Rule: `cloudrun.5xx_ratio` (pack `cloudrun`, catalog 1.1.0)
 
     - Condition: > 5% (compared as 0.05), over 10m, for 10m, only with at least 20
     requests in the window
@@ -42,7 +42,7 @@ notificationChannels:
 severity: CRITICAL
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: cloudrun-5xx_ratio
-  spec_hash: f94c5514d1425ce9
+  spec_hash: 48f26f7821a4d2f5

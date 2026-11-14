@@ -2,8 +2,9 @@
 
 ## Index
 
-149 entries total — 139 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+150 entries total — 140 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-14` — [logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices pending owner review](#2026-11-14--logsgofr_app_5xx-added-to-gcp-logs-catalog-110-three-dispatcher-choices-pending-owner-review)
 - `2026-11-13` — [Release flow: caller-declared waiver pairs + plan labels output built (RW1)](#2026-11-13--release-flow-caller-declared-waiver-pairs--plan-labels-output-built-rw1)
 - `2026-11-13` — [Optional environment input on cleanup-gar-images, cleanup-cloud-run-revisions, bootstrap-alerts](#2026-11-13--optional-environment-input-on-cleanup-gar-images-cleanup-cloud-run-revisions-bootstrap-alerts)
 - `2026-11-13` — [manage-config-secrets refuses a gsm create of a *-env secret (ruling 24)](#2026-11-13--manage-config-secrets-refuses-a-gsm-create-of-a--env-secret-ruling-24)
@@ -265,6 +266,18 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-14 — logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices pending owner review
+
+Adds catalog rule `logs.gofr_app_5xx` (pack `gcp-logs`, on by default, page, rate limit 1800s) per the fleet API 5xx alerting standard. Catalog version 1.0.0 to 1.1.0 (a rule added to a pack is a minor). `cloudrun.5xx_ratio` defaults are unchanged.
+
+Three DISPATCHER choices, not owner rulings, pending owner review (reversible, nothing is released):
+
+1. No project id in the filter. The shipped filter is `logName:"run.googleapis.com%2Fstdout" AND jsonPayload.message.response>=500` (has-operator on logName), not the pilot's `logName="projects/<project>/logs/..."`, because alertgen is never given the project id and plumbing one in means a CLI flag, a workflow change and a placeholder. The has-operator is the documented Logging query form and the repo already uses it for another log read; it has not been proven in a live alert policy.
+2. No label extractors. The pilot's `uri` / `status` labels are not shipped; supporting them is new renderer surface (new catalog key, `labelExtractors`, `spec_hash`). Filed in TODO.md.
+3. Release-note callout lives in the PR body under a "Release notes" heading (earlier minors carried theirs as a body section on the release) plus one line in docs/alertspec.md "Catalog versioning". There is no CHANGELOG file.
+
+Callers start receiving app-5xx alerts on upgrade; the field path is verified on GoFr v1.63.0 only; opt out with `logs.gofr_app_5xx: {enabled: false}`.
 
 ## 2026-11-13 — Release flow: caller-declared waiver pairs + plan labels output built (RW1)
 

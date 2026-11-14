@@ -20,7 +20,7 @@ documentation:
     if so.
 
 
-    - Rule: `logs.crash_loop` (pack `gcp-logs`, catalog 1.0.0)
+    - Rule: `logs.crash_loop` (pack `gcp-logs`, catalog 1.1.0)
 
     - Condition: any log entry matching the filter; at most one notification per 5m
 
@@ -37,7 +37,7 @@ notificationChannels:
 severity: CRITICAL
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: logs-crash_loop
-  spec_hash: ee043cd922a22156
+  spec_hash: 7b14aa41d0198d8d

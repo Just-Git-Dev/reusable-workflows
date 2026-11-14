@@ -111,6 +111,10 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
       placeholder, the `autoClose` range, and the log-condition rate limit. Add one red-first case
       each (re-filed here 2026-11-13 from infra-provisioning's TODO, where it sat as a pointer).
       Size S.
+- [ ] **label_extractors for log rules.** A consumer's pilot used `uri` / `status` labels on
+      its app-5xx log policy; `logs.gofr_app_5xx` ships without them. Needs a new catalog key,
+      renderer support (`conditionMatchedLog.labelExtractors`) and the `spec_hash` input
+      (`alerting/alertgen/render_gmp.py`, `alerting/catalog/gcp-logs.yaml`). Unranked, for the owner.
 
 ## Waiting / blocked
 

@@ -20,7 +20,7 @@ documentation:
     logs.
 
 
-    - Rule: `cloudrun.latency_p95` (pack `cloudrun`, catalog 1.0.0)
+    - Rule: `cloudrun.latency_p95` (pack `cloudrun`, catalog 1.1.0)
 
     - Condition: > 5s (compared as 5000), over 10m, for 10m, only with at least 20
     requests in the window
@@ -40,7 +40,7 @@ notificationChannels:
 severity: WARNING
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: cloudrun-latency_p95
-  spec_hash: d834151edfebad8d
+  spec_hash: 983fa62ca18a0f84
