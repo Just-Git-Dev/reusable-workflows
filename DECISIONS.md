@@ -2,7 +2,7 @@
 
 ## Index
 
-150 entries total — 140 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+151 entries total — 141 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
 - `2026-11-14` — [logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices pending owner review](#2026-11-14--logsgofr_app_5xx-added-to-gcp-logs-catalog-110-three-dispatcher-choices-pending-owner-review)
 - `2026-11-14` — [Fleet API 5xx alerting standard = the service-alerts catalog (named GoFr app-5xx log rule + cloudrun.5xx_ratio)](#2026-11-14--fleet-api-5xx-alerting-standard--the-service-alerts-catalog-named-gofr-app-5xx-log-rule--cloudrun5xx_ratio)
