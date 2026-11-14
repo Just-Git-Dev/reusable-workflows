@@ -3476,6 +3476,12 @@
           "description": "File name of the caller's release workflow (for the concurrent-run guard)",
           "required": false,
           "type": "string"
+        },
+        "waiver_pairs": {
+          "default": "",
+          "description": "Extra 'consumer -> provider' pairs (not contracts pairs) the breaking-approved label may waive; comma or newline separated. Pass the same string to release-pr-check and release-plan",
+          "required": false,
+          "type": "string"
         }
       },
       "jobs": {
@@ -3506,6 +3512,7 @@
         "breaking": "JSON [{consumer, provider, finding}] approved by the breaking-approved label ([] without it); pass to spec-compat as RELEASE_BREAKING",
         "checks": "JSON list for a matrix include; [] when no contract involves a listed service",
         "ci-filters": "JSON {repo/workflow@sha: {kind, globs}}: the push path filters ci-green read; release-drafts re-checks with them (its write job parses no YAML)",
+        "labels": "JSON list of the release PR's label names at the moment it merged (events replayed strictly before merged_at); a rehearsal reads the open PR's current labels, and [] without manifest-ref",
         "manifest": "The manifest path",
         "manifest-sha256": "sha256 of the manifest file; every later stage checks the staged artifact against it",
         "order": "Listed repos in publish order, comma-separated",
@@ -3537,6 +3544,12 @@
         "config": {
           "default": "releases/services.json",
           "description": "Path of the release config in the root repo",
+          "required": false,
+          "type": "string"
+        },
+        "waiver_pairs": {
+          "default": "",
+          "description": "Extra 'consumer -> provider' pairs (not contracts pairs) the breaking-approved label may waive; comma or newline separated. Pass the same string to release-pr-check and release-plan",
           "required": false,
           "type": "string"
         }

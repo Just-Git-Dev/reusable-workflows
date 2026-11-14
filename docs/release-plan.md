@@ -6,7 +6,7 @@ manifest, the publish order and the `breaking-approved` approval (`plan`), then 
 images, contract states) and `service-gates`. With `rehearsal: true` it skips only the merged-PR
 check and runs the rest, so a release can be rehearsed with zero writes.
 
-Inputs, outputs (`manifest`, `manifest-sha256`, `pr`, `order`, `rehearsal`, `resolved`, `checks`, `breaking`, `ci-filters`) and the caller
+Inputs, outputs (`manifest`, `manifest-sha256`, `pr`, `order`, `rehearsal`, `resolved`, `checks`, `breaking`, `labels`, `ci-filters`) and the caller
 example: see [release-flow.md, `release-plan.yml`](release-flow.md#release-planyml). The token
 rules and the `RELEASE_FLOW_TREE` pin are in the same page.
 

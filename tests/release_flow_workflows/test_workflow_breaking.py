@@ -27,6 +27,14 @@ class PrCheckTests(unittest.TestCase):
             self.assertNotIn("secrets.", str(v))
         self.assertIn("GITHUB_STEP_SUMMARY", st["run"])
 
+    def test_waiver_pairs_input_reaches_the_cli_by_env(self):
+        inp = wf.on_block(wf.load("release-pr-check.yml"))["workflow_call"]["inputs"]["waiver_pairs"]
+        self.assertEqual((inp["type"], inp["required"], inp["default"]), ("string", False, ""))
+        st = self.shape_step()
+        self.assertEqual(st["env"]["WAIVER_PAIRS"], "${{ inputs.waiver_pairs }}")
+        self.assertIn('--waiver-pairs "$WAIVER_PAIRS"', st["run"])
+        self.assertNotIn("inputs.waiver_pairs", st["run"])
+
     def test_shape_runs_after_the_cli_is_pinned(self):
         steps = self.job["steps"]
         pin = next(i for i, s in enumerate(steps) if "RELEASE_FLOW_TREE" in s.get("run", ""))
@@ -52,6 +60,29 @@ class PlanTests(unittest.TestCase):
         self.assertIn('"$GITHUB_STEP_SUMMARY"', run)
         self.assertEqual(self.jobs["plan"]["outputs"]["breaking"],
                          "${{ steps.brk.outputs.breaking }}")
+
+    def test_waiver_pairs_input_and_labels_output(self):
+        inp = wf.on_block(self.w)["workflow_call"]["inputs"]["waiver_pairs"]
+        self.assertEqual((inp["type"], inp["required"], inp["default"]), ("string", False, ""))
+        _, st = wf.step_by_id(self.jobs["plan"], "brk")
+        self.assertEqual(st["env"]["WAIVER_PAIRS"], "${{ inputs.waiver_pairs }}")
+        self.assertIn('--waiver-pairs "$WAIVER_PAIRS"', st["run"])
+        self.assertIn('--labels-out "$RUNNER_TEMP/labels.json"', st["run"])
+        self.assertIn("labels=", st["run"])
+        # a rehearsal without manifest-ref has no PR: the file keeps its default, labels=[]
+        self.assertIn("echo '[]' > \"$RUNNER_TEMP/labels.json\"", st["run"])
+        self.assertNotIn("inputs.waiver_pairs", st["run"])
+        self.assertEqual(self.jobs["plan"]["outputs"]["labels"], "${{ steps.brk.outputs.labels }}")
+        outs = wf.on_block(self.w)["workflow_call"]["outputs"]
+        self.assertEqual(outs["labels"]["value"], "${{ jobs.plan.outputs.labels }}")
+
+    def test_resolve_passes_the_pairs_and_the_config_to_the_matrix_check(self):
+        _, st = wf.step_by_id(self.jobs["resolve"], "brk")
+        self.assertEqual(st["env"]["WAIVER_PAIRS"], "${{ inputs.waiver_pairs }}")
+        self.assertIn("CONFIG", st["env"])
+        self.assertIn('--waiver-pairs "$WAIVER_PAIRS"', st["run"])
+        self.assertIn('--config "$CONFIG"', st["run"])
+        self.assertNotIn("inputs.waiver_pairs", st["run"])
 
     def test_approval_runs_after_the_guard(self):
         m, _ = wf.step_by_id(self.jobs["plan"], "m")
@@ -83,6 +114,18 @@ class CallerExampleTests(unittest.TestCase):
         self.assertIn('--pair "$PAIR" --consumer-side "$SIDE"', text)
         self.assertIn("SIDE: ${{ matrix.consumer_side }}", text)
         self.assertIn("## Contract checks", text)
+
+    def test_doc_caller_example_declares_a_pair_on_both_calls(self):
+        text = DOC.read_text()
+        self.assertEqual(text.count("waiver_pairs: sdk-oldest -> backend"), 2)
+        start = text.index("  sdk-compat:")
+        stage = text[start:text.index("  drafts:", start)]
+        self.assertIn("--consumer-side live", stage)
+        self.assertIn("--pair", stage)
+        self.assertIn("RELEASE_BREAKING: ${{ needs.plan.outputs.breaking }}", stage)
+        self.assertNotIn("\n    if:", stage)   # verdict.py: a needs job that is skipped fails drafts
+        self.assertIn("needs: [plan, contracts, sdk-compat]", text)
+        self.assertIn("fromJSON(needs.plan.outputs.labels)", text)
 
 
 if __name__ == "__main__":

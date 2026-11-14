@@ -9,8 +9,9 @@ finding exactly as printed after `INCOMPATIBLE `:
     ```
 
 Rules (docs/release-flow.md § Contract checks): R1 label and block come together; R2 one block,
-every line parses, no duplicates, every pair a configured contract; R3 every listed pair has a
-live-consumer check in `checks`; R4 (spec_compat) listed findings are WAIVED, unlisted ones and
+every line parses, no duplicates, every pair a configured contract or a caller-declared `waiver_pairs`
+pair; R3 every listed contract pair has a live-consumer check in `checks` (a declared pair needs only
+its presence in the declared list); R4 (spec_compat) listed findings are WAIVED, unlisted ones and
 listed ones that did not occur fail; R5 a real release counts the label only if it was on the
 PR before `merged_at`; R6 (spec_compat) a failure prints a paste-ready block. Stdlib only.
 """
@@ -55,6 +56,29 @@ def parse_pair(text):
     return m.group(1), m.group(2)
 
 
+def parse_declared(text, contracts, services=None):
+    """`waiver_pairs`: caller-declared pairs that are NOT `contracts` pairs -> frozenset of
+    (consumer, provider). Items are separated by commas or newlines. A malformed item, a duplicate,
+    a pair that is a configured contract (redeclaring it would switch off R3's live-consumer check)
+    and, when `services` is given, a provider that is not a configured service all raise."""
+    out = set()
+    for item in re.split(r"[,\n]", text or ""):
+        item = item.strip()
+        if not item:
+            continue
+        pair = parse_pair(item)
+        if pair in out:
+            raise WaiverError(f"waiver_pairs lists {item!r} twice")
+        if pair in contracts:
+            raise WaiverError(f"waiver_pairs pair {item!r} is already a configured contract "
+                              "(services.json `contracts`); it is waived by its live-consumer check")
+        if services is not None and pair[1] not in services:
+            raise WaiverError(f"waiver_pairs pair {item!r}: provider {pair[1]!r} is not a service "
+                              "in services.json")
+        out.add(pair)
+    return frozenset(out)
+
+
 def parse_block(body):
     """-> None when the body has no ```breaking block, else its entries (R2 syntax)."""
     lines = (body or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -94,8 +118,9 @@ def parse_block(body):
     return out
 
 
-def check_shape(labels, body, contracts):
-    """R1 + R2. labels: label names; contracts: {(consumer, provider)}. -> entries ([] = none)."""
+def check_shape(labels, body, contracts, declared=frozenset()):
+    """R1 + R2. labels: label names; contracts: {(consumer, provider)}; declared: the caller's
+    `waiver_pairs`. -> entries ([] = none)."""
     entries = parse_block(body)
     has_label = LABEL in labels
     if has_label and entries is None:
@@ -105,9 +130,9 @@ def check_shape(labels, body, contracts):
         raise WaiverError(f"the PR body lists breaking changes but the PR lacks the {LABEL!r} "
                           "label: only the owner's label approves them")
     for e in entries or []:
-        if (e.consumer, e.provider) not in contracts:
+        if (e.consumer, e.provider) not in contracts and (e.consumer, e.provider) not in declared:
             raise WaiverError(f"breaking pair {e.pair!r} is not a configured contract "
-                              f"(services.json `contracts`)")
+                              "(services.json `contracts`) or a declared pair (`waiver_pairs`)")
     return entries or []
 
 
@@ -135,12 +160,29 @@ def label_before_merge(events, merged_at):
     return state
 
 
-def check_matrix(entries, checks):
-    """R3: each listed pair needs a `checks` entry with consumer_side live."""
+def labels_at(events, merged_at):
+    """The PR's label names at the moment it merged (R5's rule for every label): those whose last
+    labeled/unlabeled event strictly before merged_at is `labeled`. -> sorted list."""
+    if not merged_at:
+        raise WaiverError("the PR has no merged_at; a label cannot be dated against a merge")
+    cut = _ts(merged_at)
+    state = {}
+    mine = [e for e in events or [] if e.get("event") in ("labeled", "unlabeled")
+            and (e.get("label") or {}).get("name")]
+    for e in sorted(mine, key=lambda e: _ts(e.get("created_at"))):
+        if _ts(e.get("created_at")) >= cut:
+            break
+        state[e["label"]["name"]] = e["event"] == "labeled"
+    return sorted(n for n, on in state.items() if on)
+
+
+def check_matrix(entries, checks, declared=frozenset()):
+    """R3: each listed pair needs a `checks` entry with consumer_side live; a declared pair
+    (`waiver_pairs`) needs only its presence in the declared list."""
     live = {(c.get("consumer"), c.get("provider")) for c in checks or []
             if c.get("consumer_side") == "live"}
     for e in entries:
-        if (e.consumer, e.provider) not in live:
+        if (e.consumer, e.provider) not in live and (e.consumer, e.provider) not in declared:
             raise WaiverError(f"breaking pair {e.pair!r} has no live-consumer contract check in "
                               "this release; only a break of a LIVE consumer can be approved")
 

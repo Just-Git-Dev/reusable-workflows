@@ -99,16 +99,21 @@ defaults to releases/services.json in the CURRENT DIRECTORY):
                    provider@new. With --pair, env RELEASE_BREAKING (plan's `breaking`) waives the
                    owner-approved findings of a `live` consumer check (WAIVED; an unlisted or a
                    stale one fails); on failure prints a paste-ready ```breaking block.
-  breaking-shape --event-file F
+  breaking-shape --event-file F [--waiver-pairs S]
                    R1 + R2 of the breaking-approved waiver from a pull_request event payload:
                    the label and a well-formed ```breaking block come together; pairs are
-                   configured contracts. Prints the list as JSON.   no token
-  breaking-approval (--pr N | --head-branch B)
+                   configured contracts or the caller's --waiver-pairs (`consumer -> provider`,
+                   comma/newline separated; a malformed, duplicate, contract-overlapping or
+                   unknown-provider pair is exit 2). Prints the list as JSON.   no token
+  breaking-approval (--pr N | --head-branch B) [--waiver-pairs S] [--labels-out FILE]
                    R1 + R2 on the merged release PR N, plus R5 (the label predates merged_at,
                    from its issue events); or, for a rehearsal, on the one OPEN PR of branch B.
-                   Prints the approved list as JSON.   read token (pull-requests: read)
-  breaking-matrix --breaking J --checks J
-                   R3: every approved pair has a live-consumer entry in the checks matrix.
+                   Prints the approved list as JSON. --labels-out writes the PR's label names
+                   as JSON from the same read: at merge time for --pr, current for a rehearsal.
+                   read token (pull-requests: read)
+  breaking-matrix --breaking J --checks J [--waiver-pairs S] [--config C]
+                   R3: every approved pair has a live-consumer entry in the checks matrix, or is
+                   a declared --waiver-pairs pair (checked against C only when S is given).
                    Prints the list.   no token
   report --stage S --result success|failure [--detail T] [--drafts FILE] [--publish FILE]
                    markdown to stdout (FILE = JSON {repo: release_id} / {repo: status}).
@@ -235,13 +240,18 @@ def build_parser():
     s = sub.add_parser("breaking-shape")
     s.add_argument("--event-file", required=True)
     s.add_argument("--config", default=str(DEFAULT_CONFIG))
+    s.add_argument("--waiver-pairs", default="")
     s = sub.add_parser("breaking-approval")
     s.add_argument("--pr", default=None)
     s.add_argument("--head-branch", default=None)
     s.add_argument("--config", default=str(DEFAULT_CONFIG))
+    s.add_argument("--waiver-pairs", default="")
+    s.add_argument("--labels-out", default=None)
     s = sub.add_parser("breaking-matrix")
     s.add_argument("--breaking", required=True)
     s.add_argument("--checks", required=True)
+    s.add_argument("--waiver-pairs", default="")
+    s.add_argument("--config", default=str(DEFAULT_CONFIG))
     s = sub.add_parser("report")
     s.add_argument("--stage", required=True)
     s.add_argument("--result", required=True, choices=["success", "failure"])
@@ -368,6 +378,16 @@ def _verdict(args):
     return 0 if res["ok"] else 1
 
 
+def _declared(args, cfg):
+    """`--waiver-pairs` -> frozenset of pairs; a bad list is a caller config error (exit 2)."""
+    contracts = {(c.consumer, c.provider) for c in cfg.contracts}
+    try:
+        return waiver_mod.parse_declared(args.waiver_pairs, contracts,
+                                         {s.repo for s in cfg.services})
+    except waiver_mod.WaiverError as ex:
+        raise Usage(str(ex)) from ex
+
+
 def _breaking(args, env, transport):
     """The breaking-approved waiver (waiver.py). Prints the approved list as compact JSON.
     Exit 1 = a rule failed; 2 = unreadable input (raised as Usage / ConfigError)."""
@@ -383,7 +403,10 @@ def _breaking(args, env, transport):
                 entries = waiver_mod.from_json(args.breaking)
             except waiver_mod.WaiverError as ex:
                 raise Usage(str(ex)) from ex
-            waiver_mod.check_matrix(entries, checks)
+            declared = frozenset()
+            if (args.waiver_pairs or "").strip():
+                declared = _declared(args, config_mod.load(args.config))
+            waiver_mod.check_matrix(entries, checks, declared)
         elif args.cmd == "breaking-shape":
             cfg = config_mod.load(args.config)
             try:
@@ -395,7 +418,8 @@ def _breaking(args, env, transport):
                 raise Usage("the event is not a pull_request event")
             names = [lb.get("name") for lb in pr.get("labels") or []]
             contracts = {(c.consumer, c.provider) for c in cfg.contracts}
-            entries = waiver_mod.check_shape(names, pr.get("body"), contracts)
+            entries = waiver_mod.check_shape(names, pr.get("body"), contracts,
+                                             _declared(args, cfg))
         else:
             if (args.pr is None) == (args.head_branch is None):
                 raise Usage("breaking-approval needs exactly one of --pr and --head-branch")
@@ -407,12 +431,20 @@ def _breaking(args, env, transport):
             cfg = config_mod.load(args.config)
             reader = gh.Reader(transport(_token(env, "RELEASE_FLOW_READ_TOKEN")))
             contracts = {(c.consumer, c.provider) for c in cfg.contracts}
+            declared = _declared(args, cfg)
             try:
-                entries = guard.breaking_approval(reader, _root(env), contracts,
-                                                  pr=args.pr, head_branch=args.head_branch)
+                entries, label_names = guard.breaking_approval(
+                    reader, _root(env), contracts, pr=args.pr, head_branch=args.head_branch,
+                    declared=declared)
             except guard.GuardError as ex:
                 _err(f"FAIL: {ex}")
                 return 1
+            if args.labels_out:
+                try:
+                    Path(args.labels_out).write_text(json.dumps(label_names, separators=(",", ":")),
+                                                     encoding="utf-8")
+                except OSError as ex:
+                    raise Usage(f"cannot write --labels-out {args.labels_out}: {ex}") from ex
     except waiver_mod.WaiverError as ex:
         _err(f"FAIL: {ex}")
         return 1

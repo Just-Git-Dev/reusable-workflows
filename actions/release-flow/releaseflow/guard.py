@@ -87,12 +87,14 @@ def concurrent(reader, root, workflow, run_id):
         raise GuardError(f"other {workflow} run(s) active: {sorted(set(others))}")
 
 
-def breaking_approval(reader, root, contracts, pr=None, head_branch=None):
-    """The `breaking-approved` list of the release PR (waiver.py) -> [Entry].
+def breaking_approval(reader, root, contracts, pr=None, head_branch=None, declared=frozenset()):
+    """The `breaking-approved` list of the release PR (waiver.py) -> (entries, labels).
 
     Real release (pr): the MERGED PR's current label + body (R1, R2), and the label must have
     been on it before merged_at (R5, from issues/{n}/events). Rehearsal (head_branch): the one
-    OPEN PR whose head is that branch; its current label + body (R1, R2)."""
+    OPEN PR whose head is that branch; its current label + body (R1, R2). `labels` is the PR's
+    label names: at merge time for a real release (issue events replayed up to merged_at, always
+    read), the current ones for a rehearsal. `declared` = the caller's `waiver_pairs`."""
     try:
         if pr is not None:
             obj = reader.get_ok(f"repos/{root}/pulls/{pr}")
@@ -109,16 +111,18 @@ def breaking_approval(reader, root, contracts, pr=None, head_branch=None):
         raise GuardError(f"PR #{pr} is not merged")
     names = [lb.get("name") for lb in obj.get("labels") or []]
     try:
-        entries = waiver.check_shape(names, obj.get("body"), contracts)
-        if pr is not None and entries:
+        entries = waiver.check_shape(names, obj.get("body"), contracts, declared)
+        labels_out = sorted(n for n in names if n)
+        if pr is not None:
             try:
                 events = reader.paginate(f"repos/{root}/issues/{pr}/events")
             except gh.GitHubError as ex:
                 raise GuardError(f"cannot read PR #{pr}'s label events: {ex}") from ex
-            if not waiver.label_before_merge(events, obj["merged_at"]):
+            labels_out = waiver.labels_at(events, obj["merged_at"])
+            if entries and waiver.LABEL not in labels_out:
                 raise GuardError(f"the {waiver.LABEL!r} label was not on PR #{pr} before its "
                                  f"merge at {obj['merged_at']}; a label added after the merge "
                                  "approves nothing")
     except waiver.WaiverError as ex:
         raise GuardError(str(ex)) from ex
-    return entries
+    return entries, labels_out
