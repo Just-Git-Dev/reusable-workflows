@@ -5,7 +5,7 @@ Runs in the project repo (`<org>/project`) only. It never creates a repo or an e
 prints a value, and fails loudly on an empty source or a missing target.
 
 ```yaml
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v6.2.1
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v6.3.0
 ```
 
 ## When to use it, and when not
@@ -113,7 +113,7 @@ permissions:
 
 jobs:
   distribute:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/distribute-env-secrets.yml@v6.3.0
     with:
       client_id: ${{ vars.RELEASE_APP_CLIENT_ID }}
       dry_run: ${{ inputs.dry_run }}

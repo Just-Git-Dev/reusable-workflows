@@ -301,7 +301,7 @@ permissions:
 
 jobs:
   sync:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/sync-bundle-key.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/sync-bundle-key.yml@v6.3.0
     with:
       gcp_project: my-gcp-project
       wif_provider: ${{ vars.GCP_WIF_PROVIDER }}

@@ -70,7 +70,7 @@ permissions:
 
 jobs:
   run:
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-cloud-run-revisions.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/cleanup-cloud-run-revisions.yml@v6.3.0
     with:
       gcp_project: my-gcp-project
       gcp_region: asia-southeast1

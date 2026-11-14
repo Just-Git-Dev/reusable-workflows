@@ -22,9 +22,9 @@ It is two things:
 | [`release-publish.yml`](../.github/workflows/release-publish.yml) | publish each draft in order, wait for its Deploy, prove it live, retry a failed deploy, then report | publish + re-run of its own failed Deploy |
 
 ```yaml
-- uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.2.1
+- uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.3.0
 # and, as jobs:
-uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.2.1
+uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.3.0
 ```
 
 ## Why this exists
@@ -697,7 +697,7 @@ permissions: {}
 jobs:
   release-pr:
     permissions: {contents: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-pr-check.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-pr-check.yml@v6.3.0
     with:
       allowed: backend,webapp,desktop
       waiver_pairs: sdk-oldest -> backend   # optional; same string on the plan call
@@ -718,7 +718,7 @@ permissions: {}
 jobs:
   plan:
     permissions: {contents: read, pull-requests: read, checks: read, actions: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.3.0
     with:
       allowed: backend,webapp,desktop
       client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
@@ -736,7 +736,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {contents: read}
     steps:
-      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.2.1
+      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.3.0
       # once per matrix entry; --pair + RELEASE_BREAKING apply the breaking-approved list
       - run: release-flow spec-compat baseline.yaml candidate.yaml --label "$PAIR" --pair "$PAIR" --consumer-side "$SIDE"
         shell: bash
@@ -750,7 +750,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {contents: read}
     steps:
-      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.2.1
+      - uses: Just-Git-Dev/reusable-workflows/actions/release-flow@v6.3.0
       - run: release-flow spec-compat oldest-sdk.yaml candidate.yaml --label "$PAIR" --pair "$PAIR" --consumer-side live
         shell: bash
         env:
@@ -762,7 +762,7 @@ jobs:
     needs: [plan, contracts, sdk-compat]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     permissions: {contents: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-drafts.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-drafts.yml@v6.3.0
     with:
       needs: ${{ toJSON(needs) }}
       allowed: backend,webapp,desktop
@@ -781,7 +781,7 @@ jobs:
     needs: [plan, contracts, sdk-compat, drafts, smoke]
     if: ${{ always() }}
     permissions: {contents: read, pull-requests: write}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-publish.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-publish.yml@v6.3.0
     with:
       needs: ${{ toJSON(needs) }}
       required-jobs: plan,drafts,smoke
@@ -804,7 +804,7 @@ permissions: {}
 jobs:
   plan:
     permissions: {contents: read, pull-requests: read, checks: read, actions: read}
-    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.2.1
+    uses: Just-Git-Dev/reusable-workflows/.github/workflows/release-plan.yml@v6.3.0
     with:
       allowed: backend,webapp,desktop
     secrets:
