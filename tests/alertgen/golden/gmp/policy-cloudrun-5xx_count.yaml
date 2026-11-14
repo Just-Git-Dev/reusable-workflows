@@ -17,7 +17,7 @@ documentation:
     logs for the window and check the latest revision and its dependencies.
 
 
-    - Rule: `cloudrun.5xx_count` (pack `cloudrun`, catalog 1.0.0)
+    - Rule: `cloudrun.5xx_count` (pack `cloudrun`, catalog 1.1.0)
 
     - Condition: > 5 (compared as 5), over 15m, for 0s
 
@@ -35,7 +35,7 @@ notificationChannels:
 severity: CRITICAL
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: cloudrun-5xx_count
-  spec_hash: d023c1e2aad0dc5f
+  spec_hash: 897a5f38bc0df469

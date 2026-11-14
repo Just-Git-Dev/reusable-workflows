@@ -22,7 +22,7 @@ documentation:
     matches the Cloud Run service name (the job label must equal service_name).
 
 
-    - Rule: `gofr.metrics.silent_while_serving` (pack `gofr-meta`, catalog 1.0.0)
+    - Rule: `gofr.metrics.silent_while_serving` (pack `gofr-meta`, catalog 1.1.0)
 
     - Condition: over 30m, for 30m
 
@@ -41,7 +41,7 @@ notificationChannels:
 severity: WARNING
 userLabels:
   alertgen_owner: acme_app
-  catalog_version: 1-0-0
+  catalog_version: 1-1-0
   managed_by: alertgen
   rule_id: gofr-metrics-silent_while_serving
-  spec_hash: a58e4516f813f259
+  spec_hash: dbe945ede78981da
