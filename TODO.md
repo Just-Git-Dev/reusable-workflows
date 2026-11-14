@@ -6,17 +6,18 @@ Ranked by value for effort. Re-triaged 2026-11-13 against `c5131d3`; closed and 
 moved to [TODO-ARCHIVE.md](TODO-ARCHIVE.md) (same log, split by state only). Sizes: S < half a
 day, M about a day, L several.
 
-1. **M** — `TODO.md:"receive the App private key"` — owner-requested 2026-10-21; ends hand-kept key guards.
-2. **S** — `TODO.md:"which ref the smoke SPECS come from"` — doc-only; a consumer already failed a rehearsal on it.
-3. **S** — `TODO.md:"bare conditional"` — the Summary-step rule, as a CI grep.
-4. **S** — `TODO.md:"four checks have no dedicated test"` — validate-alerts test gaps.
-5. **M** — `TODO.md:"IAM conditions"` — repos-secrets conditional-binding redesign.
-6. **S** — `TODO.md:"re-check the other ignores"` — zizmor ignores that a fix or a reason can retire.
-7. **S then M** — `TODO.md:"delayed destruction"` — spike (a)-(c) before any build.
-8. **M** — `TODO.md:"Audit the remaining gates"` — derived comparands / assumed scopes.
-9. **M** — `TODO.md:"when they are on an old version"` — needs its three questions answered first.
-10. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
-11. **S** — `TODO.md:"CI runs the release-flow tests"` — a doc line names the wrong CI job for the release-flow tests.
+1. **M** — `TODO.md:"fleet API 5xx alerting standard"` — owner ruling 2026-11-14 (A); next up, plan mode first.
+2. **M** — `TODO.md:"receive the App private key"` — owner-requested 2026-10-21; ends hand-kept key guards.
+3. **S** — `TODO.md:"which ref the smoke SPECS come from"` — doc-only; a consumer already failed a rehearsal on it.
+4. **S** — `TODO.md:"bare conditional"` — the Summary-step rule, as a CI grep.
+5. **S** — `TODO.md:"four checks have no dedicated test"` — validate-alerts test gaps.
+6. **M** — `TODO.md:"IAM conditions"` — repos-secrets conditional-binding redesign.
+7. **S** — `TODO.md:"re-check the other ignores"` — zizmor ignores that a fix or a reason can retire.
+8. **S then M** — `TODO.md:"delayed destruction"` — spike (a)-(c) before any build.
+9. **M** — `TODO.md:"Audit the remaining gates"` — derived comparands / assumed scopes.
+10. **M** — `TODO.md:"when they are on an old version"` — needs its three questions answered first.
+11. **L** — `TODO.md:"template-injection: move"` — one workflow per PR.
+12. **S** — `TODO.md:"CI runs the release-flow tests"` — a doc line names the wrong CI job for the release-flow tests.
 
 Waiting on someone else: see [Waiting / blocked](#waiting--blocked).
 
@@ -98,6 +99,14 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
       workflow per PR, best-tested first. Size L.
 
 ## Ready — new capability
+
+- [ ] **Make the `service-alerts` catalog the fleet API 5xx alerting standard** (owner ruling
+      2026-11-14, DECISIONS "Fleet API 5xx alerting standard"). Add a named GoFr app-5xx log rule
+      (working name `gofr.logs.app_5xx`: `jsonPayload.message.response>=500` on the service's
+      Cloud Run stdout log, labels `uri`/`status`, a notification rate limit) to the catalog;
+      layer 2 is the existing `cloudrun.5xx_ratio` (decide in the plan whether its defaults move
+      toward the pilot's 5m / min 10). Then each consumer moves onto it, with a positive control
+      per GoFr version, waiting several minutes after the policy is created (see the entry's trap).
 
 - [ ] **Tell callers, in their own run, when they are on an old version.** `WORKFLOW_VERSION`
       ships in every reusable's `env:` (a called workflow cannot discover its own ref at runtime:

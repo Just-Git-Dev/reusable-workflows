@@ -2,8 +2,9 @@
 
 ## Index
 
-149 entries total — 139 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+150 entries total — 140 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-14` — [Fleet API 5xx alerting standard = the service-alerts catalog (named GoFr app-5xx log rule + cloudrun.5xx_ratio)](#2026-11-14--fleet-api-5xx-alerting-standard--the-service-alerts-catalog-named-gofr-app-5xx-log-rule--cloudrun5xx_ratio)
 - `2026-11-13` — [Release flow: caller-declared waiver pairs + plan labels output built (RW1)](#2026-11-13--release-flow-caller-declared-waiver-pairs--plan-labels-output-built-rw1)
 - `2026-11-13` — [Optional environment input on cleanup-gar-images, cleanup-cloud-run-revisions, bootstrap-alerts](#2026-11-13--optional-environment-input-on-cleanup-gar-images-cleanup-cloud-run-revisions-bootstrap-alerts)
 - `2026-11-13` — [manage-config-secrets refuses a gsm create of a *-env secret (ruling 24)](#2026-11-13--manage-config-secrets-refuses-a-gsm-create-of-a--env-secret-ruling-24)
@@ -265,6 +266,20 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-14 — Fleet API 5xx alerting standard = the service-alerts catalog (named GoFr app-5xx log rule + cloudrun.5xx_ratio)
+
+**Ruling (owner, 2026-11-14, answer "A"):** the fleet standard for API 5xx alerting is the `service-alerts` catalog, not hand-written policy files. One consumer piloted two layers by hand and proved both live (layer 1 by a positive control that sent the email, layer 2 by a replay). Both layers map onto the catalog:
+
+- **Layer 1, any single app 5xx:** a new named catalog rule (working name `gofr.logs.app_5xx`) that matches GoFr's access-log line `jsonPayload.message.response>=500` on the service's Cloud Run stdout log, with labels `uri` and `status` and a notification rate limit. Today this can only be done with `logs.error_match` plus a hand-supplied filter; naming it makes it one line in a spec.
+- **Layer 2, high 5xx rate:** the existing `cloudrun.5xx_ratio` (> 5% over 10m, min 20 requests). The pilot used 5m and a minimum of 10 requests; whether the catalog's defaults move toward that is a question for the plan, not settled here.
+- Each consumer, the pilot included, moves its 5xx alerting onto the catalog. The GoFr field path is verified on v1.63.0 only, so each switch-over confirms it on that consumer's GoFr version (a positive control) before relying on it.
+
+**Why A over the alternatives:** copying the pilot's two files into each consumer (B) gives three copies that drift and skip the catalog's tests; waiting (C) leaves two consumers with no app-level 5xx alert. The catalog exists for exactly this ("alerts as data", 2026-09-23 entry).
+
+**Trap carried in from the pilot:** a newly created log-match policy did not fire on an entry written ~50 s after creation; a second entry ~10 min later fired. The cutoff is unmeasured. A positive control must wait several minutes after the policy is created, or a correct policy looks broken.
+
+Status: ruling only; design and build follow under a plan (plan mode first).
 
 ## 2026-11-13 — Release flow: caller-declared waiver pairs + plan labels output built (RW1)
 
