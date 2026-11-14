@@ -272,14 +272,16 @@
 **Ruling (owner, 2026-11-14, answer "A"):** the fleet standard for API 5xx alerting is the `service-alerts` catalog, not hand-written policy files. One consumer piloted two layers by hand and proved both live (layer 1 by a positive control that sent the email, layer 2 by a replay). Both layers map onto the catalog:
 
 - **Layer 1, any single app 5xx:** a new named catalog rule (working name `gofr.logs.app_5xx`) that matches GoFr's access-log line `jsonPayload.message.response>=500` on the service's Cloud Run stdout log, with labels `uri` and `status` and a notification rate limit. Today this can only be done with `logs.error_match` plus a hand-supplied filter; naming it makes it one line in a spec.
-- **Layer 2, high 5xx rate:** the existing `cloudrun.5xx_ratio` (> 5% over 10m, min 20 requests). The pilot used 5m and a minimum of 10 requests; whether the catalog's defaults move toward that is a question for the plan, not settled here.
+- **Layer 2, high 5xx rate:** the existing `cloudrun.5xx_ratio` (> 5% over 10m, min 20 requests). **Ruling (owner, 2026-11-14): its defaults stay as they are.** The pilot's 5m / min 10 was proven only by replay, and changing a default changes every caller's alert; a consumer that wants the tighter numbers overrides them in its spec.
+- **Ruling (owner, 2026-11-14): the new layer-1 rule is ON by default** for every service, like `logs.crash_loop`. Under "Catalog versioning" adding a rule to a pack is a minor, called out at the top of the release notes; that callout must say that callers start receiving app-5xx alerts on upgrade and how to turn the rule off (`{enabled: false}`).
+- **Dispatcher choices (owner away, not owner rulings):** the rule lives in the `gcp-logs` pack as `logs.gofr_app_5xx` (log rules are GCP-only and the pack's ids are `logs.*`; the filter is GoFr's access-log shape), severity `page`, notification rate limit 1800 s and auto-close 1800 s (the pilot's proven values).
 - Each consumer, the pilot included, moves its 5xx alerting onto the catalog. The GoFr field path is verified on v1.63.0 only, so each switch-over confirms it on that consumer's GoFr version (a positive control) before relying on it.
 
 **Why A over the alternatives:** copying the pilot's two files into each consumer (B) gives three copies that drift and skip the catalog's tests; waiting (C) leaves two consumers with no app-level 5xx alert. The catalog exists for exactly this ("alerts as data", 2026-09-23 entry).
 
 **Trap carried in from the pilot:** a newly created log-match policy did not fire on an entry written ~50 s after creation; a second entry ~10 min later fired. The cutoff is unmeasured. A positive control must wait several minutes after the policy is created, or a correct policy looks broken.
 
-Status: ruling only; design and build follow under a plan (plan mode first).
+Status: ruling only. On /away the owner authorised building this and merging green PRs (no release or tag); the build is test-first.
 
 ## 2026-11-13 — Release flow: caller-declared waiver pairs + plan labels output built (RW1)
 

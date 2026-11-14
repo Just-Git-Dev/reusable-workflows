@@ -101,12 +101,12 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
 ## Ready — new capability
 
 - [ ] **Make the `service-alerts` catalog the fleet API 5xx alerting standard** (owner ruling
-      2026-11-14, DECISIONS "Fleet API 5xx alerting standard"). Add a named GoFr app-5xx log rule
-      (working name `gofr.logs.app_5xx`: `jsonPayload.message.response>=500` on the service's
-      Cloud Run stdout log, labels `uri`/`status`, a notification rate limit) to the catalog;
-      layer 2 is the existing `cloudrun.5xx_ratio` (decide in the plan whether its defaults move
-      toward the pilot's 5m / min 10). Then each consumer moves onto it, with a positive control
-      per GoFr version, waiting several minutes after the policy is created (see the entry's trap).
+      2026-11-14, DECISIONS "Fleet API 5xx alerting standard"). Add `logs.gofr_app_5xx` to the
+      `gcp-logs` pack, ON by default (`jsonPayload.message.response>=500` on the service's Cloud
+      Run stdout log, labels `uri`/`status`, rate limit + auto-close 1800 s, severity page);
+      layer 2 is the existing `cloudrun.5xx_ratio`, defaults unchanged. Then each consumer moves
+      onto it, with a positive control per GoFr version, waiting several minutes after the
+      policy is created (see the entry's trap).
 
 - [ ] **Tell callers, in their own run, when they are on an old version.** `WORKFLOW_VERSION`
       ships in every reusable's `env:` (a called workflow cannot discover its own ref at runtime:
