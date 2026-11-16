@@ -4,7 +4,7 @@
 
 151 entries total — 141 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
-- `2026-11-14` — [logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices pending owner review](#2026-11-14--logsgofr_app_5xx-added-to-gcp-logs-catalog-110-three-dispatcher-choices-pending-owner-review)
+- `2026-11-14` — [logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices accepted by the owner](#2026-11-14--logsgofr_app_5xx-added-to-gcp-logs-catalog-110-three-dispatcher-choices-accepted-by-the-owner)
 - `2026-11-14` — [Fleet API 5xx alerting standard = the service-alerts catalog (named GoFr app-5xx log rule + cloudrun.5xx_ratio)](#2026-11-14--fleet-api-5xx-alerting-standard--the-service-alerts-catalog-named-gofr-app-5xx-log-rule--cloudrun5xx_ratio)
 - `2026-11-13` — [Release flow: caller-declared waiver pairs + plan labels output built (RW1)](#2026-11-13--release-flow-caller-declared-waiver-pairs--plan-labels-output-built-rw1)
 - `2026-11-13` — [Optional environment input on cleanup-gar-images, cleanup-cloud-run-revisions, bootstrap-alerts](#2026-11-13--optional-environment-input-on-cleanup-gar-images-cleanup-cloud-run-revisions-bootstrap-alerts)
@@ -268,11 +268,11 @@
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
 
-## 2026-11-14 — logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices pending owner review
+## 2026-11-14 — logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices accepted by the owner
 
 Adds catalog rule `logs.gofr_app_5xx` (pack `gcp-logs`, on by default, page, rate limit 1800s) per the fleet API 5xx alerting standard. Catalog version 1.0.0 to 1.1.0 (a rule added to a pack is a minor). `cloudrun.5xx_ratio` defaults are unchanged.
 
-Three DISPATCHER choices, not owner rulings, pending owner review (reversible, nothing is released):
+Three dispatcher choices, made while the owner was away. **Ruling (owner, 2026-11-15, "ok"): all three are accepted as shipped**, and the rule ships in v6.4.0:
 
 1. No project id in the filter. The shipped filter is `logName:"run.googleapis.com%2Fstdout" AND jsonPayload.message.response>=500` (has-operator on logName), not the pilot's `logName="projects/<project>/logs/..."`, because alertgen is never given the project id and plumbing one in means a CLI flag, a workflow change and a placeholder. The has-operator is the documented Logging query form and the repo already uses it for another log read; it has not been proven in a live alert policy.
 2. No label extractors. The pilot's `uri` / `status` labels are not shipped; supporting them is new renderer surface (new catalog key, `labelExtractors`, `spec_hash`). Filed in TODO.md.
