@@ -13,7 +13,7 @@ inputs:
     description: "`record` (in the job that pulled) or `verify` (in the consuming job)."
     required: true
   images:
-    description: "record: newline-separated image refs, already pulled."
+    description: "record: newline-separated image refs (tags), pulled or built locally."
     required: false
     default: ''
   path:
@@ -33,7 +33,7 @@ outputs:
     description: "record: sha256 of the tarball. Empty in verify mode."
     value: ${{ steps.run.outputs.tar_sha256 }}
   identity:
-    description: "record: compact JSON {ref: {config, repo_digest}}. Empty in verify mode."
+    description: "record: compact JSON {ref: {config, repo_digest}}; repo_digest is empty for a never-pushed image. Empty in verify mode."
     value: ${{ steps.run.outputs.identity }}
 
 runs:

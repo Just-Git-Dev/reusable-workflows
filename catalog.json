@@ -75,7 +75,7 @@
         },
         "images": {
           "default": "",
-          "description": "record: newline-separated image refs, already pulled.",
+          "description": "record: newline-separated image refs (tags), pulled or built locally.",
           "required": false
         },
         "mode": {
@@ -96,7 +96,7 @@
       },
       "name": "Image identity",
       "outputs": {
-        "identity": "record: compact JSON {ref: {config, repo_digest}}. Empty in verify mode.",
+        "identity": "record: compact JSON {ref: {config, repo_digest}}; repo_digest is empty for a never-pushed image. Empty in verify mode.",
         "tar_sha256": "record: sha256 of the tarball. Empty in verify mode."
       },
       "runs": "composite",

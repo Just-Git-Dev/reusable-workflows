@@ -119,6 +119,8 @@ def record():
             raise Fail(f"{ref} is a digest ref; docker save records no RepoTags for it. "
                        "`docker tag` it to a name:tag first and pass that (docs/image-identity.md)")
     print(f"image store: {image_store()}")
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     r = docker("save", "-o", path, *refs)
     if r.returncode != 0:
         raise Fail(f"docker save failed: {r.stderr.strip()}")
@@ -129,10 +131,18 @@ def record():
         cfg = configs.get(norm_ref(ref))
         if not cfg:
             raise Fail(f"{ref} is not in the tarball's manifest.json (RepoTags: {sorted(configs)})")
-        r = docker("image", "inspect", "--format", "{{index .RepoDigests 0}}", ref)
-        repo_digest = r.stdout.strip()
-        if r.returncode != 0 or not repo_digest:
-            raise Fail(f"cannot read RepoDigests[0] of {ref}: {r.stderr.strip() or 'empty'}")
+        # RepoDigests is for tracing only (verify never compares it). A locally built image that
+        # was never pushed or pulled has none ([] or null): record "". A failed inspect still fails.
+        r = docker("image", "inspect", "--format", "{{json .RepoDigests}}", ref)
+        if r.returncode != 0:
+            raise Fail(f"docker image inspect {ref} failed: {r.stderr.strip() or 'no output'}")
+        try:
+            digests = json.loads(r.stdout.strip() or "null") or []
+        except ValueError:
+            raise Fail(f"cannot parse RepoDigests of {ref}: {r.stdout.strip()!r}")
+        if not isinstance(digests, list):
+            raise Fail(f"RepoDigests of {ref} is not a list: {r.stdout.strip()!r}")
+        repo_digest = digests[0] if digests else ""
         identity[ref] = {"config": f"sha256:{cfg}", "repo_digest": repo_digest}
     blob = json.dumps(identity, separators=(",", ":"), sort_keys=True)
     with open(f"{path}.identity.json", "w", encoding="utf-8") as fh:

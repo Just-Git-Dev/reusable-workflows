@@ -26,7 +26,7 @@ jobs:
         shell: bash
         run: docker pull alpine:3.20
       - id: rec
-        uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.4.0
+        uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.4.1
         with:
           mode: record
           images: |
@@ -45,7 +45,7 @@ jobs:
         with:
           name: images
           path: ${{ runner.temp }}/in
-      - uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.4.0
+      - uses: Just-Git-Dev/reusable-workflows/actions/image-identity@v6.4.1
         with:
           mode: verify
           path: ${{ runner.temp }}/in/images.tar
@@ -66,18 +66,21 @@ one from the registry.
 print the runner's image store (`image store: classic`, `containerd` or `unknown`) to the log,
 for diagnosis only.
 
-**`record`** runs in the job that pulled the images.
+**`record`** runs in the job that pulled or built the images.
 
 1. Every ref in `images` must be a tag (see [Refs](#refs)); a digest ref is refused before
    anything is saved.
-2. `docker save` of every ref into ONE tarball at `path`, then the `sha256` of that tarball.
+2. `docker save` of every ref into ONE tarball at `path`, then the `sha256` of that tarball. The
+   directory that holds `path` is created first if it does not exist.
 3. For each ref, the **config digest** is read from the tarball's own `manifest.json`. The file
    has a different layout per store, and both are understood: the classic one
    (`"Config": "<hex>.json"`) and the containerd/OCI one (`"Config": "blobs/sha256/<hex>"`).
    Refs are matched to entries through `RepoTags`.
 4. `RepoDigests[0]` of each ref is read from `docker image inspect`. It is recorded for tracing
-   and never compared, but it must exist: an image with no registry digest (built locally, not
-   pulled) is refused, because this action exists to prove what was *pulled*.
+   only and `verify` never compares it. An image built in the job and never pushed or pulled has
+   no registry digest, so it is recorded as `""`; such images are supported, because the proof is
+   the tarball's sha256 plus the config digest. A failed inspect (the image is not there) still
+   fails.
 5. The identity JSON is also written next to the tarball, as `<path>.identity.json`. That copy
    is optional: upload it beside the tarball if you want a durable record of what was verified.
    `verify` reads only its `identity` input, never this file.
@@ -96,11 +99,11 @@ for diagnosis only.
 |---|---|---|---|
 | `mode` | both | input, required | `record` or `verify` |
 | `path` | both | input, required | Tarball path: written by `record`, read by `verify` |
-| `images` | record | input | Newline-separated image refs (tags), all already pulled. Must not be empty |
+| `images` | record | input | Newline-separated image refs (tags), pulled or built locally. Must not be empty |
 | `tar_sha256` | verify | input | The `tar_sha256` output of `record` |
 | `identity` | verify | input | The `identity` output of `record` |
 | `tar_sha256` | record | output | sha256 of the tarball (64 lowercase hex) |
-| `identity` | record | output | Compact JSON `{"<ref>": {"config": "sha256:<hex>", "repo_digest": "<repo@sha256:...>"}}` |
+| `identity` | record | output | Compact JSON `{"<ref>": {"config": "sha256:<hex>", "repo_digest": "<repo@sha256:...>"}}`; `repo_digest` is `""` for an image with no registry digest |
 
 ## Refs
 
@@ -126,7 +129,7 @@ treated as equal:
 - `docker save` or `docker load` failing;
 - a `manifest.json` that is missing, unparseable, empty, or has a `Config` in neither layout;
 - a ref that is not in the tarball's manifest;
-- a ref with no `RepoDigests[0]`;
+- `docker image inspect` failing for a ref;
 - a `tar_sha256` that is not 64 hex characters, or a missing tarball;
 - an `identity` that is not a non-empty JSON object, or an entry with no config digest;
 - a hash mismatch;
