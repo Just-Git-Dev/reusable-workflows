@@ -2,7 +2,7 @@
 """Tests for actions/image-identity/identity.py (docs/image-identity.md). No Docker needed.
 
 The script runs as shipped (subprocess). Its `docker` is IMAGE_IDENTITY_DOCKER, pointed at a stub
-that serves a pre-built tarball for `save`, a fixed RepoDigest for `inspect`, and a configurable
+that serves a pre-built tarball for `save`, a configurable RepoDigests list for `inspect`, and a configurable
 set of "loaded" refs for `load`/`inspect`. Tarballs are built by hand in both layouts: classic
 ("Config": "<hex>.json") and containerd/OCI ("Config": "blobs/sha256/<hex>").
 
@@ -27,7 +27,7 @@ CFG_B = hashlib.sha256(b"config-b").hexdigest()
 
 # argv: save -o PATH REF... | image inspect [--format F] REF | load -i PATH
 DOCKER_STUB = r'''#!/usr/bin/env python3
-import os, shutil, sys
+import json, os, shutil, sys
 a = sys.argv[1:]
 if a[:1] == ["save"]:
     shutil.copy(os.environ["STUB_TAR"], a[a.index("-o") + 1]); sys.exit(0)
@@ -35,7 +35,19 @@ if a[:2] == ["image", "inspect"]:
     ref = a[-1]
     loaded = os.environ.get("STUB_LOADED")
     if "--format" in a:
-        print(os.environ.get("STUB_REPO_DIGEST", "repo@sha256:" + "d" * 64)); sys.exit(0)
+        # Mimics docker: STUB_INSPECT_FAIL = no such image; STUB_REPO_DIGESTS = the JSON list
+        # (a locally built, never pushed image has [] or null).
+        if os.environ.get("STUB_INSPECT_FAIL"):
+            print("Error: No such image: " + ref, file=sys.stderr); sys.exit(1)
+        digests = json.loads(os.environ.get("STUB_REPO_DIGESTS", '["repo@sha256:' + "d" * 64 + '"]'))
+        fmt = a[a.index("--format") + 1]
+        if fmt == "{{json .RepoDigests}}":
+            print(json.dumps(digests)); sys.exit(0)
+        if fmt == "{{index .RepoDigests 0}}":
+            if not digests:
+                print("template: :1:2: executing \"\" at <index .RepoDigests 0>: error calling index: index out of range: 0", file=sys.stderr); sys.exit(1)
+            print(digests[0]); sys.exit(0)
+        sys.exit(3)
     sys.exit(0 if loaded is None or ref in loaded.split(",") else 1)
 if a[:1] == ["load"]:
     sys.exit(0)
@@ -171,11 +183,43 @@ class RecordTests(Base):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("::error::", r.stdout + r.stderr)
 
-    def test_record_empty_repo_digest_fails(self):
+    def test_record_locally_built_image_records_empty_repo_digest(self):
+        # A locally built image that was never pushed or pulled has no RepoDigests ([] or null).
+        for digests in ("[]", "null"):
+            with self.subTest(digests=digests):
+                r = self.record([manifest_entry("classic", CFG_A, "app:candidate")], "app:candidate",
+                                STUB_REPO_DIGESTS=digests)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                ident = json.loads(self.outputs()["identity"])
+                self.assertEqual(ident["app:candidate"],
+                                 {"config": f"sha256:{CFG_A}", "repo_digest": ""})
+                self.out.unlink()
+
+    def test_record_inspect_error_fails(self):
         r = self.record([manifest_entry("classic", CFG_A, "alpine:3.20")], "alpine:3.20",
-                        STUB_REPO_DIGEST="")
+                        STUB_INSPECT_FAIL="1")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("::error::", r.stdout + r.stderr)
+        self.assertIn("No such image", r.stdout + r.stderr)
+
+    def test_record_creates_missing_output_directory(self):
+        make_tar(self.src, [manifest_entry("classic", CFG_A, "alpine:3.20")])
+        path = self.d / "image-out" / "nested" / "images.tar"
+        r = self.run_script("record", ID_IMAGES="alpine:3.20", ID_PATH=path)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(path.is_file())
+        self.assertEqual(self.outputs()["tar_sha256"], sha(path))
+
+    def test_record_bare_filename_path_works(self):
+        # dirname("images.tar") is "": makedirs must not be called on it.
+        make_tar(self.src, [manifest_entry("classic", CFG_A, "alpine:3.20")])
+        r = subprocess.run([sys.executable, str(SCRIPT)], cwd=self.d, capture_output=True, text=True,
+                           env={**{k: v for k, v in os.environ.items() if not k.startswith(("ID_", "STUB_"))},
+                                "IMAGE_IDENTITY_DOCKER": str(self.d / "docker"), "STUB_TAR": str(self.src),
+                                "GITHUB_OUTPUT": str(self.out), "ID_MODE": "record",
+                                "ID_IMAGES": "alpine:3.20", "ID_PATH": "bare.tar"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((self.d / "bare.tar").is_file())
 
 
 class VerifyTests(Base):

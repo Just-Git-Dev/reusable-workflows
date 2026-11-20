@@ -2,8 +2,9 @@
 
 ## Index
 
-151 entries total — 141 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+152 entries total — 142 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-20` — [image-identity record: create the output directory; accept locally built images (repo_digest "") (v6.4.1)](#2026-11-20--image-identity-record-create-the-output-directory-accept-locally-built-images-repo_digest--v641)
 - `2026-11-14` — [logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices accepted by the owner](#2026-11-14--logsgofr_app_5xx-added-to-gcp-logs-catalog-110-three-dispatcher-choices-accepted-by-the-owner)
 - `2026-11-14` — [Fleet API 5xx alerting standard = the service-alerts catalog (named GoFr app-5xx log rule + cloudrun.5xx_ratio)](#2026-11-14--fleet-api-5xx-alerting-standard--the-service-alerts-catalog-named-gofr-app-5xx-log-rule--cloudrun5xx_ratio)
 - `2026-11-13` — [Release flow: caller-declared waiver pairs + plan labels output built (RW1)](#2026-11-13--release-flow-caller-declared-waiver-pairs--plan-labels-output-built-rw1)
@@ -267,6 +268,21 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-20 — image-identity record: create the output directory; accept locally built images (repo_digest "") (v6.4.1)
+
+**What:** `image-identity` `record` now (1) creates the directory that holds `path` before `docker save`, and (2) accepts an image with no registry digest: it reads `{{json .RepoDigests}}` and records `repo_digest: ""` when the list is empty or null, instead of `{{index .RepoDigests 0}}`, which errors on an empty list. A failed `docker image inspect` (no such image) still fails. Docs and `action.yml` now say `images` may be pulled or built locally. Ships as v6.4.1, because v6.2.1 is already taken by an unrelated fix.
+
+**Why:** a consumer's release gate builds the candidate image in the job (no registry credentials) and then records it. Two release tags failed with nothing deployed. First, `docker save` failed with "invalid output path: directory ... does not exist", because adopters had dropped the `mkdir` that used to sit beside their own `docker save`. Second, the action crashed with "cannot read RepoDigests[0] ... index out of range", because an image that was never pushed or pulled has no RepoDigests on the runner's classic store. v6.2.0 refused such images on purpose ("this action exists to prove what was *pulled*"), but `verify` only ever displays `repo_digest` and never compares it. The proof is the tarball sha256 plus the config digest from `manifest.json`. So the refusal guarded nothing, and it blocked a valid use.
+
+**RCA:**
+- Symptom: record failed on a locally built image in two consecutive release-gate runs.
+- Root cause: `record` assumed the caller had created the output directory, and that every image has a registry digest, which held only for images that were pulled.
+- Why it wasn't caught: the unit tests' docker stub always returned a digest, and `shutil.copy` into an existing temp dir. The CI round-trip jobs use a pulled busybox. The consumer's release gate runs only on a tag push, so its pre-release check could not exercise it.
+- Fix: `os.makedirs(dirname(path))` when the dirname is non-empty; `{{json .RepoDigests}}` parsed as a list, `""` when empty or null; inspect errors still fatal.
+- Prevention: the stub now mimics docker for both template forms (an empty list makes `index` fail exactly as docker does). New tests cover a locally built image (`[]` and `null`), an inspect error, a missing nested output directory, and a bare-filename path.
+
+**Alternatives rejected:** omitting the `repo_digest` key for local images (an empty string keeps the output shape stable for consumers that index it); a new input to opt in to local images (the refusal protected nothing, so a flag would only add surface).
 
 ## 2026-11-14 — logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices accepted by the owner
 
