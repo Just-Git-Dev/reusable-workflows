@@ -97,8 +97,21 @@ zizmor was added to the gate with per-rule, per-file ignores in `zizmor.yml` (re
       into an `env:` entry and reference `"$VAR"`. 10 files ignored; 30 findings on 2026-11-13
       (`zizmor --offline --no-config`). Exercise each deploy body before dropping its ignore; one
       workflow per PR, best-tested first. Size L.
+- [ ] `.github/workflows/release-plan.yml` — **credential job runs an install**: the job that mints
+      the release App key also runs `pip install pyyaml` (L216, L469). Rule (a consumer's ruling,
+      2026-11-20): a job holding the release credential runs no install or build. Fix: install in a
+      job without the key, or vendor the YAML parse; then mint. Reported by consumer R. Size S.
 
 ## Ready — new capability
+
+- [ ] **Alert rule kinds for a Cloud Run JOB** (`alertspec/v1`, `service-alerts`): (a) a failed
+      execution (non-zero exit, including a lock-wait exit code), and (b) a log-absence rule: no
+      `<success line>` log entry in N hours (e.g. 26 h for a daily job). Consumer R's prod go-live
+      waits on it; its `alerts.yaml` would hold parameters only. Requested 2026-11-20. Size M.
+- [ ] **`sync-bundle-key.yml` rolls services only**: a Cloud Run JOB that uses the same image and
+      secret as a service keeps its old secret-version pin after a rotation (output is
+      `services_rolled`). Add a jobs target (`gcloud run jobs update --update-secrets`), or document
+      that jobs must be rolled by the caller. Requested by consumer R, 2026-11-20. Size S.
 
 - [ ] **Make the `service-alerts` catalog the fleet API 5xx alerting standard** (owner ruling
       2026-11-14, DECISIONS "Fleet API 5xx alerting standard"). Add `logs.gofr_app_5xx` to the
