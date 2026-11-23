@@ -283,12 +283,20 @@ the same make targets, so the two cannot drift (`tests/run_ci_make_tests.py` fai
 
 - `make hooks` once per clone: installs the committed pre-push hook (`core.hooksPath=.githooks`).
 - `make ci` before pushing (the hook runs it for you). It stops at the first failing check, names
-  the target, and prints how many checks ran (26 of 26 today).
+  the target, and prints how many checks ran (27 of 27 today).
 - What it runs: `tools` (local shellcheck and actionlint must equal CI's pinned versions, else it
   prints the install hint), `actionlint`, `canary`, `shellcheck`, `preflight` (vendored workflow-preflight), `zizmor` (workflow security audit, policy `zizmor.yml`), `venv` (`.venv` built from
   `requirements-ci.txt`, the same file CI installs), the catalog, docs, version-sweep, v1-alias and
   doc-example checks, the fixture and step-body test suites, `tools-promtool` (promtool must be the
-  pinned 3.13.1, the alertgen oracle), `alertgen`, `pinned` and the gate's own tests.
+  pinned 3.13.1, the alertgen oracle), `alertgen`, `pinned`, `names` (below) and the gate's own tests.
+- `make names`: this repo is public and names no consumer (pseudonyms "consumer A-D" only). The
+  check reads a list of forbidden patterns that is NOT in the repo (the list would itself be a
+  mention): the `NAME_DENYLIST` secret in CI, else `$NAME_DENYLIST_FILE`, else
+  `~/.config/jgd/public-denylist.txt`. It scans tracked files, the messages of the commits being
+  pushed (`NAMES_RANGE`, default `origin/main..HEAD`) and, on a PR, its title and description
+  (`pr-text.yml` re-checks an edited PR). It prints only `file:line: pattern #k`, never the matched
+  text, and FAILS when no list is found (so a PR from a fork, which gets no secrets, fails this
+  job). `scripts/check_names.py` is vendored: change the canonical copy and re-vendor.
 - The hook checks the commit being pushed, not just the tree: it refuses a dirty tree, or a pushed
   ref whose sha is not `HEAD` (an annotated tag is peeled to its commit first), and says what to
   do. It scrubs git's env before running checks. No environment variable can replace its gate.

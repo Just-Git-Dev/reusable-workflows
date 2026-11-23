@@ -20,7 +20,11 @@ CHECKS := tools actionlint canary shellcheck preflight zizmor \
   venv catalog docs-coverage doc-anchors version-sweep stamp-tests v1-frozen v1-selftest \
   doc-examples plan-fixtures secret-plan-fixtures repos-plan-fixtures concurrency-groups \
   step-bodies release-gate refresh-api-spec release-flow image-identity compile-actions \
-  tools-promtool alertgen alert-catalog pinned ci-gate-tests
+  tools-promtool alertgen alert-catalog pinned names ci-gate-tests
+
+# Commits whose messages `make names` scans; CI sets it (empty = none). The pre-push hook pins the
+# tree to the pushed commit, so origin/main..HEAD is exactly what is being pushed.
+NAMES_RANGE ?= origin/main..HEAD
 
 # CI runs python3.12; prefer it, then 3.13 (the laptop's python3 may be newer).
 PYBIN := $(shell command -v python3.12 || command -v python3.13 || command -v python3)
@@ -212,6 +216,15 @@ alert-catalog: venv
 pinned: venv
 	$(PY) tests/run_pinned_actions_tests.py
 	$(PY) scripts/check_pinned_actions.py .github/workflows actions
+
+# This repo is public and names no consumer (pseudonyms "consumer A-D" only; DECISIONS 2026-11-23).
+# The list is NOT in the repo: secret NAME_DENYLIST in CI, else $$NAME_DENYLIST_FILE, else
+# ~/.config/jgd/public-denylist.txt; no list = FAIL. Prints file:line + pattern number, never the
+# text. Vendored from the fleet skill public-name-guard: never edit scripts/check_names.py here.
+# Self-test first (stdlib only, no venv), then the check.
+names:
+	$(PYBIN) scripts/test_check_names.py
+	NAMES_RANGE="$(NAMES_RANGE)" $(PYBIN) scripts/check_names.py --root .
 
 # The gate's own tests: ci.yml == make ci, and the pre-push hook guards.
 ci-gate-tests: venv
