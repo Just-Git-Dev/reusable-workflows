@@ -283,7 +283,7 @@ the same make targets, so the two cannot drift (`tests/run_ci_make_tests.py` fai
 
 - `make hooks` once per clone: installs the committed pre-push hook (`core.hooksPath=.githooks`).
 - `make ci` before pushing (the hook runs it for you). It stops at the first failing check, names
-  the target, and prints how many checks ran (27 of 27 today).
+  the target, and prints how many checks ran (31 of 31 today).
 - What it runs: `tools` (local shellcheck and actionlint must equal CI's pinned versions, else it
   prints the install hint), `actionlint`, `canary`, `shellcheck`, `preflight` (vendored workflow-preflight), `zizmor` (workflow security audit, policy `zizmor.yml`), `venv` (`.venv` built from
   `requirements-ci.txt`, the same file CI installs), the catalog, docs, version-sweep, v1-alias and
