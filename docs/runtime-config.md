@@ -31,6 +31,21 @@ callers that do not write that test themselves.
 reads `DB_*` / `REDIS_*` parts directly, so the plain parts go in home 2 and only the password goes
 in home 3. This also removes any "derived key" (a URL built from other keys) and its boot-time guard.
 
+### Where a GoFr service mounts the bundle
+
+Mount the bundle where GoFr already reads a dotenv file, so the service needs no loader of its own:
+`mount_path` = `<workdir>/configs/.<APP_ENV>.env`, for example `/app/configs/.stage.env` with
+`APP_ENV=stage`. GoFr loads `configs/.env`, then overlays `configs/.<APP_ENV>.env` (`.local.env` when
+`APP_ENV` is unset), and real environment variables still win over both (VERIFIED, GoFr
+`pkg/gofr/config/godotenv.go`, main branch, 2026-11-24).
+
+A Cloud Run secret volume hides everything already in the directory it is mounted on: mounted
+under `configs/`, it hides the baked `configs/.env` (VERIFIED, Cloud Run "Configure secrets",
+"Overriding a directory", 2026-11-24). So a service that mounts this way first moves its home-1
+settings out of `configs/.env` into environment variables (for example `ENV` lines in the
+Dockerfile: still baked into the image, still identical in every environment). Keep the one-place
+rule: a key moved there leaves `configs/.env`.
+
 ## Where the secret VALUES come from (GitHub side)
 
 Secret values are held only as GitHub **environment** secrets (for example `stage`, `prod`), split
