@@ -4,7 +4,7 @@
 
 153 entries total — 143 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
-- `2026-11-23` — [A name check refuses consumer names on push and in CI](#2026-11-23--a-name-check-refuses-consumer-names-on-push-and-in-ci)
+- `2026-11-23` — [A laptop pre-push check refuses consumer names](#2026-11-23--a-laptop-pre-push-check-refuses-consumer-names)
 - `2026-11-20` — [image-identity record: create the output directory; accept locally built images (repo_digest "") (v6.4.1)](#2026-11-20--image-identity-record-create-the-output-directory-accept-locally-built-images-repo_digest--v641)
 - `2026-11-14` — [logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices accepted by the owner](#2026-11-14--logsgofr_app_5xx-added-to-gcp-logs-catalog-110-three-dispatcher-choices-accepted-by-the-owner)
 - `2026-11-14` — [Fleet API 5xx alerting standard = the service-alerts catalog (named GoFr app-5xx log rule + cloudrun.5xx_ratio)](#2026-11-14--fleet-api-5xx-alerting-standard--the-service-alerts-catalog-named-gofr-app-5xx-log-rule--cloudrun5xx_ratio)
@@ -270,19 +270,19 @@
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
 
-## 2026-11-23 — A name check refuses consumer names on push and in CI
+## 2026-11-23 — A laptop pre-push check refuses consumer names
 
 **Context.** This repo is public and names no consumer; pseudonyms "consumer A-D" are allowed (owner rulings 2026-10-04 and 2026-10-15). That rule was enforced by a manual grep before each push. The sibling provisioning template, guarded by the same habit, still collected 59 such lines (removed 2026-11-23). Something must refuse the push instead.
 
-**Decision (owner, 2026-11-23).** A `names` check in `make ci` (so the pre-push hook runs it), a `ci.yml` job `names`, and `pr-text.yml` for an edited PR. `scripts/check_names.py` is vendored from the fleet skill `public-name-guard`. It scans tracked file paths and text (CODEOWNERS exempt), the messages of the commits being pushed, and a PR's title and description. It prints `file:line: pattern #k`, never the matched text. Patterns are word-bounded: a bare substring matched "fatally" in `cleanup-gar-images.yml`.
+**Decision.** A laptop-only `names` check, run by `make ci` (so the pre-push hook runs it) after the CI-mirrored `CHECKS`, listed in a separate `LOCAL_CHECKS`. `scripts/check_names.py` is vendored from the fleet skill `public-name-guard`. It scans tracked file paths and text (CODEOWNERS exempt) and the messages of the commits being pushed (`origin/main..HEAD`). It prints `file:line: pattern #k`, never the matched text. Patterns are word-bounded: a bare substring matched "fatally" in `cleanup-gar-images.yml`.
 
-**Why the list is not in this repo.** The list of forbidden names is itself a mention. It lives in a laptop file outside every repo and in the repo secret `NAME_DENYLIST`. A secret, not a variable: variables print unmasked in a public repo's Actions logs.
+**Why the list is not in this repo.** The list of forbidden names is itself a mention. It lives in a laptop file outside every repo.
 
-**Why no list fails.** A guard that skips when unconfigured passes silently on the one machine that forgot it. So a missing or empty list fails the check. Accepted cost: a PR from a fork gets no secrets, so its `names` job fails.
+**Why no list fails (owner, 2026-11-23).** A guard that skips when unconfigured passes silently on the one machine that forgot it.
 
-**Why older history is not scanned.** It still holds names, and the owner ruled out a rewrite. Only the commits being pushed (`origin/main..HEAD` locally; `before..sha` or `base..head` in CI) are checked.
+**Why laptop-only, not CI (owner, 2026-11-24).** A CI job was built and dropped before merge: "let's just keep it as laptop hook, we'll not overcomplicate it for now". CI would have needed the list as a repo secret (a variable prints unmasked in public logs), re-set on every list change, and would fail every fork PR. Accepted gaps: PR titles and descriptions, files edited on github.com, pushes from another machine or with `--no-verify`. `names` sits outside `CHECKS`, so `tests/run_ci_make_tests.py` (which makes `CHECKS` equal ci.yml) and the preflight parity config stay exact.
 
-**Why a separate `pr-text.yml` for `edited`.** With `edited` on `ci.yml`, a retitle mid-run would cancel the running suite through the `ci-<ref>` concurrency group, and gating every other job off `edited` would post skipped results over the real ones. A one-job workflow on `edited` only re-checks the text and touches nothing else. `check_docs_coverage.py` excludes it like `ci` and `release`: it is this repo's own check, not a reusable.
+**Why older history is not scanned.** It still holds names, and the owner ruled out a rewrite.
 
 ## 2026-11-20 — image-identity record: create the output directory; accept locally built images (repo_digest "") (v6.4.1)
 

@@ -25,9 +25,8 @@ ACTIONS = REPO / "actions"
 
 # Not a `workflow_call` reusable — this repo's own CI, and this repo's own
 # release ritual (`workflow_dispatch`, tags + publishes a Release; see its
-# header and README.md#cutting-a-release, not a docs/<name>.md page). `pr-text` is this repo's
-# own re-check of an edited PR's text (README.md#local-gate, `make names`).
-EXCLUDE = {"ci", "release", "pr-text"}
+# header and README.md#cutting-a-release, not a docs/<name>.md page).
+EXCLUDE = {"ci", "release"}
 
 
 def main():

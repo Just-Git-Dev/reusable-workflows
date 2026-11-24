@@ -48,12 +48,6 @@
     "ci.yml:ci-gate": {
       "local": "make ci-gate-tests"
     },
-    "ci.yml:names": {
-      "local": "make names"
-    },
-    "pr-text.yml:names": {
-      "local": "make names"
-    },
     "ci.yml:image-identity-record-classic": {
       "waiver": "ci-only",
       "reason": "Real round trip across the two Docker image stores needs the ubuntu-24.04 and ubuntu-latest runners; the unit half is make image-identity."
