@@ -21,6 +21,13 @@ CHECKS := tools actionlint canary shellcheck preflight zizmor \
   doc-examples plan-fixtures secret-plan-fixtures repos-plan-fixtures concurrency-groups \
   step-bodies release-gate refresh-api-spec release-flow image-identity compile-actions \
   tools-promtool alertgen alert-catalog pinned ci-gate-tests
+# Laptop-only, run by `make ci` after CHECKS: they need something CI does not have (the name list).
+LOCAL_CHECKS := names
+ALL_CHECKS := $(CHECKS) $(LOCAL_CHECKS)
+
+# Commits whose messages `make names` scans. The pre-push hook pins the tree to the pushed commit,
+# so origin/main..HEAD is exactly what is being pushed.
+NAMES_RANGE ?= origin/main..HEAD
 
 # CI runs python3.12; prefer it, then 3.13 (the laptop's python3 may be newer).
 PYBIN := $(shell command -v python3.12 || command -v python3.13 || command -v python3)
@@ -29,16 +36,16 @@ PY := $(VENV)/bin/python
 # Set EXPECT=vX.Y.Z (ci.yml does, on a tag push) to also assert the tree agrees with that tag.
 EXPECT ?=
 
-.PHONY: ci hooks $(CHECKS)
+.PHONY: ci hooks $(ALL_CHECKS)
 
 ci:
 	@if [ "$$(git config core.hooksPath 2>/dev/null)" != ".githooks" ]; then \
 	  echo "ci: warning: pre-push hook not installed; run 'make hooks'"; fi
-	@n=0; for t in $(CHECKS); do \
+	@n=0; for t in $(ALL_CHECKS); do \
 	  echo "== ci: $$t"; \
-	  $(MAKE) --no-print-directory $$t || { echo "ci: FAILED at target '$$t' ($$n of $(words $(CHECKS)) checks passed before it)"; exit 1; }; \
+	  $(MAKE) --no-print-directory $$t || { echo "ci: FAILED at target '$$t' ($$n of $(words $(ALL_CHECKS)) checks passed before it)"; exit 1; }; \
 	  n=$$((n+1)); \
-	done; echo "ci: OK, $$n of $(words $(CHECKS)) checks ran and passed"
+	done; echo "ci: OK, $$n of $(words $(ALL_CHECKS)) checks ran and passed ($(words $(LOCAL_CHECKS)) laptop-only: $(LOCAL_CHECKS))"
 
 hooks:
 	git config core.hooksPath .githooks
@@ -212,6 +219,15 @@ alert-catalog: venv
 pinned: venv
 	$(PY) tests/run_pinned_actions_tests.py
 	$(PY) scripts/check_pinned_actions.py .github/workflows actions
+
+# This repo is public and names no consumer (pseudonyms "consumer A-D" only; DECISIONS 2026-11-23).
+# Laptop-only (LOCAL_CHECKS): the list is NOT in the repo, it is $$NAME_DENYLIST_FILE or
+# ~/.config/jgd/public-denylist.txt; no list = FAIL. Prints file:line + pattern number, never the
+# text. Vendored from the fleet skill public-name-guard: never edit scripts/check_names.py here.
+# Self-test first (stdlib only, no venv), then the check.
+names:
+	$(PYBIN) scripts/test_check_names.py
+	NAMES_RANGE="$(NAMES_RANGE)" $(PYBIN) scripts/check_names.py --root .
 
 # The gate's own tests: ci.yml == make ci, and the pre-push hook guards.
 ci-gate-tests: venv
