@@ -2,8 +2,9 @@
 
 ## Index
 
-153 entries total — 143 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
+154 entries total — 144 here, 10 in [`DECISIONS-ARCHIVE.md`](DECISIONS-ARCHIVE.md). Newest first; archived entries link across to that file.
 
+- `2026-11-24` — [A GoFr service mounts the bundle where GoFr reads it natively (configs/.<APP_ENV>.env)](#2026-11-24--a-gofr-service-mounts-the-bundle-where-gofr-reads-it-natively-configsapp_envenv)
 - `2026-11-23` — [A laptop pre-push check refuses consumer names](#2026-11-23--a-laptop-pre-push-check-refuses-consumer-names)
 - `2026-11-20` — [image-identity record: create the output directory; accept locally built images (repo_digest "") (v6.4.1)](#2026-11-20--image-identity-record-create-the-output-directory-accept-locally-built-images-repo_digest--v641)
 - `2026-11-14` — [logs.gofr_app_5xx added to gcp-logs (catalog 1.1.0); three dispatcher choices accepted by the owner](#2026-11-14--logsgofr_app_5xx-added-to-gcp-logs-catalog-110-three-dispatcher-choices-accepted-by-the-owner)
@@ -269,6 +270,14 @@
 - `2026-07-10` — [Make the library genuinely public: de-brand, harden, release properly](DECISIONS-ARCHIVE.md#2026-07-10--make-the-library-genuinely-public-de-brand-harden-release-properly)
 - `2026-07-10` — [`sync-bundle-key`: never disable a version a live service still reads](DECISIONS-ARCHIVE.md#2026-07-10--sync-bundle-key-never-disable-a-version-a-live-service-still-reads)
 - `2026-07-01` — [Create shared cross-org reusable-workflows host](DECISIONS-ARCHIVE.md#2026-07-01--create-shared-cross-org-reusable-workflows-host)
+
+## 2026-11-24 — A GoFr service mounts the bundle where GoFr reads it natively (configs/.<APP_ENV>.env)
+
+**What.** `docs/runtime-config.md` recommends that a GoFr service mount its secrets bundle as `<workdir>/configs/.<APP_ENV>.env` (the `mount_path` input of the bundle writers), and move its baked `configs/.env` settings into image environment variables first.
+
+**Why (owner ruling, 2026-11-23).** GoFr already reads `configs/.<APP_ENV>.env` on top of `configs/.env`, with real environment variables winning (verified in GoFr's `pkg/gofr/config/godotenv.go`). Mounting there means a service carries no loader of its own: one less piece of code per consumer, and the same precedence everywhere. A Cloud Run secret volume hides the directory it lands on (Cloud Run docs, "Overriding a directory"), so the baked `configs/.env` must be empty of needed keys before the switch; Dockerfile `ENV` keeps those values baked and identical in every environment, which is what home 1 means.
+
+**Rejected.** A service-side loader that reads the mounted file from a separate directory (code to maintain in every consumer, its own precedence rules). Mounting the file anywhere else: GoFr's default loader would not read it, so the service would need code again.
 
 ## 2026-11-23 — A laptop pre-push check refuses consumer names
 
